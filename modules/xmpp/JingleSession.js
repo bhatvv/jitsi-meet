@@ -4,6 +4,8 @@ var SDPDiffer = require("./SDPDiffer");
 var SDPUtil = require("./SDPUtil");
 var SDP = require("./SDP");
 var RTCBrowserType = require("../../service/RTC/RTCBrowserType");
+var async = require("async");
+var transform = require("sdp-transform");
 
 // Jingle stuff
 function JingleSession(me, sid, connection, service) {
@@ -52,10 +54,21 @@ function JingleSession(me, sid, connection, service) {
      * by the application logic.
      */
     this.videoMuteByUser = false;
+    this.modifySourcesQueue = async.queue(this._modifySources.bind(this), 1);
+    // We start with the queue paused. We resume it when the signaling state is
+    // stable and the ice connection state is connected.
+    this.modifySourcesQueue.pause();
 }
 
-//TODO: this array must be removed when firefox implement multistream support
-JingleSession.notReceivedSSRCs = [];
+JingleSession.prototype.updateModifySourcesQueue = function() {
+    var signalingState = this.peerconnection.signalingState;
+    var iceConnectionState = this.peerconnection.iceConnectionState;
+    if (signalingState === 'stable' && iceConnectionState === 'connected') {
+        this.modifySourcesQueue.resume();
+    } else {
+        this.modifySourcesQueue.pause();
+    }
+};
 
 JingleSession.prototype.initiate = function (peerjid, isInitiator) {
     var self = this;
@@ -82,8 +95,16 @@ JingleSession.prototype.initiate = function (peerjid, isInitiator) {
         self.sendIceCandidate(event.candidate);
     };
     this.peerconnection.onaddstream = function (event) {
+        if (event.stream.id !== 'default') {
         console.log("REMOTE STREAM ADDED: " + event.stream + " - " + event.stream.id);
         self.remoteStreamAdded(event);
+        } else {
+            // This is a recvonly stream. Clients that implement Unified Plan,
+            // such as Firefox use recvonly "streams/channels/tracks" for
+            // receiving remote stream/tracks, as opposed to Plan B where there
+            // are only 3 channels: audio, video and data.
+            console.log("RECVONLY REMOTE STREAM IGNORED: " + event.stream + " - " + event.stream.id);
+        }
     };
     this.peerconnection.onremovestream = function (event) {
         // Remove the stream from remoteStreams
@@ -92,9 +113,11 @@ JingleSession.prototype.initiate = function (peerjid, isInitiator) {
     };
     this.peerconnection.onsignalingstatechange = function (event) {
         if (!(self && self.peerconnection)) return;
+        self.updateModifySourcesQueue();
     };
     this.peerconnection.oniceconnectionstatechange = function (event) {
         if (!(self && self.peerconnection)) return;
+        self.updateModifySourcesQueue();
         switch (self.peerconnection.iceConnectionState) {
             case 'connected':
                 this.startTime = new Date();
@@ -177,7 +200,6 @@ JingleSession.prototype.accept = function () {
         // FIXME: change any inactive to sendrecv or whatever they were originally
         pranswer.sdp = pranswer.sdp.replace('a=inactive', 'a=sendrecv');
     }
-    pranswer = APP.simulcast.reverseTransformLocalDescription(pranswer);
     var prsdp = new SDP(pranswer.sdp);
     var accept = $iq({to: this.peerjid,
         type: 'set'})
@@ -630,9 +652,7 @@ JingleSession.prototype.createdAnswer = function (sdp, provisional) {
                         initiator: self.initiator,
                         responder: self.responder,
                         sid: self.sid });
-                var publicLocalDesc = APP.simulcast.reverseTransformLocalDescription(sdp);
-                var publicLocalSDP = new SDP(publicLocalDesc.sdp);
-                publicLocalSDP.toJingle(accept, self.initiator == self.me ? 'initiator' : 'responder', ssrcs);
+                self.localSDP.toJingle(accept, self.initiator == self.me ? 'initiator' : 'responder', ssrcs);
                 self.connection.sendIQ(accept,
                     function () {
                         var ack = {};
@@ -774,7 +794,17 @@ JingleSession.prototype.addSource = function (elem, fromJid) {
         });
         sdp.raw = sdp.session + sdp.media.join('');
     });
-    this.modifySources();
+
+    this.modifySourcesQueue.push(function() {
+        // When a source is added and if this is FF, a new channel is allocated
+        // for receiving the added source. We need to diffuse the SSRC of this
+        // new recvonly channel to the rest of the peers.
+        console.log('modify sources done');
+
+        var newSdp = new SDP(self.peerconnection.localDescription.sdp);
+        console.log("SDPs", mySdp, newSdp);
+        self.notifyMySSRCUpdate(mySdp, newSdp);
+    });
 };
 
 JingleSession.prototype.removeSource = function (elem, fromJid) {
@@ -835,11 +865,22 @@ JingleSession.prototype.removeSource = function (elem, fromJid) {
         });
         sdp.raw = sdp.session + sdp.media.join('');
     });
-    this.modifySources();
+
+    this.modifySourcesQueue.push(function() {
+        // When a source is removed and if this is FF, the recvonly channel that
+        // receives the remote stream is deactivated . We need to diffuse the
+        // recvonly SSRC removal to the rest of the peers.
+        console.log('modify sources done');
+
+        var newSdp = new SDP(self.peerconnection.localDescription.sdp);
+        console.log("SDPs", mySdp, newSdp);
+        self.notifyMySSRCUpdate(mySdp, newSdp);
+    });
 };
 
-JingleSession.prototype.modifySources = function (successCallback) {
+JingleSession.prototype._modifySources = function (successCallback, queueCallback) {
     var self = this;
+
     if (this.peerconnection.signalingState == 'closed') return;
     if (!(this.addssrc.length || this.removessrc.length || this.pendingop !== null || this.switchstreams)){
         // There is nothing to do since scheduled job might have been executed by another succeeding call
@@ -847,21 +888,7 @@ JingleSession.prototype.modifySources = function (successCallback) {
         if(successCallback){
             successCallback();
         }
-        return;
-    }
-
-    // FIXME: this is a big hack
-    // https://code.google.com/p/webrtc/issues/detail?id=2688
-    // ^ has been fixed.
-    if (!(this.peerconnection.signalingState == 'stable' && this.peerconnection.iceConnectionState == 'connected')) {
-        console.warn('modifySources not yet', this.peerconnection.signalingState, this.peerconnection.iceConnectionState);
-        this.wait = true;
-        window.setTimeout(function() { self.modifySources(successCallback); }, 250);
-        return;
-    }
-    if (this.wait) {
-        window.setTimeout(function() { self.modifySources(successCallback); }, 2500);
-        this.wait = false;
+        queueCallback();
         return;
     }
 
@@ -901,6 +928,7 @@ JingleSession.prototype.modifySources = function (successCallback) {
 
             if(self.signalingState == 'closed') {
                 console.error("createAnswer attempt on closed state");
+                queueCallback("createAnswer attempt on closed state");
                 return;
             }
 
@@ -937,22 +965,27 @@ JingleSession.prototype.modifySources = function (successCallback) {
                             if(successCallback){
                                 successCallback();
                             }
+                            queueCallback();
                         },
                         function(error) {
                             console.error('modified setLocalDescription failed', error);
+                            queueCallback(error);
                         }
                     );
                 },
                 function(error) {
                     console.error('modified answer failed', error);
+                    queueCallback(error);
                 }
             );
         },
         function(error) {
             console.error('modify failed', error);
+            queueCallback(error);
         }
     );
 };
+
 
 /**
  * Switches video streams.
@@ -960,7 +993,7 @@ JingleSession.prototype.modifySources = function (successCallback) {
  * @param oldStream old video stream of this session.
  * @param success_callback callback executed after successful stream switch.
  */
-JingleSession.prototype.switchStreams = function (new_stream, oldStream, success_callback) {
+JingleSession.prototype.switchStreams = function (new_stream, oldStream, success_callback, isAudio) {
 
     var self = this;
 
@@ -971,9 +1004,11 @@ JingleSession.prototype.switchStreams = function (new_stream, oldStream, success
             oldSdp = new SDP(self.peerconnection.localDescription.sdp);
         }
         self.peerconnection.removeStream(oldStream, true);
-        self.peerconnection.addStream(new_stream);
+        if(new_stream)
+            self.peerconnection.addStream(new_stream);
     }
 
+    if(!isAudio)
     APP.RTC.switchVideoStreams(new_stream, oldStream);
 
     // Conference is not active
@@ -983,7 +1018,7 @@ JingleSession.prototype.switchStreams = function (new_stream, oldStream, success
     }
 
     self.switchstreams = true;
-    self.modifySources(function() {
+    self.modifySourcesQueue.push(function() {
         console.log('modify sources done');
 
         success_callback();
@@ -1057,26 +1092,6 @@ JingleSession.prototype.notifyMySSRCUpdate = function (old_sdp, new_sdp) {
 };
 
 /**
- * Determines whether the (local) video is mute i.e. all video tracks are
- * disabled.
- *
- * @return <tt>true</tt> if the (local) video is mute i.e. all video tracks are
- * disabled; otherwise, <tt>false</tt>
- */
-JingleSession.prototype.isVideoMute = function () {
-    var tracks = APP.RTC.localVideo.getVideoTracks();
-    var mute = true;
-
-    for (var i = 0; i < tracks.length; ++i) {
-        if (tracks[i].enabled) {
-            mute = false;
-            break;
-        }
-    }
-    return mute;
-};
-
-/**
  * Mutes/unmutes the (local) video i.e. enables/disables all video tracks.
  *
  * @param mute <tt>true</tt> to mute the (local) video i.e. to disable all video
@@ -1109,36 +1124,25 @@ JingleSession.prototype.setVideoMute = function (mute, callback, options) {
         return;
     }
 
+    this.hardMuteVideo(mute);
+
     var self = this;
-    var localCallback = function (mute) {
-        self.connection.emuc.addVideoInfoToPresence(mute);
-        self.connection.emuc.sendPresence();
-        return callback(mute)
-    };
-
-    if (mute == APP.RTC.localVideo.isMuted())
-    {
-        // Even if no change occurs, the specified callback is to be executed.
-        // The specified callback may, optionally, return a successCallback
-        // which is to be executed as well.
-        var successCallback = localCallback(mute);
-
-        if (successCallback) {
-            successCallback();
+    var oldSdp = null;
+    if(self.peerconnection) {
+        if(self.peerconnection.localDescription) {
+            oldSdp = new SDP(self.peerconnection.localDescription.sdp);
         }
-    } else {
-        APP.RTC.localVideo.setMute(!mute);
-
-        this.hardMuteVideo(mute);
-
-        this.modifySources(localCallback(mute));
     }
-};
 
-// SDP-based mute by going recvonly/sendrecv
-// FIXME: should probably black out the screen as well
-JingleSession.prototype.toggleVideoMute = function (callback) {
-    this.service.setVideoMute(APP.RTC.localVideo.isMuted(), callback);
+    this.modifySourcesQueue.push(function() {
+        console.log('modify sources done');
+
+        callback(mute);
+
+        var newSdp = new SDP(self.peerconnection.localDescription.sdp);
+        console.log("SDPs", oldSdp, newSdp);
+        self.notifyMySSRCUpdate(oldSdp, newSdp);
+    });
 };
 
 JingleSession.prototype.hardMuteVideo = function (muted) {
@@ -1233,14 +1237,17 @@ JingleSession.onJingleFatalError = function (session, error)
 JingleSession.prototype.setLocalDescription = function () {
     // put our ssrcs into presence so other clients can identify our stream
     var newssrcs = [];
-    var media = APP.simulcast.parseMedia(this.peerconnection.localDescription);
-    media.forEach(function (media) {
+    var session = transform.parse(this.peerconnection.localDescription.sdp);
+    session.media.forEach(function (media) {
 
-        if(Object.keys(media.sources).length > 0) {
+        if (media.ssrcs != null && media.ssrcs.length > 0) {
             // TODO(gp) maybe exclude FID streams?
-            Object.keys(media.sources).forEach(function (ssrc) {
+            media.ssrcs.forEach(function (ssrc) {
+                if (ssrc.attribute !== 'cname') {
+                    return;
+                }
                 newssrcs.push({
-                    'ssrc': ssrc,
+                    'ssrc': ssrc.id,
                     'type': media.type,
                     'direction': media.direction
                 });

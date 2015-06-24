@@ -10,12 +10,13 @@ var APP =
         this.connectionquality = require("./modules/connectionquality/connectionquality");
         this.statistics = require("./modules/statistics/statistics");
         this.RTC = require("./modules/RTC/RTC");
-        this.simulcast = require("./modules/simulcast/simulcast");
         this.desktopsharing = require("./modules/desktopsharing/desktopsharing");
         this.xmpp = require("./modules/xmpp/xmpp");
         this.keyboardshortcut = require("./modules/keyboardshortcut/keyboardshortcut");
         this.translation = require("./modules/translation/translation");
         this.settings = require("./modules/settings/Settings");
+        this.DTMF = require("./modules/DTMF/DTMF");
+        this.members = require("./modules/members/MemberList");
     }
 };
 
@@ -30,11 +31,14 @@ function init() {
     APP.desktopsharing.init();
 
     APP.keyboardshortcut.init();
+    APP.members.start();
 }
 
 
 $(document).ready(function () {
 
+    var URLPRocessor = require("./modules/URLProcessor/URLProcessor");
+    URLPRocessor.setConfigParametersFromUrl();
     APP.init();
 
     APP.translation.init();
@@ -54,7 +58,7 @@ $(window).bind('beforeunload', function () {
 module.exports = APP;
 
 
-},{"./modules/API/API":2,"./modules/RTC/RTC":6,"./modules/UI/UI":8,"./modules/connectionquality/connectionquality":35,"./modules/desktopsharing/desktopsharing":36,"./modules/keyboardshortcut/keyboardshortcut":37,"./modules/settings/Settings":38,"./modules/simulcast/simulcast":43,"./modules/statistics/statistics":46,"./modules/translation/translation":47,"./modules/xmpp/xmpp":61}],2:[function(require,module,exports){
+},{"./modules/API/API":2,"./modules/DTMF/DTMF":3,"./modules/RTC/RTC":7,"./modules/UI/UI":9,"./modules/URLProcessor/URLProcessor":40,"./modules/connectionquality/connectionquality":41,"./modules/desktopsharing/desktopsharing":42,"./modules/keyboardshortcut/keyboardshortcut":43,"./modules/members/MemberList":44,"./modules/settings/Settings":45,"./modules/statistics/statistics":48,"./modules/translation/translation":49,"./modules/xmpp/xmpp":63}],2:[function(require,module,exports){
 /**
  * Implements API class that communicates with external api class
  * and provides interface to access Jitsi Meet features by external
@@ -192,15 +196,15 @@ function processMessage(event)
 }
 
 function setupListeners() {
-    APP.xmpp.addListener(XMPPEvents.MUC_ENTER, function (from) {
+    APP.xmpp.addListener(XMPPEvents.MUC_MEMBER_JOINED, function (from) {
         API.triggerEvent("participantJoined", {jid: from});
     });
-    APP.xmpp.addListener(XMPPEvents.MESSAGE_RECEIVED, function (from, nick, txt, myjid) {
+    APP.xmpp.addListener(XMPPEvents.MESSAGE_RECEIVED, function (from, nick, txt, myjid, stamp) {
         if (from != myjid)
             API.triggerEvent("incomingMessage",
-                {"from": from, "nick": nick, "message": txt});
+                {"from": from, "nick": nick, "message": txt, "stamp": stamp});
     });
-    APP.xmpp.addListener(XMPPEvents.MUC_LEFT, function (jid) {
+    APP.xmpp.addListener(XMPPEvents.MUC_MEMBER_LEFT, function (jid) {
         API.triggerEvent("participantLeft", {jid: jid});
     });
     APP.xmpp.addListener(XMPPEvents.DISPLAY_NAME_CHANGED, function (jid, newDisplayName) {
@@ -286,7 +290,56 @@ var API = {
 };
 
 module.exports = API;
-},{"../../service/xmpp/XMPPEvents":97}],3:[function(require,module,exports){
+},{"../../service/xmpp/XMPPEvents":106}],3:[function(require,module,exports){
+/* global APP */
+
+/**
+ * A module for sending DTMF tones.
+ */
+var DTMFSender;
+var initDtmfSender = function() {
+    // TODO: This needs to reset this if the peerconnection changes
+    // (e.g. the call is re-made)
+    if (DTMFSender)
+        return;
+
+    var localAudio = APP.RTC.localAudio;
+    if (localAudio && localAudio.getTracks().length > 0)
+    {
+        var peerconnection
+            = APP.xmpp.getConnection().jingle.activecall.peerconnection;
+        if (peerconnection) {
+            DTMFSender =
+                peerconnection.peerconnection
+                    .createDTMFSender(localAudio.getTracks()[0]);
+            console.log("Initialized DTMFSender");
+        }
+        else {
+            console.log("Failed to initialize DTMFSender: no PeerConnection.");
+        }
+    }
+    else {
+        console.log("Failed to initialize DTMFSender: no audio track.");
+    }
+};
+
+var DTMF = {
+    sendTones: function (tones, duration, pause) {
+        if (!DTMFSender)
+            initDtmfSender();
+
+        if (DTMFSender){
+            DTMFSender.insertDTMF(tones,
+                                  (duration || 200),
+                                  (pause || 200));
+        }
+    }
+};
+
+module.exports = DTMF;
+
+
+},{}],4:[function(require,module,exports){
 /* global Strophe, focusedVideoSrc*/
 
 // cache datachannels to avoid garbage collection
@@ -325,7 +378,7 @@ var DataChannels =
             // selections so that it can do adaptive simulcast,
             // we want the notification to trigger even if userJid is undefined,
             // or null.
-            var userJid = APP.UI.getLargeVideoState().userResourceJid;
+            var userJid = APP.UI.getLargeVideoJid();
             // we want the notification to trigger even if userJid is undefined,
             // or null.
             onSelectedEndpointChanged(userJid);
@@ -400,24 +453,6 @@ var DataChannels =
                         lastNEndpoints, endpointsEnteringLastN, obj);
                     eventEmitter.emit(RTCEvents.LASTN_ENDPOINT_CHANGED,
                         lastNEndpoints, endpointsEnteringLastN, obj);
-                }
-                else if ("SimulcastLayersChangedEvent" === colibriClass)
-                {
-                    eventEmitter.emit(RTCEvents.SIMULCAST_LAYER_CHANGED,
-                        obj.endpointSimulcastLayers);
-                }
-                else if ("SimulcastLayersChangingEvent" === colibriClass)
-                {
-                    eventEmitter.emit(RTCEvents.SIMULCAST_LAYER_CHANGING,
-                        obj.endpointSimulcastLayers);
-                }
-                else if ("StartSimulcastLayerEvent" === colibriClass)
-                {
-                    eventEmitter.emit(RTCEvents.SIMULCAST_START, obj.simulcastLayer);
-                }
-                else if ("StopSimulcastLayerEvent" === colibriClass)
-                {
-                    eventEmitter.emit(RTCEvents.SIMULCAST_STOP, obj.simulcastLayer);
                 }
                 else
                 {
@@ -522,15 +557,19 @@ function onPinnedEndpointChanged(userResource)
 module.exports = DataChannels;
 
 
-},{"../../service/RTC/RTCEvents":89}],4:[function(require,module,exports){
+},{"../../service/RTC/RTCEvents":97}],5:[function(require,module,exports){
 var StreamEventTypes = require("../../service/RTC/StreamEventTypes.js");
 
-function LocalStream(stream, type, eventEmitter, videoType)
+
+function LocalStream(stream, type, eventEmitter, videoType, isGUMStream)
 {
     this.stream = stream;
     this.eventEmitter = eventEmitter;
     this.type = type;
     this.videoType = videoType;
+    this.isGUMStream = true;
+    if(isGUMStream === false)
+        this.isGUMStream = isGUMStream;
     var self = this;
     if(type == "audio")
     {
@@ -561,27 +600,43 @@ LocalStream.prototype.getOriginalStream = function()
 }
 
 LocalStream.prototype.isAudioStream = function () {
-    return (this.stream.getAudioTracks() && this.stream.getAudioTracks().length > 0);
-};
-
-LocalStream.prototype.mute = function()
-{
-    var ismuted = false;
-    var tracks = this.getTracks();
-
-    for (var idx = 0; idx < tracks.length; idx++) {
-        ismuted = !tracks[idx].enabled;
-        tracks[idx].enabled = ismuted;
-    }
-    return ismuted;
+    return this.type === "audio";
 };
 
 LocalStream.prototype.setMute = function(mute)
 {
-    var tracks = this.getTracks();
 
-    for (var idx = 0; idx < tracks.length; idx++) {
-        tracks[idx].enabled = mute;
+    if((window.location.protocol != "https:" && this.isGUMStream) ||
+        (this.isAudioStream() && this.isGUMStream) || this.videoType === "screen")
+    {
+        var tracks = this.getTracks();
+
+        for (var idx = 0; idx < tracks.length; idx++) {
+            tracks[idx].enabled = mute;
+        }
+    }
+    else
+    {
+        if(mute === false) {
+            APP.xmpp.removeStream(this.stream);
+            this.stream.stop();
+        }
+        else
+        {
+            var self = this;
+            APP.RTC.rtcUtils.obtainAudioAndVideoPermissions(
+                (this.isAudioStream() ? ["audio"] : ["video"]),
+                function (stream) {
+                    if(self.isAudioStream())
+                    {
+                        APP.RTC.changeLocalAudio(stream, function () {});
+                    }
+                    else
+                    {
+                        APP.RTC.changeLocalVideo(stream, false, function () {});
+                    }
+                });
+        }
     }
 };
 
@@ -593,6 +648,8 @@ LocalStream.prototype.isMuted = function () {
     }
     else
     {
+        if(this.stream.ended)
+            return true;
         tracks = this.stream.getVideoTracks();
     }
     for (var idx = 0; idx < tracks.length; idx++) {
@@ -606,11 +663,9 @@ LocalStream.prototype.getId = function () {
     return this.stream.getTracks()[0].id;
 }
 
-
-
 module.exports = LocalStream;
 
-},{"../../service/RTC/StreamEventTypes.js":91}],5:[function(require,module,exports){
+},{"../../service/RTC/StreamEventTypes.js":99}],6:[function(require,module,exports){
 ////These lines should be uncommented when require works in app.js
 var MediaStreamType = require("../../service/RTC/MediaStreamTypes");
 var StreamEventType = require("../../service/RTC/StreamEventTypes");
@@ -672,7 +727,7 @@ MediaStream.prototype.setVideoType = function (value) {
 
 module.exports = MediaStream;
 
-},{"../../service/RTC/MediaStreamTypes":87,"../../service/RTC/StreamEventTypes":91}],6:[function(require,module,exports){
+},{"../../service/RTC/MediaStreamTypes":95,"../../service/RTC/StreamEventTypes":99}],7:[function(require,module,exports){
 var EventEmitter = require("events");
 var RTCUtils = require("./RTCUtils.js");
 var LocalStream = require("./LocalStream.js");
@@ -682,13 +737,46 @@ var DesktopSharingEventTypes
     = require("../../service/desktopsharing/DesktopSharingEventTypes");
 var MediaStreamType = require("../../service/RTC/MediaStreamTypes");
 var StreamEventTypes = require("../../service/RTC/StreamEventTypes.js");
+var RTCEvents = require("../../service/RTC/RTCEvents.js");
 var XMPPEvents = require("../../service/xmpp/XMPPEvents");
 var UIEvents = require("../../service/UI/UIEvents");
 
 var eventEmitter = new EventEmitter();
 
+
+function getMediaStreamUsage()
+{
+    var result = {
+        audio: true,
+        video: true
+    };
+
+    /** There are some issues with the desktop sharing
+     * when this property is enabled.
+     * WARNING: We must change the implementation to start video/audio if we
+     * receive from the focus that the peer is not muted.
+
+     var isSecureConnection = window.location.protocol == "https:";
+
+    if(config.disableEarlyMediaPermissionRequests || !isSecureConnection)
+    {
+        result = {
+            audio: false,
+            video: false
+        };
+
+    }
+    **/
+
+    return result;
+}
+
 var RTC = {
     rtcUtils: null,
+    devices: {
+        audio: true,
+        video: true
+    },
     localStreams: [],
     remoteStreams: {},
     localAudio: null,
@@ -705,13 +793,16 @@ var RTC = {
 
         eventEmitter.removeListener(eventType, listener);
     },
-    createLocalStream: function (stream, type, change) {
+    createLocalStream: function (stream, type, change, videoType, isMuted, isGUMStream) {
 
-        var localStream =  new LocalStream(stream, type, eventEmitter);
+        var localStream =  new LocalStream(stream, type, eventEmitter, videoType, isGUMStream);
         //in firefox we have only one stream object
         if(this.localStreams.length == 0 ||
             this.localStreams[0].getOriginalStream() != stream)
             this.localStreams.push(localStream);
+        if(isMuted === true)
+            localStream.setMute(false);
+
         if(type == "audio")
         {
             this.localAudio = localStream;
@@ -724,7 +815,7 @@ var RTC = {
         if(change)
             eventType = StreamEventTypes.EVENT_TYPE_LOCAL_CHANGED;
 
-        eventEmitter.emit(eventType, localStream);
+        eventEmitter.emit(eventType, localStream, isMuted);
         return localStream;
     },
     removeLocalStream: function (stream) {
@@ -786,7 +877,7 @@ var RTC = {
             function (stream, isUsingScreenStream, callback) {
                 self.changeLocalVideo(stream, isUsingScreenStream, callback);
             }, DesktopSharingEventTypes.NEW_STREAM_CREATED);
-        APP.xmpp.addListener(XMPPEvents.CHANGED_STREAMS, function (jid, changedStreams) {
+        APP.xmpp.addListener(XMPPEvents.STREAMS_CHANGED, function (jid, changedStreams) {
             for(var i = 0; i < changedStreams.length; i++) {
                 var type = changedStreams[i].type;
                 if (type != "audio") {
@@ -808,7 +899,8 @@ var RTC = {
         APP.UI.addListener(UIEvents.PINNED_ENDPOINT,
             DataChannels.handlePinnedEndpointEvent);
         this.rtcUtils = new RTCUtils(this);
-        this.rtcUtils.obtainAudioAndVideoPermissions();
+        this.rtcUtils.obtainAudioAndVideoPermissions(
+            null, null, getMediaStreamUsage());
     },
     muteRemoteVideoStream: function (jid, value) {
         var stream;
@@ -820,7 +912,7 @@ var RTC = {
         }
 
         if(!stream)
-            return false;
+            return true;
 
         if (value != stream.muted) {
             stream.setMute(value);
@@ -841,10 +933,27 @@ var RTC = {
     changeLocalVideo: function (stream, isUsingScreenStream, callback) {
         var oldStream = this.localVideo.getOriginalStream();
         var type = (isUsingScreenStream? "screen" : "video");
-        this.localVideo = this.createLocalStream(stream, "video", true, type);
+        var localCallback = callback;
+        if(this.localVideo.isMuted() && this.localVideo.videoType !== type)
+        {
+            localCallback = function() {
+                APP.xmpp.setVideoMute(false, APP.UI.setVideoMuteButtonsState);
+                callback();
+            };
+        }
+        var videoStream = this.rtcUtils.createStream(stream, true);
+        this.localVideo = this.createLocalStream(videoStream, "video", true, type);
         // Stop the stream to trigger onended event for old stream
         oldStream.stop();
-        APP.xmpp.switchStreams(stream, oldStream,callback);
+        APP.xmpp.switchStreams(videoStream, oldStream,localCallback);
+    },
+    changeLocalAudio: function (stream, callback) {
+        var oldStream = this.localAudio.getOriginalStream();
+        var newStream = this.rtcUtils.createStream(stream);
+        this.localAudio = this.createLocalStream(newStream, "audio", true);
+        // Stop the stream to trigger onended event for old stream
+        oldStream.stop();
+        APP.xmpp.switchStreams(newStream, oldStream, callback, true);
     },
     /**
      * Checks if video identified by given src is desktop stream.
@@ -871,12 +980,40 @@ var RTC = {
             isDesktop = (stream.videoType === "screen");
 
         return isDesktop;
+    },
+    setVideoMute: function(mute, callback, options) {
+        if(!this.localVideo)
+            return;
+
+        if (mute == APP.RTC.localVideo.isMuted())
+        {
+            APP.xmpp.sendVideoInfoPresence(mute);
+            if(callback)
+                callback(mute);
+        }
+        else
+        {
+            APP.RTC.localVideo.setMute(!mute);
+            APP.xmpp.setVideoMute(
+                mute,
+                callback,
+                options);
+        }
+    },
+    setDeviceAvailability: function (devices) {
+        if(!devices)
+            return;
+        if(devices.audio === true || devices.audio === false)
+            this.devices.audio = devices.audio;
+        if(devices.video === true || devices.video === false)
+            this.devices.video = devices.video;
+        eventEmitter.emit(RTCEvents.AVAILABLE_DEVICES_CHANGED, this.devices);
     }
 };
 
 module.exports = RTC;
 
-},{"../../service/RTC/MediaStreamTypes":87,"../../service/RTC/StreamEventTypes.js":91,"../../service/UI/UIEvents":92,"../../service/desktopsharing/DesktopSharingEventTypes":95,"../../service/xmpp/XMPPEvents":97,"./DataChannels":3,"./LocalStream.js":4,"./MediaStream.js":5,"./RTCUtils.js":7,"events":98}],7:[function(require,module,exports){
+},{"../../service/RTC/MediaStreamTypes":95,"../../service/RTC/RTCEvents.js":97,"../../service/RTC/StreamEventTypes.js":99,"../../service/UI/UIEvents":100,"../../service/desktopsharing/DesktopSharingEventTypes":103,"../../service/xmpp/XMPPEvents":106,"./DataChannels":4,"./LocalStream.js":5,"./MediaStream.js":6,"./RTCUtils.js":8,"events":107}],8:[function(require,module,exports){
 var RTCBrowserType = require("../../service/RTC/RTCBrowserType.js");
 var Resolutions = require("../../service/RTC/Resolutions");
 
@@ -1009,7 +1146,8 @@ function RTCUtils(RTCService)
     if (navigator.mozGetUserMedia) {
         console.log('This appears to be Firefox');
         var version = parseInt(navigator.userAgent.match(/Firefox\/([0-9]+)\./)[1], 10);
-        if (version >= 39) {
+        if (version >= 40
+            && config.useBundle && config.useRtcpMux) {
             this.peerconnection = mozRTCPeerConnection;
             this.browser = RTCBrowserType.RTC_BROWSER_FIREFOX;
             this.getUserMedia = navigator.mozGetUserMedia.bind(navigator);
@@ -1022,6 +1160,8 @@ function RTCUtils(RTCService)
                 //
                 // https://groups.google.com/forum/#!topic/mozilla.dev.media/pKOiioXonJg
                 // https://github.com/webrtc/samples/issues/302
+                if(!element[0])
+                    return;
                 element[0].mozSrcObject = stream;
                 element[0].play();
             };
@@ -1034,10 +1174,13 @@ function RTCUtils(RTCService)
                 return tracks[0].id.replace(/[\{,\}]/g,"");
             };
             this.getVideoSrc = function (element) {
+                if(!element)
+                    return null;
                 return element.mozSrcObject;
             };
             this.setVideoSrc = function (element, src) {
-                element.mozSrcObject = src;
+                if(element)
+                    element.mozSrcObject = src;
             };
             RTCSessionDescription = mozRTCSessionDescription;
             RTCIceCandidate = mozRTCIceCandidate;
@@ -1060,10 +1203,13 @@ function RTCUtils(RTCService)
             return stream.id.replace(/[\{,\}]/g,"");
         };
         this.getVideoSrc = function (element) {
+            if(!element)
+                return null;
             return element.getAttribute("src");
         };
         this.setVideoSrc = function (element, src) {
-            element.setAttribute("src", src);
+            if(element)
+                element.setAttribute("src", src);
         };
         // DTLS should now be enabled by default but..
         this.pc_constraints = {'optional': [{'DtlsSrtpKeyAgreement': 'true'}]};
@@ -1104,41 +1250,23 @@ RTCUtils.prototype.getUserMediaWithConstraints = function(
 
     var isFF = navigator.userAgent.toLowerCase().indexOf('firefox') > -1;
 
+    var self = this;
+
     try {
-        if (config.enableSimulcast
-            && constraints.video
-            && constraints.video.chromeMediaSource !== 'screen'
-            && constraints.video.chromeMediaSource !== 'desktop'
-            && !isAndroid
-
-            // We currently do not support FF, as it doesn't have multistream support.
-            && !isFF) {
-            APP.simulcast.getUserMedia(constraints, function (stream) {
-                    console.log('onUserMediaSuccess');
-                    success_callback(stream);
-                },
-                function (error) {
-                    console.warn('Failed to get access to local media. Error ', error);
-                    if (failure_callback) {
-                        failure_callback(error);
-                    }
-                });
-        } else {
-
-            this.getUserMedia(constraints,
-                function (stream) {
-                    console.log('onUserMediaSuccess');
-                    success_callback(stream);
-                },
-                function (error) {
-                    console.warn('Failed to get access to local media. Error ',
-                        error, constraints);
-                    if (failure_callback) {
-                        failure_callback(error);
-                    }
-                });
-
-        }
+        this.getUserMedia(constraints,
+            function (stream) {
+                console.log('onUserMediaSuccess');
+                self.setAvailableDevices(um, true);
+                success_callback(stream);
+            },
+            function (error) {
+                self.setAvailableDevices(um, false);
+                console.warn('Failed to get access to local media. Error ',
+                    error, constraints);
+                if (failure_callback) {
+                    failure_callback(error);
+                }
+            });
     } catch (e) {
         console.error('GUM failed: ', e);
         if(failure_callback) {
@@ -1147,29 +1275,114 @@ RTCUtils.prototype.getUserMediaWithConstraints = function(
     }
 };
 
+RTCUtils.prototype.setAvailableDevices = function (um, available) {
+    var devices = {};
+    if(um.indexOf("video") != -1)
+    {
+        devices.video = available;
+    }
+    if(um.indexOf("audio") != -1)
+    {
+        devices.audio = available;
+    }
+    this.service.setDeviceAvailability(devices);
+}
+
 /**
  * We ask for audio and video combined stream in order to get permissions and
  * not to ask twice.
  */
-RTCUtils.prototype.obtainAudioAndVideoPermissions = function() {
+RTCUtils.prototype.obtainAudioAndVideoPermissions =
+    function(devices, callback, usageOptions)
+{
     var self = this;
     // Get AV
 
-    this.getUserMediaWithConstraints(
-        ['audio', 'video'],
+    var successCallback = function (stream) {
+        if(callback)
+            callback(stream, usageOptions);
+        else
+            self.successCallback(stream, usageOptions);
+    };
+
+    if(!devices)
+        devices = ['audio', 'video'];
+
+    var newDevices = [];
+
+
+    if(usageOptions)
+        for(var i = 0; i < devices.length; i++)
+        {
+            var device = devices[i];
+            if(usageOptions[device] === true)
+                newDevices.push(device);
+        }
+    else
+        newDevices = devices;
+
+    if(newDevices.length === 0)
+    {
+        successCallback();
+        return;
+    }
+
+    if (navigator.mozGetUserMedia) {
+
+        // With FF we can't split the stream into audio and video because FF
+        // doesn't support media stream constructors. So, we need to get the
+        // audio stream separately from the video stream using two distinct GUM
+        // calls. Not very user friendly :-( but we don't have many other
+        // options neither.
+        //
+        // Note that we pack those 2 streams in a single object and pass it to
+        // the successCallback method.
+
+        self.getUserMediaWithConstraints(
+            ['audio'],
+            function (audioStream) {
+                self.getUserMediaWithConstraints(
+                    ['video'],
+                    function (videoStream) {
+                        return self.successCallback({
+                            audioStream: audioStream,
+                            videoStream: videoStream
+                        });
+                    },
+                    function (error) {
+                        console.error('failed to obtain video stream - stop',
+                            error);
+                        return self.successCallback(null);
+                    },
+                    config.resolution || '360');
+            },
+            function (error) {
+                console.error('failed to obtain audio stream - stop',
+                        error);
+                return self.successCallback(null);
+            }
+        );
+    } else {
+        this.getUserMediaWithConstraints(
+        newDevices,
         function (stream) {
-            self.successCallback(stream);
+            successCallback(stream);
         },
         function (error) {
             self.errorCallback(error);
         },
         config.resolution || '360');
+    }
+
 }
 
-RTCUtils.prototype.successCallback = function (stream) {
-    console.log('got', stream, stream.getAudioTracks().length,
-        stream.getVideoTracks().length);
-    this.handleLocalStream(stream);
+RTCUtils.prototype.successCallback = function (stream, usageOptions) {
+    // If this is FF, the stream parameter is *not* a MediaStream object, it's
+    // an object with two properties: audioStream, videoStream.
+    if(stream && !navigator.mozGetUserMedia)
+        console.log('got', stream, stream.getAudioTracks().length,
+            stream.getVideoTracks().length);
+    this.handleLocalStream(stream, usageOptions);
 };
 
 RTCUtils.prototype.errorCallback = function (error) {
@@ -1200,47 +1413,81 @@ RTCUtils.prototype.errorCallback = function (error) {
             function (error) {
                 console.error('failed to obtain audio/video stream - stop',
                     error);
-                APP.UI.messageHandler.showError("dialog.error",
-                    "dialog.failedpermissions");
+                return self.successCallback(null);
             }
         );
     }
 
 }
 
-RTCUtils.prototype.handleLocalStream = function(stream)
+RTCUtils.prototype.handleLocalStream = function(stream, usageOptions)
 {
+    // If this is FF, the stream parameter is *not* a MediaStream object, it's
+    // an object with two properties: audioStream, videoStream.
+    var audioStream, videoStream;
     if(window.webkitMediaStream)
     {
-        var audioStream = new webkitMediaStream();
-        var videoStream = new webkitMediaStream();
-        var audioTracks = stream.getAudioTracks();
-        var videoTracks = stream.getVideoTracks();
-        for (var i = 0; i < audioTracks.length; i++) {
-            audioStream.addTrack(audioTracks[i]);
+        audioStream = new webkitMediaStream();
+        videoStream = new webkitMediaStream();
+        if(stream) {
+            var audioTracks = stream.getAudioTracks();
+
+            for (var i = 0; i < audioTracks.length; i++) {
+                audioStream.addTrack(audioTracks[i]);
+            }
+
+            var videoTracks = stream.getVideoTracks();
+
+            for (i = 0; i < videoTracks.length; i++) {
+                videoStream.addTrack(videoTracks[i]);
+            }
         }
-
-        this.service.createLocalStream(audioStream, "audio");
-
-        for (i = 0; i < videoTracks.length; i++) {
-            videoStream.addTrack(videoTracks[i]);
-        }
-
-
-        this.service.createLocalStream(videoStream, "video");
     }
     else
     {//firefox
-        this.service.createLocalStream(stream, "stream");
+        audioStream = stream.audioStream;
+        videoStream = stream.videoStream;
     }
 
+    var audioMuted = (usageOptions && usageOptions.audio === false),
+        videoMuted = (usageOptions && usageOptions.video === false);
+
+    var audioGUM = (!usageOptions || usageOptions.audio !== false),
+        videoGUM = (!usageOptions || usageOptions.video !== false);
+
+
+    this.service.createLocalStream(audioStream, "audio", null, null,
+        audioMuted, audioGUM);
+
+    this.service.createLocalStream(videoStream, "video", null, null,
+        videoMuted, videoGUM);
 };
 
+RTCUtils.prototype.createStream = function(stream, isVideo)
+{
+    var newStream = null;
+    if(window.webkitMediaStream)
+    {
+        newStream = new webkitMediaStream();
+        if(newStream)
+        {
+            var tracks = (isVideo? stream.getVideoTracks() : stream.getAudioTracks());
 
+            for (i = 0; i < tracks.length; i++) {
+                newStream.addTrack(tracks[i]);
+            }
+        }
+
+    }
+    else
+        newStream = stream;
+
+    return newStream;
+};
 
 module.exports = RTCUtils;
 
-},{"../../service/RTC/RTCBrowserType.js":88,"../../service/RTC/Resolutions":90}],8:[function(require,module,exports){
+},{"../../service/RTC/RTCBrowserType.js":96,"../../service/RTC/Resolutions":98}],9:[function(require,module,exports){
 var UI = {};
 
 var VideoLayout = require("./videolayout/VideoLayout.js");
@@ -1269,10 +1516,17 @@ var DesktopSharingEventTypes
 var RTCEvents = require("../../service/RTC/RTCEvents");
 var StreamEventTypes = require("../../service/RTC/StreamEventTypes");
 var XMPPEvents = require("../../service/xmpp/XMPPEvents");
+var MemberEvents = require("../../service/members/Events");
 
 var eventEmitter = new EventEmitter();
 var roomName = null;
 
+
+function notifyForInitialMute()
+{
+    messageHandler.notify(null, "notify.mutedTitle", "connected",
+        "notify.muted", null, {timeOut: 120000});
+}
 
 function setupPrezi()
 {
@@ -1296,24 +1550,42 @@ function setupToolbars() {
     BottomToolbar.init();
 }
 
-function streamHandler(stream) {
+function streamHandler(stream, isMuted) {
     switch (stream.type)
     {
         case "audio":
-            VideoLayout.changeLocalAudio(stream);
+            VideoLayout.changeLocalAudio(stream, isMuted);
             break;
         case "video":
-            VideoLayout.changeLocalVideo(stream);
+            VideoLayout.changeLocalVideo(stream, isMuted);
             break;
         case "stream":
-            VideoLayout.changeLocalStream(stream);
+            VideoLayout.changeLocalStream(stream, isMuted);
             break;
     }
 }
 
+function onXmppConnectionFailed(stropheErrorMsg) {
+
+    var title = APP.translation.generateTranslatonHTML(
+        "dialog.error");
+
+    var message;
+    if (stropheErrorMsg) {
+        message = APP.translation.generateTranslatonHTML(
+            "dialog.connectErrorWithMsg", {msg: stropheErrorMsg});
+    } else {
+        message = APP.translation.generateTranslatonHTML(
+            "dialog.connectError");
+    }
+
+    messageHandler.openDialog(
+        title, message, true, {}, function (e, v, m, f) { return false; });
+}
+
 function onDisposeConference(unload) {
     Toolbar.showAuthenticateButton(false);
-};
+}
 
 function onDisplayNameChanged(jid, displayName) {
     ContactList.onDisplayNameChange(jid, displayName);
@@ -1340,15 +1612,10 @@ function registerListeners() {
             VideoLayout.onLastNEndpointsChanged(lastNEndpoints,
                 endpointsEnteringLastN, stream);
         });
-    APP.RTC.addListener(RTCEvents.SIMULCAST_LAYER_CHANGED,
-        function (endpointSimulcastLayers) {
-           VideoLayout.onSimulcastLayersChanged(endpointSimulcastLayers);
-        });
-    APP.RTC.addListener(RTCEvents.SIMULCAST_LAYER_CHANGING,
-        function (endpointSimulcastLayers) {
-            VideoLayout.onSimulcastLayersChanging(endpointSimulcastLayers);
-        });
-
+    APP.RTC.addListener(RTCEvents.AVAILABLE_DEVICES_CHANGED,
+        function (devices) {
+            VideoLayout.setDeviceAvailabilityIcons(null, devices);
+        })
     APP.statistics.addAudioLevelListener(function(jid, audioLevel)
     {
         var resourceJid;
@@ -1366,7 +1633,7 @@ function registerListeners() {
         }
 
         AudioLevels.updateAudioLevel(resourceJid, audioLevel,
-            UI.getLargeVideoState().userResourceJid);
+            UI.getLargeVideoJid());
     });
     APP.desktopsharing.addListener(function () {
         ToolbarToggler.showDesktopSharingButton();
@@ -1380,6 +1647,7 @@ function registerListeners() {
         VideoLayout.updateConnectionStats);
     APP.connectionquality.addListener(CQEvents.STOP,
         VideoLayout.onStatsStop);
+    APP.xmpp.addListener(XMPPEvents.CONNECTION_FAILED, onXmppConnectionFailed);
     APP.xmpp.addListener(XMPPEvents.DISPOSE_CONFERENCE, onDisposeConference);
     APP.xmpp.addListener(XMPPEvents.GRACEFUL_SHUTDOWN, function () {
         messageHandler.openMessageDialog(
@@ -1425,7 +1693,7 @@ function registerListeners() {
     APP.xmpp.addListener(XMPPEvents.USER_ID_CHANGED, function (from, id) {
         Avatar.setUserAvatar(from, id);
     });
-    APP.xmpp.addListener(XMPPEvents.CHANGED_STREAMS, function (jid, changedStreams) {
+    APP.xmpp.addListener(XMPPEvents.STREAMS_CHANGED, function (jid, changedStreams) {
         for(stream in changedStreams)
         {
             // might need to update the direction if participant just went from sendrecv to recvonly
@@ -1437,8 +1705,6 @@ function registerListeners() {
                         break;
                     case 'recvonly':
                         el.hide();
-                        // FIXME: Check if we have to change large video
-                        //VideoLayout.updateLargeVideo(el);
                         break;
                 }
             }
@@ -1447,19 +1713,28 @@ function registerListeners() {
     });
     APP.xmpp.addListener(XMPPEvents.DISPLAY_NAME_CHANGED, onDisplayNameChanged);
     APP.xmpp.addListener(XMPPEvents.MUC_JOINED, onMucJoined);
-    APP.xmpp.addListener(XMPPEvents.LOCALROLE_CHANGED, onLocalRoleChange);
-    APP.xmpp.addListener(XMPPEvents.MUC_ENTER, onMucEntered);
+    APP.xmpp.addListener(XMPPEvents.LOCAL_ROLE_CHANGED, onLocalRoleChanged);
+    APP.xmpp.addListener(XMPPEvents.MUC_MEMBER_JOINED, onMucMemberJoined);
     APP.xmpp.addListener(XMPPEvents.MUC_ROLE_CHANGED, onMucRoleChanged);
     APP.xmpp.addListener(XMPPEvents.PRESENCE_STATUS, onMucPresenceStatus);
     APP.xmpp.addListener(XMPPEvents.SUBJECT_CHANGED, chatSetSubject);
     APP.xmpp.addListener(XMPPEvents.MESSAGE_RECEIVED, updateChatConversation);
-    APP.xmpp.addListener(XMPPEvents.MUC_LEFT, onMucLeft);
-    APP.xmpp.addListener(XMPPEvents.PASSWORD_REQUIRED, onPasswordReqiured);
+    APP.xmpp.addListener(XMPPEvents.MUC_MEMBER_LEFT, onMucMemberLeft);
+    APP.xmpp.addListener(XMPPEvents.PASSWORD_REQUIRED, onPasswordRequired);
     APP.xmpp.addListener(XMPPEvents.CHAT_ERROR_RECEIVED, chatAddError);
     APP.xmpp.addListener(XMPPEvents.ETHERPAD, initEtherpad);
-    APP.xmpp.addListener(XMPPEvents.AUTHENTICATION_REQUIRED, onAuthenticationRequired);
+    APP.xmpp.addListener(XMPPEvents.AUTHENTICATION_REQUIRED,
+        onAuthenticationRequired);
+    APP.xmpp.addListener(XMPPEvents.DEVICE_AVAILABLE,
+        function (resource, devices) {
+            VideoLayout.setDeviceAvailabilityIcons(resource, devices);
+        });
 
-
+    APP.members.addListener(MemberEvents.DTMF_SUPPORT_CHANGED,
+                            onDtmfSupportChanged);
+    APP.xmpp.addListener(XMPPEvents.START_MUTED, function (audio, video) {
+        SettingsMenu.setStartMuted(audio, video);
+    });
 }
 
 
@@ -1473,24 +1748,16 @@ function registerListeners() {
  * contrast to an automatic decision taken by the application logic)
  */
 function setVideoMute(mute, options) {
-    APP.xmpp.setVideoMute(
-        mute,
-        function (mute) {
-            var video = $('#video');
-            var communicativeClass = "icon-camera";
-            var muteClass = "icon-camera icon-camera-disabled";
-
-            if (mute) {
-                video.removeClass(communicativeClass);
-                video.addClass(muteClass);
-            } else {
-                video.removeClass(muteClass);
-                video.addClass(communicativeClass);
-            }
-        },
+    APP.RTC.setVideoMute(mute,
+        UI.setVideoMuteButtonsState,
         options);
 }
 
+function onResize()
+{
+    Chat.resizeChat();
+    VideoLayout.resizeLargeVideoContainer();
+}
 
 function bindEvents()
 {
@@ -1498,16 +1765,9 @@ function bindEvents()
      * Resizes and repositions videos in full screen mode.
      */
     $(document).on('webkitfullscreenchange mozfullscreenchange fullscreenchange',
-        function () {
-            VideoLayout.resizeLargeVideoContainer();
-            VideoLayout.positionLarge();
-        }
-    );
+        onResize);
 
-    $(window).resize(function () {
-        VideoLayout.resizeLargeVideoContainer();
-        VideoLayout.positionLarge();
-    });
+    $(window).resize(onResize);
 }
 
 UI.start = function (init) {
@@ -1548,7 +1808,6 @@ UI.start = function (init) {
 
     $("#welcome_page").hide();
 
-    VideoLayout.resizeLargeVideoContainer();
     $("#videospace").mousemove(function () {
         return ToolbarToggler.showToolbar();
     });
@@ -1639,9 +1898,9 @@ function chatSetSubject(text)
     return Chat.chatSetSubject(text);
 };
 
-function updateChatConversation(from, displayName, message) {
-    return Chat.updateChatConversation(from, displayName, message);
-};
+function updateChatConversation(from, displayName, message, myjid, stamp) {
+    return Chat.updateChatConversation(from, displayName, message, myjid, stamp);
+}
 
 function onMucJoined(jid, info) {
     Toolbar.updateRoomUrl(window.location.href);
@@ -1660,19 +1919,25 @@ function onMucJoined(jid, info) {
 
     if (displayName)
         onDisplayNameChanged('localVideoContainer', displayName);
+
+
+    VideoLayout.mucJoined();
 }
 
 function initEtherpad(name) {
     Etherpad.init(name);
-};
+}
 
-function onMucLeft(jid) {
+function onMucMemberLeft(jid) {
     console.log('left.muc', jid);
     var displayName = $('#participant_' + Strophe.getResourceFromJid(jid) +
         '>.displayname').html();
     messageHandler.notify(displayName,'notify.somebody',
         'disconnected',
         'notify.disconnected');
+    if(!config.startAudioMuted ||
+        config.startAudioMuted > APP.members.size())
+        UIUtil.playSoundNotification('userLeft');
     // Need to call this with a slight delay, otherwise the element couldn't be
     // found for some reason.
     // XXX(gp) it works fine without the timeout for me (with Chrome 38).
@@ -1693,12 +1958,13 @@ function onMucLeft(jid) {
 };
 
 
-function onLocalRoleChange(jid, info, pres, isModerator)
+function onLocalRoleChanged(jid, info, pres, isModerator)
 {
 
     console.info("My role changed, new role: " + info.role);
     onModeratorStatusChanged(isModerator);
     VideoLayout.showModeratorIndicator();
+    SettingsMenu.onRoleChanged();
 
     if (isModerator) {
         Authentication.closeAuthenticationWindow();
@@ -1716,13 +1982,9 @@ function onModeratorStatusChanged(isModerator) {
     // Recording visible if
     // there are at least 2(+ 1 focus) participants
     //Object.keys(connection.emuc.members).length >= 3);
+}
 
-    if (isModerator && config.etherpad_base) {
-        Etherpad.init();
-    }
-};
-
-function onPasswordReqiured(callback) {
+function onPasswordRequired(callback) {
     // password is required
     Toolbar.lockLockButton();
     var message = '<h2 data-i18n="dialog.passwordRequired">';
@@ -1751,18 +2013,30 @@ function onPasswordReqiured(callback) {
         ':input:first'
     );
 }
-function onMucEntered(jid, id, displayName) {
+
+/**
+ * The dialpad button is shown iff there is at least one member that supports
+ * DTMF (e.g. jigasi).
+ */
+function onDtmfSupportChanged(dtmfSupport) {
+    //TODO: enable when the UI is ready
+    //Toolbar.showDialPadButton(dtmfSupport);
+}
+
+function onMucMemberJoined(jid, id, displayName) {
     messageHandler.notify(displayName,'notify.somebody',
         'connected',
         'notify.connected');
 
+    if(!config.startAudioMuted ||
+        config.startAudioMuted > APP.members.size())
+        UIUtil.playSoundNotification('userJoined');
     // Add Peer's container
     VideoLayout.ensurePeerContainerExists(jid,id);
 }
 
-function onMucPresenceStatus( jid, info) {
-    VideoLayout.setPresenceStatus(
-            'participant_' + Strophe.getResourceFromJid(jid), info.status);
+function onMucPresenceStatus(jid, info) {
+    VideoLayout.setPresenceStatus(Strophe.getResourceFromJid(jid), info.status);
 }
 
 function onMucRoleChanged(role, displayName) {
@@ -1825,9 +2099,9 @@ UI.inputDisplayNameHandler = function (value) {
 };
 
 
-UI.getLargeVideoState = function()
+UI.getLargeVideoJid = function()
 {
-    return VideoLayout.getLargeVideoState();
+    return VideoLayout.getLargeVideoJid();
 };
 
 UI.generateRoomName = function() {
@@ -1866,9 +2140,9 @@ UI.generateRoomName = function() {
 };
 
 
-UI.connectionIndicatorShowMore = function(id)
+UI.connectionIndicatorShowMore = function(jid)
 {
-    return VideoLayout.connectionIndicators[id].showMore();
+    return VideoLayout.showMore(jid);
 };
 
 UI.showLoginPopup = function(callback)
@@ -1933,12 +2207,16 @@ UI.getRoomName = function () {
     return roomName;
 };
 
+UI.setInitialMuteFromFocus = function (muteAudio, muteVideo) {
+    if(muteAudio || muteVideo) notifyForInitialMute();
+    if(muteAudio) UI.setAudioMuted(true);
+    if(muteVideo) UI.setVideoMute(true);
+}
+
 /**
  * Mutes/unmutes the local video.
  */
 UI.toggleVideo = function () {
-    UIUtil.buttonClick("#video", "icon-camera icon-camera-disabled");
-
     setVideoMute(!APP.RTC.localVideo.isMuted());
 };
 
@@ -1952,9 +2230,17 @@ UI.toggleAudio = function() {
 /**
  * Sets muted audio state for the local participant.
  */
-UI.setAudioMuted = function (mute) {
-
-    if(!APP.xmpp.setAudioMute(mute, function () {
+UI.setAudioMuted = function (mute, earlyMute) {
+    var audioMute = null;
+    if(earlyMute)
+        audioMute = function (mute, cb) {
+            return APP.xmpp.sendAudioInfoPresence(mute, cb);
+        };
+    else
+        audioMute = function (mute, cb) {
+            return APP.xmpp.setAudioMute(mute, cb);
+        }
+    if(!audioMute(mute, function () {
         VideoLayout.showLocalAudioIndicator(mute);
 
         UIUtil.buttonClick("#mute", "icon-microphone icon-mic-disabled");
@@ -1988,10 +2274,27 @@ UI.dockToolbar = function (isDock) {
     return ToolbarToggler.dockToolbar(isDock);
 }
 
+UI.setVideoMuteButtonsState = function (mute) {
+    var video = $('#video');
+    var communicativeClass = "icon-camera";
+    var muteClass = "icon-camera icon-camera-disabled";
+
+    if (mute) {
+        video.removeClass(communicativeClass);
+        video.addClass(muteClass);
+    } else {
+        video.removeClass(muteClass);
+        video.addClass(communicativeClass);
+    }
+}
+
+
+UI.setVideoMute = setVideoMute;
+
 module.exports = UI;
 
 
-},{"../../service/RTC/RTCEvents":89,"../../service/RTC/StreamEventTypes":91,"../../service/connectionquality/CQEvents":94,"../../service/desktopsharing/DesktopSharingEventTypes":95,"../../service/xmpp/XMPPEvents":97,"./../settings/Settings":38,"./audio_levels/AudioLevels.js":9,"./authentication/Authentication":11,"./avatar/Avatar":13,"./etherpad/Etherpad.js":14,"./prezi/Prezi.js":15,"./side_pannels/SidePanelToggler":17,"./side_pannels/chat/Chat.js":18,"./side_pannels/contactlist/ContactList":22,"./side_pannels/settings/SettingsMenu":23,"./toolbars/BottomToolbar":24,"./toolbars/Toolbar":25,"./toolbars/ToolbarToggler":26,"./util/MessageHandler":28,"./util/NicknameHandler":29,"./util/UIUtil":30,"./videolayout/VideoLayout.js":32,"./welcome_page/RoomnameGenerator":33,"./welcome_page/WelcomePage":34,"events":98}],9:[function(require,module,exports){
+},{"../../service/RTC/RTCEvents":97,"../../service/RTC/StreamEventTypes":99,"../../service/connectionquality/CQEvents":102,"../../service/desktopsharing/DesktopSharingEventTypes":103,"../../service/members/Events":104,"../../service/xmpp/XMPPEvents":106,"./../settings/Settings":45,"./audio_levels/AudioLevels.js":10,"./authentication/Authentication":12,"./avatar/Avatar":14,"./etherpad/Etherpad.js":15,"./prezi/Prezi.js":16,"./side_pannels/SidePanelToggler":18,"./side_pannels/chat/Chat.js":19,"./side_pannels/contactlist/ContactList":23,"./side_pannels/settings/SettingsMenu":24,"./toolbars/BottomToolbar":25,"./toolbars/Toolbar":26,"./toolbars/ToolbarToggler":27,"./util/MessageHandler":29,"./util/NicknameHandler":30,"./util/UIUtil":31,"./videolayout/VideoLayout.js":37,"./welcome_page/RoomnameGenerator":38,"./welcome_page/WelcomePage":39,"events":107}],10:[function(require,module,exports){
 var CanvasUtil = require("./CanvasUtils");
 
 var ASDrawContext = $('#activeSpeakerAudioLevel')[0].getContext('2d');
@@ -2257,7 +2560,7 @@ var AudioLevels = (function(my) {
 })(AudioLevels || {});
 
 module.exports = AudioLevels;
-},{"./CanvasUtils":10}],10:[function(require,module,exports){
+},{"./CanvasUtils":11}],11:[function(require,module,exports){
 /**
  * Utility class for drawing canvas shapes.
  */
@@ -2369,7 +2672,7 @@ var CanvasUtil = (function(my) {
 })(CanvasUtil || {});
 
 module.exports = CanvasUtil;
-},{}],11:[function(require,module,exports){
+},{}],12:[function(require,module,exports){
 /* global $, APP*/
 
 var LoginDialog = require('./LoginDialog');
@@ -2393,12 +2696,14 @@ var Authentication = {
         // extract room name from 'room@muc.server.net'
         var room = roomName.substr(0, roomName.indexOf('@'));
 
-        var title = APP.translation.generateTranslatonHTML("dialog.Stop");
-        var msg = APP.translation.generateTranslatonHTML("dialog.AuthMsg",
-            {room: room});
+        var title
+            = APP.translation.generateTranslatonHTML("dialog.WaitingForHost");
+        var msg
+            = APP.translation.generateTranslatonHTML(
+                    "dialog.WaitForHostMsg", {room: room});
 
         var buttonTxt
-            = APP.translation.generateTranslatonHTML("dialog.Authenticate");
+            = APP.translation.generateTranslatonHTML("dialog.IamHost");
         var buttons = [];
         buttons.push({title: buttonTxt, value: "authNow"});
 
@@ -2492,7 +2797,7 @@ var Authentication = {
 };
 
 module.exports = Authentication;
-},{"../../xmpp/moderator":53,"./LoginDialog":12}],12:[function(require,module,exports){
+},{"../../xmpp/moderator":55,"./LoginDialog":13}],13:[function(require,module,exports){
 /* global $, APP, config*/
 
 var XMPP = require('../../xmpp/xmpp');
@@ -2721,7 +3026,7 @@ var LoginDialog = {
 };
 
 module.exports = LoginDialog;
-},{"../../xmpp/moderator":53,"../../xmpp/xmpp":61}],13:[function(require,module,exports){
+},{"../../xmpp/moderator":55,"../../xmpp/xmpp":63}],14:[function(require,module,exports){
 var Settings = require("../../settings/Settings");
 var MediaStreamType = require("../../../service/RTC/MediaStreamTypes");
 
@@ -2737,11 +3042,16 @@ function setVisibility(selector, show) {
 function isUserMuted(jid) {
     // XXX(gp) we may want to rename this method to something like
     // isUserStreaming, for example.
-    if (jid && jid != APP.xmpp.myJid()) {
+    if (jid != APP.xmpp.myJid()) {
         var resource = Strophe.getResourceFromJid(jid);
         if (!require("../videolayout/VideoLayout").isInLastN(resource)) {
             return true;
         }
+    }
+    else
+    {
+        var localVideo = APP.RTC.localVideo;
+        return (!localVideo || localVideo.isMuted());
     }
 
     if (!APP.RTC.remoteStreams[jid] || !APP.RTC.remoteStreams[jid][MediaStreamType.VIDEO_TYPE]) {
@@ -2835,7 +3145,7 @@ var Avatar = {
             //if the user is the currently focused, the dominant speaker or if
             //there is no focused and no dominant speaker and the large video is
             //currently shown
-            if (activeSpeakerJid === jid && require("../videolayout/VideoLayout").isLargeVideoOnTop()) {
+            if (activeSpeakerJid === jid && require("../videolayout/LargeVideo").isLargeVideoOnTop()) {
                 setVisibility($("#largeVideo"), !show);
                 setVisibility($('#activeSpeaker'), show);
                 setVisibility(avatar, false);
@@ -2843,8 +3153,9 @@ var Avatar = {
             } else {
                 if (video && video.length > 0) {
                     setVisibility(video, !show);
-                    setVisibility(avatar, show);
                 }
+                setVisibility(avatar, show);
+
             }
         }
     },
@@ -2854,10 +3165,6 @@ var Avatar = {
      * @param jid of the current active speaker
      */
     updateActiveSpeakerAvatarSrc: function (jid) {
-        if (!jid) {
-            jid = APP.xmpp.findJidFromResource(
-                require("../videolayout/VideoLayout").getLargeVideoState().userResourceJid);
-        }
         var avatar = $("#activeSpeakerAvatar")[0];
         var url = getGravatarUrl(users[jid],
             interfaceConfig.ACTIVE_SPEAKER_AVATAR_SIZE);
@@ -2877,7 +3184,7 @@ var Avatar = {
 
 
 module.exports = Avatar;
-},{"../../../service/RTC/MediaStreamTypes":87,"../../settings/Settings":38,"../videolayout/VideoLayout":32}],14:[function(require,module,exports){
+},{"../../../service/RTC/MediaStreamTypes":95,"../../settings/Settings":45,"../videolayout/LargeVideo":33,"../videolayout/VideoLayout":37}],15:[function(require,module,exports){
 /* global $, config,
    setLargeVideoVisible, Util */
 
@@ -2904,13 +3211,6 @@ function resize() {
         $('#etherpad>iframe').width(availableWidth);
         $('#etherpad>iframe').height(availableHeight);
     }
-}
-
-/**
- * Shares the Etherpad name with other participants.
- */
-function shareEtherpad() {
-    APP.xmpp.addToPresence("etherpad", etherpadName);
 }
 
 /**
@@ -2995,18 +3295,11 @@ var Etherpad = {
      */
     init: function (name) {
 
-        if (config.etherpad_base && !etherpadName) {
+        if (config.etherpad_base && !etherpadName && name) {
 
             domain = config.etherpad_base;
 
-            if (!name) {
-                // In case we're the focus we generate the name.
-                etherpadName = Math.random().toString(36).substring(7) +
-                                '_' + (new Date().getTime()).toString();
-                shareEtherpad();
-            }
-            else
-                etherpadName = name;
+            etherpadName = name;
 
             enableEtherpadButton();
 
@@ -3073,7 +3366,7 @@ var Etherpad = {
 
 module.exports = Etherpad;
 
-},{"../prezi/Prezi":15,"../util/UIUtil":30,"../videolayout/VideoLayout":32}],15:[function(require,module,exports){
+},{"../prezi/Prezi":16,"../util/UIUtil":31,"../videolayout/VideoLayout":37}],16:[function(require,module,exports){
 var ToolbarToggler = require("../toolbars/ToolbarToggler");
 var UIUtil = require("../util/UIUtil");
 var VideoLayout = require("../videolayout/VideoLayout");
@@ -3241,10 +3534,10 @@ function presentationAdded(event, jid, presUrl, currentSlide) {
         + Strophe.getResourceFromJid(jid)
         + '_' + presId;
 
-    // We explicitly don't specify the peer jid here, because we don't want
-    // this video to be dealt with as a peer related one (for example we
-    // don't want to show a mute/kick menu for this one, etc.).
-    VideoLayout.addRemoteVideoContainer(null, elementId);
+
+
+
+    VideoLayout.addPreziContainer(elementId);
     VideoLayout.resizeThumbnails();
 
     var controlsEnabled = false;
@@ -3449,7 +3742,7 @@ $(window).resize(function () {
 
 module.exports = Prezi;
 
-},{"../toolbars/ToolbarToggler":26,"../util/MessageHandler":28,"../util/UIUtil":30,"../videolayout/VideoLayout":32,"./PreziPlayer":16}],16:[function(require,module,exports){
+},{"../toolbars/ToolbarToggler":27,"../util/MessageHandler":29,"../util/UIUtil":31,"../videolayout/VideoLayout":37,"./PreziPlayer":17}],17:[function(require,module,exports){
 (function() {
     "use strict";
     var __bind = function(fn, me){ return function(){ return fn.apply(me, arguments); }; };
@@ -3745,7 +4038,7 @@ module.exports = Prezi;
 
 module.exports = PreziPlayer;
 
-},{}],17:[function(require,module,exports){
+},{}],18:[function(require,module,exports){
 var Chat = require("./chat/Chat");
 var ContactList = require("./contactlist/ContactList");
 var Settings = require("./../../settings/Settings");
@@ -3753,6 +4046,7 @@ var SettingsMenu = require("./settings/SettingsMenu");
 var VideoLayout = require("../videolayout/VideoLayout");
 var ToolbarToggler = require("../toolbars/ToolbarToggler");
 var UIUtil = require("../util/UIUtil");
+var LargeVideo = require("../videolayout/LargeVideo");
 
 /**
  * Toggler for the chat, contact list, settings menu, etc..
@@ -3764,90 +4058,6 @@ var PanelToggler = (function(my) {
         '#chatspace': '#chatBottomButton',
         '#contactlist': '#contactListButton',
         '#settingsmenu': '#settingsButton'
-    };
-
-    /**
-     * Resizes the video area
-     * @param isClosing whether the side panel is going to be closed or is going to open / remain opened
-     * @param completeFunction a function to be called when the video space is resized
-     */
-    var resizeVideoArea = function(isClosing, completeFunction) {
-        var videospace = $('#videospace');
-
-        var panelSize = isClosing ? [0, 0] : PanelToggler.getPanelSize();
-        var videospaceWidth = window.innerWidth - panelSize[0];
-        var videospaceHeight = window.innerHeight;
-        var videoSize
-            = VideoLayout.getVideoSize(null, null, videospaceWidth, videospaceHeight);
-        var videoWidth = videoSize[0];
-        var videoHeight = videoSize[1];
-        var videoPosition = VideoLayout.getVideoPosition(videoWidth,
-            videoHeight,
-            videospaceWidth,
-            videospaceHeight);
-        var horizontalIndent = videoPosition[0];
-        var verticalIndent = videoPosition[1];
-
-        var thumbnailSize = VideoLayout.calculateThumbnailSize(videospaceWidth);
-        var thumbnailsWidth = thumbnailSize[0];
-        var thumbnailsHeight = thumbnailSize[1];
-        //for chat
-
-        videospace.animate({
-                right: panelSize[0],
-                width: videospaceWidth,
-                height: videospaceHeight
-            },
-            {
-                queue: false,
-                duration: 500,
-                complete: completeFunction
-            });
-
-        $('#remoteVideos').animate({
-                height: thumbnailsHeight
-            },
-            {
-                queue: false,
-                duration: 500
-            });
-
-        $('#remoteVideos>span').animate({
-                height: thumbnailsHeight,
-                width: thumbnailsWidth
-            },
-            {
-                queue: false,
-                duration: 500,
-                complete: function () {
-                    $(document).trigger(
-                        "remotevideo.resized",
-                        [thumbnailsWidth,
-                            thumbnailsHeight]);
-                }
-            });
-
-        $('#largeVideoContainer').animate({
-                width: videospaceWidth,
-                height: videospaceHeight
-            },
-            {
-                queue: false,
-                duration: 500
-            });
-
-        $('#largeVideo').animate({
-                width: videoWidth,
-                height: videoHeight,
-                top: verticalIndent,
-                bottom: verticalIndent,
-                left: horizontalIndent,
-                right: horizontalIndent
-            },
-            {
-                queue: false,
-                duration: 500
-            });
     };
 
     /**
@@ -3883,7 +4093,7 @@ var PanelToggler = (function(my) {
         else {
             // Undock the toolbar when the chat is shown and if we're in a
             // video mode.
-            if (VideoLayout.isLargeVideoVisible()) {
+            if (LargeVideo.isLargeVideoVisible()) {
                 ToolbarToggler.dockToolbar(false);
             }
 
@@ -3928,7 +4138,7 @@ var PanelToggler = (function(my) {
             $('#chatspace').trigger('shown');
         };
 
-        resizeVideoArea(Chat.isVisible(), chatCompleteFunction);
+        VideoLayout.resizeVideoArea(!Chat.isVisible(), chatCompleteFunction);
 
         toggle(Chat,
             '#chatspace',
@@ -3951,7 +4161,7 @@ var PanelToggler = (function(my) {
     my.toggleContactList = function () {
         var completeFunction = ContactList.isVisible() ?
             function() {} : function () { $('#contactlist').trigger('shown');};
-        resizeVideoArea(ContactList.isVisible(), completeFunction);
+        VideoLayout.resizeVideoArea(!ContactList.isVisible(), completeFunction);
 
         toggle(ContactList,
             '#contactlist',
@@ -3966,7 +4176,7 @@ var PanelToggler = (function(my) {
      * Opens / closes the settings menu
      */
     my.toggleSettingsMenu = function() {
-        resizeVideoArea(SettingsMenu.isVisible(), function (){});
+        VideoLayout.resizeVideoArea(!SettingsMenu.isVisible(), function (){});
         toggle(SettingsMenu,
             '#settingsmenu',
             null,
@@ -4002,7 +4212,7 @@ var PanelToggler = (function(my) {
 }(PanelToggler || {}));
 
 module.exports = PanelToggler;
-},{"../toolbars/ToolbarToggler":26,"../util/UIUtil":30,"../videolayout/VideoLayout":32,"./../../settings/Settings":38,"./chat/Chat":18,"./contactlist/ContactList":22,"./settings/SettingsMenu":23}],18:[function(require,module,exports){
+},{"../toolbars/ToolbarToggler":27,"../util/UIUtil":31,"../videolayout/LargeVideo":33,"../videolayout/VideoLayout":37,"./../../settings/Settings":45,"./chat/Chat":19,"./contactlist/ContactList":23,"./settings/SettingsMenu":24}],19:[function(require,module,exports){
 /* global $, Util, nickname:true */
 var Replacement = require("./Replacement");
 var CommandsProcessor = require("./Commands");
@@ -4090,8 +4300,8 @@ function setVisualNotification(show) {
  * Returns the current time in the format it is shown to the user
  * @returns {string}
  */
-function getCurrentTime() {
-    var now     = new Date();
+function getCurrentTime(stamp) {
+    var now     = (stamp? new Date(stamp): new Date());
     var hour    = now.getHours();
     var minute  = now.getMinutes();
     var second  = now.getSeconds();
@@ -4233,7 +4443,7 @@ var Chat = (function (my) {
     /**
      * Appends the given message to the chat conversation.
      */
-    my.updateChatConversation = function (from, displayName, message) {
+    my.updateChatConversation = function (from, displayName, message, myjid, stamp) {
         var divClassName = '';
 
         if (APP.xmpp.myJid() === from) {
@@ -4261,7 +4471,7 @@ var Chat = (function (my) {
             '<div class="chatmessage">'+
                 '<img src="../images/chatArrow.svg" class="chatArrow">' +
                 '<div class="username ' + divClassName +'">' + escDisplayName +
-                '</div>' + '<div class="timestamp">' + getCurrentTime() +
+                '</div>' + '<div class="timestamp">' + getCurrentTime(stamp) +
                 '</div>' + '<div class="usermessage">' + message + '</div>' +
             '</div>';
 
@@ -4360,7 +4570,7 @@ var Chat = (function (my) {
     return my;
 }(Chat || {}));
 module.exports = Chat;
-},{"../../../../service/UI/UIEvents":92,"../../toolbars/ToolbarToggler":26,"../../util/NicknameHandler":29,"../../util/UIUtil":30,"../SidePanelToggler":17,"./Commands":19,"./Replacement":20,"./smileys.json":21}],19:[function(require,module,exports){
+},{"../../../../service/UI/UIEvents":100,"../../toolbars/ToolbarToggler":27,"../../util/NicknameHandler":30,"../../util/UIUtil":31,"../SidePanelToggler":18,"./Commands":20,"./Replacement":21,"./smileys.json":22}],20:[function(require,module,exports){
 var UIUtil = require("../../util/UIUtil");
 
 /**
@@ -4458,7 +4668,7 @@ CommandsProcessor.prototype.processCommand = function()
 };
 
 module.exports = CommandsProcessor;
-},{"../../util/UIUtil":30}],20:[function(require,module,exports){
+},{"../../util/UIUtil":31}],21:[function(require,module,exports){
 var Smileys = require("./smileys.json");
 /**
  * Processes links and smileys in "body"
@@ -4522,7 +4732,7 @@ module.exports = {
     linkify: linkify
 };
 
-},{"./smileys.json":21}],21:[function(require,module,exports){
+},{"./smileys.json":22}],22:[function(require,module,exports){
 module.exports={
     "smileys": {
         "smiley1": ":)",
@@ -4572,7 +4782,7 @@ module.exports={
     }
 }
 
-},{}],22:[function(require,module,exports){
+},{}],23:[function(require,module,exports){
 
 var numberOfContacts = 0;
 var notificationInterval;
@@ -4660,7 +4870,7 @@ var ContactList = {
     ensureAddContact: function (peerJid, id) {
         var resourceJid = Strophe.getResourceFromJid(peerJid);
 
-        var contact = $('#contactlist>ul>li[id="' + resourceJid + '"]');
+        var contact = $('#contacts>li[id="' + resourceJid + '"]');
 
         if (!contact || contact.length <= 0)
             ContactList.addContact(peerJid, id);
@@ -4675,7 +4885,7 @@ var ContactList = {
     addContact: function (peerJid, id) {
         var resourceJid = Strophe.getResourceFromJid(peerJid);
 
-        var contactlist = $('#contactlist>ul');
+        var contactlist = $('#contacts');
 
         var newContact = document.createElement('li');
         newContact.id = resourceJid;
@@ -4689,15 +4899,11 @@ var ContactList = {
         newContact.appendChild(createAvatar(id));
         newContact.appendChild(createDisplayNameParagraph("participant"));
 
-        var clElement = contactlist.get(0);
-
-        if (resourceJid === APP.xmpp.myResource()
-            && $('#contactlist>ul .title')[0].nextSibling.nextSibling) {
-            clElement.insertBefore(newContact,
-                $('#contactlist>ul .title')[0].nextSibling.nextSibling);
+        if (resourceJid === APP.xmpp.myResource()) {
+            contactlist.prepend(newContact);
         }
         else {
-            clElement.appendChild(newContact);
+            contactlist.append(newContact);
         }
         updateNumberOfParticipants(1);
     },
@@ -4710,7 +4916,7 @@ var ContactList = {
     removeContact: function (peerJid) {
         var resourceJid = Strophe.getResourceFromJid(peerJid);
 
-        var contact = $('#contactlist>ul>li[id="' + resourceJid + '"]');
+        var contact = $('#contacts>li[id="' + resourceJid + '"]');
 
         if (contact && contact.length > 0) {
             var contactlist = $('#contactlist>ul');
@@ -4740,7 +4946,7 @@ var ContactList = {
     },
 
     setClickable: function (resourceJid, isClickable) {
-        var contact = $('#contactlist>ul>li[id="' + resourceJid + '"]');
+        var contact = $('#contacts>li[id="' + resourceJid + '"]');
         if (isClickable) {
             contact.addClass('clickable');
         } else {
@@ -4754,7 +4960,7 @@ var ContactList = {
 
         var resourceJid = Strophe.getResourceFromJid(peerJid);
 
-        var contactName = $('#contactlist #' + resourceJid + '>p');
+        var contactName = $('#contacts #' + resourceJid + '>p');
 
         if (contactName && displayName && displayName.length > 0)
             contactName.html(displayName);
@@ -4762,7 +4968,7 @@ var ContactList = {
 };
 
 module.exports = ContactList;
-},{}],23:[function(require,module,exports){
+},{}],24:[function(require,module,exports){
 var Avatar = require("../../avatar/Avatar");
 var Settings = require("./../../../settings/Settings");
 var UIUtil = require("../../util/UIUtil");
@@ -4791,7 +4997,7 @@ function generateLanguagesSelectBox()
 var SettingsMenu = {
 
     init: function () {
-        $("#updateSettings").before(generateLanguagesSelectBox());
+        $("#startMutedOptions").before(generateLanguagesSelectBox());
         APP.translation.translateElement($("#languages_selectbox"));
         $('#settingsmenu>input').keyup(function(event){
             if(event.keyCode === 13) {//enter
@@ -4799,9 +5005,34 @@ var SettingsMenu = {
             }
         });
 
+        if(APP.xmpp.isModerator())
+        {
+            $("#startMutedOptions").css("display", "block");
+        }
+        else
+        {
+            $("#startMutedOptions").css("display", "none");
+        }
+
         $("#updateSettings").click(function () {
             SettingsMenu.update();
         });
+    },
+
+    onRoleChanged: function () {
+        if(APP.xmpp.isModerator())
+        {
+            $("#startMutedOptions").css("display", "block");
+        }
+        else
+        {
+            $("#startMutedOptions").css("display", "none");
+        }
+    },
+
+    setStartMuted: function (audio, video) {
+        $("#startAudioMuted").attr("checked", audio);
+        $("#startVideoMuted").attr("checked", video);
     },
 
     update: function() {
@@ -4820,6 +5051,10 @@ var SettingsMenu = {
         APP.xmpp.addToPresence("email", newEmail);
         var email = Settings.setEmail(newEmail);
 
+        var startAudioMuted = ($("#startAudioMuted").is(":checked"));
+        var startVideoMuted = ($("#startVideoMuted").is(":checked"));
+        APP.xmpp.addToPresence("startMuted",
+            [startAudioMuted, startVideoMuted]);
 
         Avatar.setUserAvatar(APP.xmpp.myJid(), email);
     },
@@ -4843,7 +5078,7 @@ var SettingsMenu = {
 
 
 module.exports = SettingsMenu;
-},{"../../../../service/translation/languages":96,"../../avatar/Avatar":13,"../../util/UIUtil":30,"./../../../settings/Settings":38}],24:[function(require,module,exports){
+},{"../../../../service/translation/languages":105,"../../avatar/Avatar":14,"../../util/UIUtil":31,"./../../../settings/Settings":45}],25:[function(require,module,exports){
 var PanelToggler = require("../side_pannels/SidePanelToggler");
 
 var buttonHandlers = {
@@ -4888,7 +5123,7 @@ var BottomToolbar = (function (my) {
 
 module.exports = BottomToolbar;
 
-},{"../side_pannels/SidePanelToggler":17}],25:[function(require,module,exports){
+},{"../side_pannels/SidePanelToggler":18}],26:[function(require,module,exports){
 /* global APP,$, buttonClick, config, lockRoom,
    setSharedKey, Util */
 var messageHandler = require("../util/MessageHandler");
@@ -4944,6 +5179,9 @@ var buttonHandlers =
     },
     "toolbar_button_sip": function () {
         return callSipButtonClicked();
+    },
+    "toolbar_button_dialpad": function () {
+        return dialpadButtonClicked();
     },
     "toolbar_button_settings": function () {
         PanelToggler.toggleSettingsMenu();
@@ -5112,6 +5350,11 @@ function inviteParticipants() {
     window.open("mailto:?subject=" + subject + "&body=" + body, '_blank');
 }
 
+function dialpadButtonClicked()
+{
+    //TODO show the dialpad window
+}
+
 function callSipButtonClicked()
 {
     var defaultNumber
@@ -5134,8 +5377,7 @@ function callSipButtonClicked()
                 }
             }
         },
-        null,
-        ':input:first'
+        null, null, ':input:first'
     );
 }
 
@@ -5217,7 +5459,8 @@ var Toolbar = (function (my) {
         if (inviteLink) {
             inviteLink.value = roomUrl;
             inviteLink.select();
-            document.getElementById('jqi_state0_buttonInvite').disabled = false;
+            $('#inviteLinkRef').parent()
+                .find('button[value=true]').prop('disabled', false);
         }
     };
 
@@ -5310,12 +5553,13 @@ var Toolbar = (function (my) {
                     }
                 }
             },
-            function () {
+            function (event) {
                 if (roomUrl) {
                     document.getElementById('inviteLinkRef').select();
                 } else {
-                    document.getElementById('jqi_state0_buttonInvite')
-                        .disabled = true;
+                    if (event && event.target)
+                        $(event.target)
+                            .find('button[value=true]').prop('disabled', true);
                 }
             }
         );
@@ -5441,12 +5685,13 @@ var Toolbar = (function (my) {
 
     // Sets the state of the recording button
     my.setRecordingButtonState = function (isRecording) {
+        var selector = $('#recordButton');
         if (isRecording) {
-            $('#recordButton').removeClass("icon-recEnable");
-            $('#recordButton').addClass("icon-recEnable active");
+            selector.removeClass("icon-recEnable");
+            selector.addClass("icon-recEnable active");
         } else {
-            $('#recordButton').removeClass("icon-recEnable active");
-            $('#recordButton').addClass("icon-recEnable");
+            selector.removeClass("icon-recEnable active");
+            selector.addClass("icon-recEnable");
         }
     };
 
@@ -5459,14 +5704,24 @@ var Toolbar = (function (my) {
         }
     };
 
+    // Shows or hides the dialpad button
+    my.showDialPadButton = function (show) {
+        if (show) {
+            $('#dialPadButton').css({display: "inline-block"});
+        } else {
+            $('#dialPadButton').css({display: "none"});
+        }
+    };
+
     /**
      * Displays user authenticated identity name(login).
      * @param authIdentity identity name to be displayed.
      */
     my.setAuthenticatedIdentity = function (authIdentity) {
         if (authIdentity) {
-            $('#toolbar_auth_identity').css({display: "list-item"});
-            $('#toolbar_auth_identity').text(authIdentity);
+            var selector = $('#toolbar_auth_identity');
+            selector.css({display: "list-item"});
+            selector.text(authIdentity);
         } else {
             $('#toolbar_auth_identity').css({display: "none"});
         }
@@ -5517,7 +5772,7 @@ var Toolbar = (function (my) {
 }(Toolbar || {}));
 
 module.exports = Toolbar;
-},{"../../../service/authentication/AuthenticationEvents":93,"../authentication/Authentication":11,"../etherpad/Etherpad":14,"../prezi/Prezi":15,"../side_pannels/SidePanelToggler":17,"../util/MessageHandler":28,"../util/UIUtil":30,"./BottomToolbar":24}],26:[function(require,module,exports){
+},{"../../../service/authentication/AuthenticationEvents":101,"../authentication/Authentication":12,"../etherpad/Etherpad":15,"../prezi/Prezi":16,"../side_pannels/SidePanelToggler":18,"../util/MessageHandler":29,"../util/UIUtil":31,"./BottomToolbar":25}],27:[function(require,module,exports){
 /* global $, interfaceConfig, Moderator, DesktopStreaming.showDesktopSharingButton */
 
 var toolbarTimeoutObject,
@@ -5535,6 +5790,9 @@ function showDesktopSharingButton() {
  * Hides the toolbar.
  */
 function hideToolbar() {
+    if(config.alwaysVisibleToolbar)
+        return;
+
     var header = $("#header"),
         bottomToolbar = $("#bottomToolbar");
     var isToolbarHover = false;
@@ -5632,7 +5890,7 @@ var ToolbarToggler = {
 };
 
 module.exports = ToolbarToggler;
-},{}],27:[function(require,module,exports){
+},{}],28:[function(require,module,exports){
 var JitsiPopover = (function () {
     /**
      * Constructs new JitsiPopover and attaches it to the element
@@ -5756,7 +6014,7 @@ var JitsiPopover = (function () {
 })();
 
 module.exports = JitsiPopover;
-},{}],28:[function(require,module,exports){
+},{}],29:[function(require,module,exports){
 /* global $, APP, jQuery, toastr */
 var messageHandler = (function(my) {
 
@@ -5934,7 +6192,7 @@ var messageHandler = (function(my) {
     };
 
     my.notify = function(displayName, displayNameKey,
-                         cls, messageKey, messageArguments) {
+                         cls, messageKey, messageArguments, options) {
         var displayNameSpan = '<span class="nickname" ';
         if(displayName)
         {
@@ -5954,7 +6212,7 @@ var messageHandler = (function(my) {
                     : "") + ">" +
             APP.translation.translateString(messageKey,
                 messageArguments) +
-            '</span>');
+            '</span>', null, options);
     };
 
     return my;
@@ -5964,7 +6222,7 @@ module.exports = messageHandler;
 
 
 
-},{}],29:[function(require,module,exports){
+},{}],30:[function(require,module,exports){
 var UIEvents = require("../../../service/UI/UIEvents");
 
 var nickname = null;
@@ -5995,7 +6253,7 @@ var NickanameHandler = {
 };
 
 module.exports = NickanameHandler;
-},{"../../../service/UI/UIEvents":92}],30:[function(require,module,exports){
+},{"../../../service/UI/UIEvents":100}],31:[function(require,module,exports){
 /**
  * Created by hristo on 12/22/14.
  */
@@ -6003,10 +6261,12 @@ module.exports = {
     /**
      * Returns the available video width.
      */
-    getAvailableVideoWidth: function () {
+    getAvailableVideoWidth: function (isVisible) {
         var PanelToggler = require("../side_pannels/SidePanelToggler");
+        if(typeof isVisible === "undefined" || isVisible === null)
+            isVisible = PanelToggler.isVisible();
         var rightPanelWidth
-            = PanelToggler.isVisible() ? PanelToggler.getPanelSize()[0] : 0;
+            = isVisible ? PanelToggler.getPanelSize()[0] : 0;
 
         return window.innerWidth - rightPanelWidth;
     },
@@ -6077,7 +6337,7 @@ module.exports = {
 
 
 };
-},{"../side_pannels/SidePanelToggler":17}],31:[function(require,module,exports){
+},{"../side_pannels/SidePanelToggler":18}],32:[function(require,module,exports){
 var JitsiPopover = require("../util/JitsiPopover");
 
 /**
@@ -6085,7 +6345,7 @@ var JitsiPopover = require("../util/JitsiPopover");
  * @param videoContainer the video container associated with the indicator.
  * @constructor
  */
-function ConnectionIndicator(videoContainer, jid, VideoLayout)
+function ConnectionIndicator(videoContainer, jid)
 {
     this.videoContainer = videoContainer;
     this.bandwidth = null;
@@ -6097,7 +6357,6 @@ function ConnectionIndicator(videoContainer, jid, VideoLayout)
     this.popover = null;
     this.jid = jid;
     this.create();
-    this.videoLayout = VideoLayout;
 }
 
 /**
@@ -6176,17 +6435,9 @@ ConnectionIndicator.prototype.generateText = function () {
     if(this.resolution && this.jid != null)
     {
         var keys = Object.keys(this.resolution);
-        if(keys.length == 1)
+        for(var ssrc in this.resolution)
         {
-            for(var ssrc in this.resolution)
-            {
-                resolutionValue = this.resolution[ssrc];
-            }
-        }
-        else if(keys.length > 1)
-        {
-            var displayedSsrc = APP.simulcast.getReceivingSSRC(this.jid);
-            resolutionValue = this.resolution[displayedSsrc];
+            resolutionValue = this.resolution[ssrc];
         }
     }
 
@@ -6241,10 +6492,10 @@ ConnectionIndicator.prototype.generateText = function () {
         translate("connectionindicator.resolution") + "</span></td>" +
         "<td>" + resolution + "</td></tr></table>";
 
-    if(this.videoContainer.id == "localVideoContainer") {
+    if(this.videoContainer.videoSpanId == "localVideoContainer") {
         result += "<div class=\"jitsipopover_showmore\" " +
             "onclick = \"APP.UI.connectionIndicatorShowMore('" +
-            this.videoContainer.id + "')\"  data-i18n='connectionindicator." +
+            this.jid + "')\"  data-i18n='connectionindicator." +
                 (this.showMoreValue ? "less" : "more") + "'>" +
             translate("connectionindicator." + (this.showMoreValue ? "less" : "more")) +
             "</div><br />";
@@ -6406,9 +6657,9 @@ ConnectionIndicator.prototype.create = function () {
     this.connectionIndicatorContainer = document.createElement("div");
     this.connectionIndicatorContainer.className = "connectionindicator";
     this.connectionIndicatorContainer.style.display = "none";
-    this.videoContainer.appendChild(this.connectionIndicatorContainer);
+    this.videoContainer.container.appendChild(this.connectionIndicatorContainer);
     this.popover = new JitsiPopover(
-        $("#" + this.videoContainer.id + " > .connectionindicator"),
+        $("#" + this.videoContainer.videoSpanId + " > .connectionindicator"),
         {content: "<div class=\"connection_info\" data-i18n='connectionindicator.na'>" +
             APP.translation.translateString("connectionindicator.na") + "</div>",
             skin: "black"});
@@ -6448,7 +6699,7 @@ function (percent, object) {
     {
         if(this.connectionIndicatorContainer.style.display == "none") {
             this.connectionIndicatorContainer.style.display = "block";
-            this.videoLayout.updateMutePosition(this.videoContainer.id);
+            this.videoContainer.updateIconPositions();
         }
     }
     this.bandwidth = object.bandwidth;
@@ -6505,117 +6756,105 @@ ConnectionIndicator.prototype.hideIndicator = function () {
 };
 
 module.exports = ConnectionIndicator;
-},{"../util/JitsiPopover":27}],32:[function(require,module,exports){
-var AudioLevels = require("../audio_levels/AudioLevels");
+},{"../util/JitsiPopover":28}],33:[function(require,module,exports){
 var Avatar = require("../avatar/Avatar");
-var Chat = require("../side_pannels/chat/Chat");
-var ContactList = require("../side_pannels/contactlist/ContactList");
 var UIUtil = require("../util/UIUtil");
-var ConnectionIndicator = require("./ConnectionIndicator");
-var NicknameHandler = require("../util/NicknameHandler");
-var MediaStreamType = require("../../../service/RTC/MediaStreamTypes");
 var UIEvents = require("../../../service/UI/UIEvents");
+var xmpp = require("../../xmpp/xmpp");
 
-var currentDominantSpeaker = null;
-var lastNCount = config.channelLastN;
-var localLastNCount = config.channelLastN;
-var localLastNSet = [];
-var lastNEndpointsCache = [];
-var lastNPickupJid = null;
-var largeVideoState = {
-    updateInProgress: false,
-    newSrc: ''
-};
+var video = $('#largeVideo');
 
-var eventEmitter = null;
-
-/**
- * Currently focused video "src"(displayed in large video).
- * @type {String}
- */
-var focusedVideoInfo = null;
-
-/**
- * Indicates if we have muted our audio before the conference has started.
- * @type {boolean}
- */
-var preMuted = false;
-
-var mutedAudios = {};
-
-var flipXLocalVideo = true;
 var currentVideoWidth = null;
 var currentVideoHeight = null;
+// By default we use camera
+var getVideoSize = getCameraVideoSize;
+var getVideoPosition = getCameraVideoPosition;
+var currentSmallVideo = null;
+var oldSmallVideo = null;
 
-var localVideoSrc = null;
 
-function videoactive( videoelem) {
-    if (videoelem.attr('id').indexOf('mixedmslabel') === -1) {
-        // ignore mixedmslabela0 and v0
 
-        videoelem.show();
-        VideoLayout.resizeThumbnails();
-
-        var videoParent = videoelem.parent();
-        var parentResourceJid = null;
-        if (videoParent)
-            parentResourceJid
-                = VideoLayout.getPeerContainerResourceJid(videoParent[0]);
-
-        // Update the large video to the last added video only if there's no
-        // current dominant, focused speaker or prezi playing or update it to
-        // the current dominant speaker.
-        if ((!focusedVideoInfo &&
-            !VideoLayout.getDominantSpeakerResourceJid() &&
-            !require("../prezi/Prezi").isPresentationVisible()) ||
-            (parentResourceJid &&
-                VideoLayout.getDominantSpeakerResourceJid() === parentResourceJid)) {
-            VideoLayout.updateLargeVideo(
-                APP.RTC.getVideoSrc(videoelem[0]),
-                1,
-                parentResourceJid);
-        }
-
-        VideoLayout.showModeratorIndicator();
+/**
+ * Sets the size and position of the given video element.
+ *
+ * @param video the video element to position
+ * @param width the desired video width
+ * @param height the desired video height
+ * @param horizontalIndent the left and right indent
+ * @param verticalIndent the top and bottom indent
+ */
+function positionVideo(video,
+                       width,
+                       height,
+                       horizontalIndent,
+                       verticalIndent,
+                       animate) {
+    if(animate)
+    {
+        video.animate({
+                width: width,
+                height: height,
+                top: verticalIndent,
+                bottom: verticalIndent,
+                left: horizontalIndent,
+                right: horizontalIndent
+            },
+            {
+                queue: false,
+                duration: 500
+            });
     }
+    else
+    {
+        video.width(width);
+        video.height(height);
+        video.css({  top: verticalIndent + 'px',
+            bottom: verticalIndent + 'px',
+            left: horizontalIndent + 'px',
+            right: horizontalIndent + 'px'});
+    }
+
 }
 
-function waitForRemoteVideo(selector, ssrc, stream, jid) {
-    // XXX(gp) so, every call to this function is *always* preceded by a call
-    // to the RTC.attachMediaStream() function but that call is *not* followed
-    // by an update to the videoSrcToSsrc map!
-    //
-    // The above way of doing things results in video SRCs that don't correspond
-    // to any SSRC for a short period of time (to be more precise, for as long
-    // the waitForRemoteVideo takes to complete). This causes problems (see
-    // bellow).
-    //
-    // I'm wondering why we need to do that; i.e. why call RTC.attachMediaStream()
-    // a second time in here and only then update the videoSrcToSsrc map? Why
-    // not simply update the videoSrcToSsrc map when the RTC.attachMediaStream()
-    // is called the first time? I actually do that in the lastN changed event
-    // handler because the "orphan" video SRC is causing troubles there. The
-    // purpose of this method would then be to fire the "videoactive.jingle".
-    //
-    // Food for though I guess :-)
 
-    if (selector.removed || !selector.parent().is(":visible")) {
-        console.warn("Media removed before had started", selector);
-        return;
+/**
+ * Returns an array of the video dimensions, so that it keeps it's aspect
+ * ratio and fits available area with it's larger dimension. This method
+ * ensures that whole video will be visible and can leave empty areas.
+ *
+ * @return an array with 2 elements, the video width and the video height
+ */
+function getDesktopVideoSize(videoWidth,
+                             videoHeight,
+                             videoSpaceWidth,
+                             videoSpaceHeight) {
+    if (!videoWidth)
+        videoWidth = currentVideoWidth;
+    if (!videoHeight)
+        videoHeight = currentVideoHeight;
+
+    var aspectRatio = videoWidth / videoHeight;
+
+    var availableWidth = Math.max(videoWidth, videoSpaceWidth);
+    var availableHeight = Math.max(videoHeight, videoSpaceHeight);
+
+    videoSpaceHeight -= $('#remoteVideos').outerHeight();
+
+    if (availableWidth / aspectRatio >= videoSpaceHeight)
+    {
+        availableHeight = videoSpaceHeight;
+        availableWidth = availableHeight * aspectRatio;
     }
 
-    if (stream.id === 'mixedmslabel') return;
-
-    if (selector[0].currentTime > 0) {
-        var videoStream = APP.simulcast.getReceivingVideoStream(stream);
-        APP.RTC.attachMediaStream(selector, videoStream); // FIXME: why do i have to do this for FF?
-        videoactive(selector);
-    } else {
-        setTimeout(function () {
-            waitForRemoteVideo(selector, ssrc, stream, jid);
-        }, 250);
+    if (availableHeight * aspectRatio >= videoSpaceWidth)
+    {
+        availableWidth = videoSpaceWidth;
+        availableHeight = availableWidth / aspectRatio;
     }
+
+    return [availableWidth, availableHeight];
 }
+
 
 /**
  * Returns an array of the video horizontal and vertical indents,
@@ -6696,20 +6935,304 @@ function getCameraVideoSize(videoWidth,
     return [availableWidth, availableHeight];
 }
 
+
+function changeVideo(isVisible) {
+    Avatar.updateActiveSpeakerAvatarSrc(currentSmallVideo.peerJid);
+
+    APP.RTC.setVideoSrc($('#largeVideo')[0], currentSmallVideo.getSrc());
+
+    var videoTransform = document.getElementById('largeVideo')
+        .style.webkitTransform;
+
+    var flipX = currentSmallVideo.flipX;
+
+    if (flipX && videoTransform !== 'scaleX(-1)') {
+        document.getElementById('largeVideo').style.webkitTransform
+            = "scaleX(-1)";
+    }
+    else if (!flipX && videoTransform === 'scaleX(-1)') {
+        document.getElementById('largeVideo').style.webkitTransform
+            = "none";
+    }
+
+    var isDesktop = APP.RTC.isVideoSrcDesktop(currentSmallVideo.peerJid);
+    // Change the way we'll be measuring and positioning large video
+
+    getVideoSize = isDesktop
+        ? getDesktopVideoSize
+        : getCameraVideoSize;
+    getVideoPosition = isDesktop
+        ? getDesktopVideoPosition
+        : getCameraVideoPosition;
+
+
+    // Only if the large video is currently visible.
+    // Disable previous dominant speaker video.
+    if (oldSmallVideo) {
+        oldSmallVideo.enableDominantSpeaker(false);
+    }
+
+    // Enable new dominant speaker in the remote videos section.
+    if (currentSmallVideo) {
+        currentSmallVideo.enableDominantSpeaker(true);
+    }
+
+    if (isVisible) {
+        // using "this" should be ok because we're called
+        // from within the fadeOut event.
+        $(this).fadeIn(300);
+    }
+
+    if(oldSmallVideo)
+        Avatar.showUserAvatar(oldSmallVideo.peerJid);
+}
+
+var LargeVideo = {
+
+    init: function (VideoLayout, emitter) {
+        this.VideoLayout = VideoLayout;
+        this.eventEmitter = emitter;
+        var self = this;
+        // Listen for large video size updates
+        document.getElementById('largeVideo')
+            .addEventListener('loadedmetadata', function (e) {
+                currentVideoWidth = this.videoWidth;
+                currentVideoHeight = this.videoHeight;
+                self.position(currentVideoWidth, currentVideoHeight);
+            });
+    },
+    /**
+     * Indicates if the large video is currently visible.
+     *
+     * @return <tt>true</tt> if visible, <tt>false</tt> - otherwise
+     */
+    isLargeVideoVisible: function() {
+        return video.is(':visible');
+    },
+    /**
+     * Updates the large video with the given new video source.
+     */
+    updateLargeVideo: function(resourceJid, forceUpdate) {
+        console.log('hover in', resourceJid);
+        var newSmallVideo = this.VideoLayout.getSmallVideo(resourceJid);
+
+        if ((currentSmallVideo && currentSmallVideo.resourceJid !== resourceJid)
+            || forceUpdate) {
+            $('#activeSpeaker').css('visibility', 'hidden');
+
+            if(currentSmallVideo) {
+                oldSmallVideo = currentSmallVideo;
+            } else {
+                oldSmallVideo = null;
+            }
+
+            currentSmallVideo = newSmallVideo;
+            var oldJid = null;
+            if(oldSmallVideo)
+                oldJid = oldSmallVideo.peerJid;
+
+            if (oldJid !== resourceJid) {
+                // we want the notification to trigger even if userJid is undefined,
+                // or null.
+                this.eventEmitter.emit(UIEvents.SELECTED_ENDPOINT,
+                    resourceJid);
+            }
+
+            video.fadeOut(300, changeVideo.bind(video, this.isLargeVideoVisible()));
+        } else {
+            var jid = null;
+            if(currentSmallVideo)
+                jid = currentSmallVideo.peerJid;
+            Avatar.showUserAvatar(jid);
+        }
+
+    },
+
+    /**
+     * Shows/hides the large video.
+     */
+    setLargeVideoVisible: function(isVisible) {
+        if (isVisible) {
+            $('#largeVideo').css({visibility: 'visible'});
+            $('.watermark').css({visibility: 'visible'});
+            if(currentSmallVideo)
+                currentSmallVideo.enableDominantSpeaker(true);
+        }
+        else {
+            $('#largeVideo').css({visibility: 'hidden'});
+            $('#activeSpeaker').css('visibility', 'hidden');
+            $('.watermark').css({visibility: 'hidden'});
+            if(currentSmallVideo)
+                currentSmallVideo.enableDominantSpeaker(false);
+        }
+    },
+    onVideoTypeChanged: function (jid) {
+        if(jid && currentSmallVideo && jid === currentSmallVideo.peerJid)
+        {
+            var isDesktop = APP.RTC.isVideoSrcDesktop(jid);
+            getVideoSize = isDesktop
+                ? getDesktopVideoSize
+                : getCameraVideoSize;
+            getVideoPosition = isDesktop
+                ? getDesktopVideoPosition
+                : getCameraVideoPosition;
+            this.position(null, null);
+        }
+    },
+    /**
+     * Positions the large video.
+     *
+     * @param videoWidth the stream video width
+     * @param videoHeight the stream video height
+     */
+    position: function (videoWidth, videoHeight,
+                        videoSpaceWidth, videoSpaceHeight, animate) {
+        if(!videoSpaceWidth)
+            videoSpaceWidth = $('#videospace').width();
+        if(!videoSpaceHeight)
+            videoSpaceHeight = window.innerHeight;
+
+        var videoSize = getVideoSize(videoWidth,
+            videoHeight,
+            videoSpaceWidth,
+            videoSpaceHeight);
+
+        var largeVideoWidth = videoSize[0];
+        var largeVideoHeight = videoSize[1];
+
+        var videoPosition = getVideoPosition(largeVideoWidth,
+            largeVideoHeight,
+            videoSpaceWidth,
+            videoSpaceHeight);
+
+        var horizontalIndent = videoPosition[0];
+        var verticalIndent = videoPosition[1];
+
+        positionVideo($('#largeVideo'),
+            largeVideoWidth,
+            largeVideoHeight,
+            horizontalIndent, verticalIndent, animate);
+    },
+
+    isLargeVideoOnTop: function () {
+        var Etherpad = require("../etherpad/Etherpad");
+        var Prezi = require("../prezi/Prezi");
+        return !Prezi.isPresentationVisible() && !Etherpad.isVisible();
+    },
+    resize: function (animate, isVisible, completeFunction) {
+        var availableHeight = window.innerHeight;
+        var availableWidth = UIUtil.getAvailableVideoWidth(isVisible);
+
+        if (availableWidth < 0 || availableHeight < 0) return;
+
+        var avatarSize = interfaceConfig.ACTIVE_SPEAKER_AVATAR_SIZE;
+        var top = availableHeight / 2 - avatarSize / 4 * 3;
+        $('#activeSpeaker').css('top', top);
+
+        if(animate)
+        {
+            $('#videospace').animate({
+                    right: window.innerWidth - availableWidth,
+                    width: availableWidth,
+                    height: availableHeight
+                },
+                {
+                    queue: false,
+                    duration: 500,
+                    complete: completeFunction
+                });
+
+            $('#largeVideoContainer').animate({
+                    width: availableWidth,
+                    height: availableHeight
+                },
+                {
+                    queue: false,
+                    duration: 500
+                });
+
+
+        }
+        else
+        {
+            $('#videospace').width(availableWidth);
+            $('#videospace').height(availableHeight);
+            $('#largeVideoContainer').width(availableWidth);
+            $('#largeVideoContainer').height(availableHeight);
+        }
+        return [availableWidth, availableHeight];
+
+    },
+    resizeVideoAreaAnimated: function (isVisible, completeFunction) {
+        var size = this.resize(true, isVisible, completeFunction);
+        this.position(null, null, size[0], size[1], true);
+    },
+    getResourceJid: function () {
+        if(!currentSmallVideo)
+            return null;
+        return currentSmallVideo.peerJid;
+    }
+
+}
+
+
+module.exports = LargeVideo;
+},{"../../../service/UI/UIEvents":100,"../../xmpp/xmpp":63,"../avatar/Avatar":14,"../etherpad/Etherpad":15,"../prezi/Prezi":16,"../util/UIUtil":31}],34:[function(require,module,exports){
+var SmallVideo = require("./SmallVideo");
+var ConnectionIndicator = require("./ConnectionIndicator");
+var NicknameHandler = require("../util/NicknameHandler");
+var UIUtil = require("../util/UIUtil");
+var LargeVideo = require("./LargeVideo");
+
+function LocalVideo(VideoLayout)
+{
+    this.videoSpanId = "localVideoContainer";
+    this.container = $("#localVideoContainer").get(0);
+    this.VideoLayout = VideoLayout;
+    this.flipX = true;
+    this.peerJid = null;
+    this.resourceJid = null;
+}
+
+LocalVideo.prototype = Object.create(SmallVideo.prototype);
+LocalVideo.prototype.constructor = LocalVideo;
+
+/**
+ * Creates the edit display name button.
+ *
+ * @returns the edit button
+ */
+function createEditDisplayNameButton() {
+    var editButton = document.createElement('a');
+    editButton.className = 'displayname';
+    UIUtil.setTooltip(editButton,
+        "videothumbnail.editnickname",
+        "top");
+    editButton.innerHTML = '<i class="fa fa-pencil"></i>';
+
+    return editButton;
+}
+
+
 /**
  * Sets the display name for the given video span id.
  */
-function setDisplayName(videoSpanId, displayName, key) {
-    var nameSpan = $('#' + videoSpanId + '>span.displayname');
+LocalVideo.prototype.setDisplayName = function(displayName, key) {
+
+    if (!this.container) {
+        console.warn(
+                "Unable to set displayName - " + this.videoSpanId + " does not exist");
+        return;
+    }
+
+    var nameSpan = $('#' + this.videoSpanId + '>span.displayname');
     var defaultLocalDisplayName = APP.translation.generateTranslatonHTML(
         interfaceConfig.DEFAULT_LOCAL_DISPLAY_NAME);
 
     // If we already have a display name for this video.
     if (nameSpan.length > 0) {
-        var nameSpanElement = nameSpan.get(0);
 
-        if (nameSpanElement.id === 'localDisplayName' &&
-            $('#localDisplayName').text() !== displayName) {
+        if (nameSpan.text() !== displayName) {
             if (displayName && displayName.length > 0)
             {
                 var meHTML = APP.translation.generateTranslatonHTML("me");
@@ -6717,137 +7240,206 @@ function setDisplayName(videoSpanId, displayName, key) {
             }
             else
                 $('#localDisplayName').html(defaultLocalDisplayName);
-        } else {
-            if (displayName && displayName.length > 0)
-            {
-                $('#' + videoSpanId + '_name').html(displayName);
-            }
-            else if (key && key.length > 0)
-            {
-                var nameHtml = APP.translation.generateTranslatonHTML(key);
-                $('#' + videoSpanId + '_name').html(nameHtml);
-            }
-            else
-                $('#' + videoSpanId + '_name').text(
-                    interfaceConfig.DEFAULT_REMOTE_DISPLAY_NAME);
         }
     } else {
-        var editButton = null;
+        var editButton = createEditDisplayNameButton();
 
         nameSpan = document.createElement('span');
         nameSpan.className = 'displayname';
-        $('#' + videoSpanId)[0].appendChild(nameSpan);
+        $('#' + this.videoSpanId)[0].appendChild(nameSpan);
 
-        if (videoSpanId === 'localVideoContainer') {
-            editButton = createEditDisplayNameButton();
-            if (displayName && displayName.length > 0) {
-                var meHTML = APP.translation.generateTranslatonHTML("me");
-                nameSpan.innerHTML = displayName + meHTML;
-            }
-            else
-                nameSpan.innerHTML = defaultLocalDisplayName;
+
+        if (displayName && displayName.length > 0) {
+            var meHTML = APP.translation.generateTranslatonHTML("me");
+            nameSpan.innerHTML = displayName + meHTML;
         }
         else {
-            if (displayName && displayName.length > 0) {
-
-                nameSpan.innerText = displayName;
-            }
-            else
-                nameSpan.innerText = interfaceConfig.DEFAULT_REMOTE_DISPLAY_NAME;
+            nameSpan.innerHTML = defaultLocalDisplayName;
         }
 
 
-        if (!editButton) {
-            nameSpan.id = videoSpanId + '_name';
-        } else {
-            nameSpan.id = 'localDisplayName';
-            $('#' + videoSpanId)[0].appendChild(editButton);
-            //translates popover of edit button
-            APP.translation.translateElement($("a.displayname"));
+        nameSpan.id = 'localDisplayName';
+        this.container.appendChild(editButton);
+        //translates popover of edit button
+        APP.translation.translateElement($("a.displayname"));
 
-            var editableText = document.createElement('input');
-            editableText.className = 'displayname';
-            editableText.type = 'text';
-            editableText.id = 'editDisplayName';
+        var editableText = document.createElement('input');
+        editableText.className = 'displayname';
+        editableText.type = 'text';
+        editableText.id = 'editDisplayName';
 
-            if (displayName && displayName.length) {
-                editableText.value
-                    = displayName;
-            }
+        if (displayName && displayName.length) {
+            editableText.value = displayName;
+        }
 
-            var defaultNickname = APP.translation.translateString(
-                "defaultNickname", {name: "Jane Pink"});
-            editableText.setAttribute('style', 'display:none;');
-            editableText.setAttribute('data-18n',
-                '[placeholder]defaultNickname');
-            editableText.setAttribute("data-i18n-options",
-                JSON.stringify({name: "Jane Pink"}));
-            editableText.setAttribute("placeholder", defaultNickname);
+        var defaultNickname = APP.translation.translateString(
+            "defaultNickname", {name: "Jane Pink"});
+        editableText.setAttribute('style', 'display:none;');
+        editableText.setAttribute('data-18n',
+            '[placeholder]defaultNickname');
+        editableText.setAttribute("data-i18n-options",
+            JSON.stringify({name: "Jane Pink"}));
+        editableText.setAttribute("placeholder", defaultNickname);
 
-            $('#' + videoSpanId)[0].appendChild(editableText);
+        this.container.appendChild(editableText);
 
-            $('#localVideoContainer .displayname')
-                .bind("click", function (e) {
+        var self = this;
+        $('#localVideoContainer .displayname')
+            .bind("click", function (e) {
 
-                    e.preventDefault();
-                    e.stopPropagation();
-                    $('#localDisplayName').hide();
-                    $('#editDisplayName').show();
-                    $('#editDisplayName').focus();
-                    $('#editDisplayName').select();
+                e.preventDefault();
+                e.stopPropagation();
+                $('#localDisplayName').hide();
+                $('#editDisplayName').show();
+                $('#editDisplayName').focus();
+                $('#editDisplayName').select();
 
-                    $('#editDisplayName').one("focusout", function (e) {
-                        VideoLayout.inputDisplayNameHandler(this.value);
-                    });
-
-                    $('#editDisplayName').on('keydown', function (e) {
-                        if (e.keyCode === 13) {
-                            e.preventDefault();
-                            VideoLayout.inputDisplayNameHandler(this.value);
-                        }
-                    });
+                $('#editDisplayName').one("focusout", function (e) {
+                    self.VideoLayout.inputDisplayNameHandler(this.value);
                 });
-        }
+
+                $('#editDisplayName').on('keydown', function (e) {
+                    if (e.keyCode === 13) {
+                        e.preventDefault();
+                        self.VideoLayout.inputDisplayNameHandler(this.value);
+                    }
+                });
+            });
     }
 }
 
-/**
- * Gets the selector of video thumbnail container for the user identified by
- * given <tt>userJid</tt>
- * @param resourceJid user's Jid for whom we want to get the video container.
- */
-function getParticipantContainer(resourceJid)
+LocalVideo.prototype.inputDisplayNameHandler = function (name) {
+    NicknameHandler.setNickname(name);
+
+    if (!$('#localDisplayName').is(":visible")) {
+        if (NicknameHandler.getNickname())
+        {
+            var meHTML = APP.translation.generateTranslatonHTML("me");
+            $('#localDisplayName').html(NicknameHandler.getNickname() + " (" + meHTML + ")");
+        }
+        else
+        {
+            var defaultHTML = APP.translation.generateTranslatonHTML(
+                interfaceConfig.DEFAULT_LOCAL_DISPLAY_NAME);
+            $('#localDisplayName')
+                .html(defaultHTML);
+        }
+        $('#localDisplayName').show();
+    }
+
+    $('#editDisplayName').hide();
+}
+
+LocalVideo.prototype.createConnectionIndicator = function()
 {
-    if (!resourceJid)
-        return null;
+    if(this.connectionIndicator)
+        return;
 
-    if (resourceJid === APP.xmpp.myResource())
-        return $("#localVideoContainer");
-    else
-        return $("#participant_" + resourceJid);
+    this.connectionIndicator
+        = new ConnectionIndicator(this, null);
 }
 
-/**
- * Sets the size and position of the given video element.
- *
- * @param video the video element to position
- * @param width the desired video width
- * @param height the desired video height
- * @param horizontalIndent the left and right indent
- * @param verticalIndent the top and bottom indent
- */
-function positionVideo(video,
-                       width,
-                       height,
-                       horizontalIndent,
-                       verticalIndent) {
-    video.width(width);
-    video.height(height);
-    video.css({  top: verticalIndent + 'px',
-        bottom: verticalIndent + 'px',
-        left: horizontalIndent + 'px',
-        right: horizontalIndent + 'px'});
+LocalVideo.prototype.changeVideo = function (stream, isMuted) {
+    var self = this;
+
+    function localVideoClick(event) {
+        event.stopPropagation();
+        self.VideoLayout.handleVideoThumbClicked(
+            false,
+            APP.xmpp.myResource());
+    }
+
+    $('#localVideoContainer').click(localVideoClick);
+
+    // Add hover handler
+    $('#localVideoContainer').hover(
+        function() {
+            self.showDisplayName(true);
+        },
+        function() {
+            if (!LargeVideo.isLargeVideoVisible()
+                || APP.xmpp.myResource() !== LargeVideo.getResourceJid())
+                self.showDisplayName(false);
+        }
+    );
+
+    if(isMuted)
+    {
+        APP.UI.setVideoMute(true);
+        return;
+    }
+    this.flipX = (stream.videoType == "screen")? false : true;
+    var localVideo = document.createElement('video');
+    localVideo.id = 'localVideo_' +
+        APP.RTC.getStreamID(stream.getOriginalStream());
+    localVideo.autoplay = true;
+    localVideo.volume = 0; // is it required if audio is separated ?
+    localVideo.oncontextmenu = function () { return false; };
+
+    var localVideoContainer = document.getElementById('localVideoWrapper');
+    localVideoContainer.appendChild(localVideo);
+
+    var localVideoSelector = $('#' + localVideo.id);
+
+    // Add click handler to both video and video wrapper elements in case
+    // there's no video.
+    localVideoSelector.click(localVideoClick);
+
+    if (this.flipX) {
+        localVideoSelector.addClass("flipVideoX");
+    }
+
+    // Attach WebRTC stream
+    APP.RTC.attachMediaStream(localVideoSelector, stream.getOriginalStream());
+
+    // Add stream ended handler
+    stream.getOriginalStream().onended = function () {
+        localVideoContainer.removeChild(localVideo);
+        self.VideoLayout.updateRemovedVideo(APP.RTC.getVideoSrc(localVideo));
+    };
 }
+
+LocalVideo.prototype.joined = function (jid) {
+    this.peerJid = jid;
+    this.resourceJid = Strophe.getResourceFromJid(jid);
+}
+
+module.exports = LocalVideo;
+},{"../util/NicknameHandler":30,"../util/UIUtil":31,"./ConnectionIndicator":32,"./LargeVideo":33,"./SmallVideo":36}],35:[function(require,module,exports){
+var ConnectionIndicator = require("./ConnectionIndicator");
+var SmallVideo = require("./SmallVideo");
+var AudioLevels = require("../audio_levels/AudioLevels");
+var LargeVideo = require("./LargeVideo");
+var Avatar = require("../avatar/Avatar");
+
+function RemoteVideo(peerJid, VideoLayout)
+{
+    this.peerJid = peerJid;
+    this.resourceJid = Strophe.getResourceFromJid(peerJid);
+    this.videoSpanId = 'participant_' + this.resourceJid;
+    this.VideoLayout = VideoLayout;
+    this.addRemoteVideoContainer();
+    this.connectionIndicator = new ConnectionIndicator(
+        this, this.peerJid);
+    this.setDisplayName();
+    var nickfield = document.createElement('span');
+    nickfield.className = "nick";
+    nickfield.appendChild(document.createTextNode(this.resourceJid));
+    this.container.appendChild(nickfield);
+    this.flipX = false;
+}
+
+RemoteVideo.prototype = Object.create(SmallVideo.prototype);
+RemoteVideo.prototype.constructor = RemoteVideo;
+
+RemoteVideo.prototype.addRemoteVideoContainer = function() {
+    this.container = RemoteVideo.createContainer(this.videoSpanId);
+    if (APP.xmpp.isModerator())
+        this.addRemoteVideoMenu();
+    AudioLevels.updateAudioLevelCanvas(this.peerJid, this.VideoLayout);
+
+    return this.container;
+};
 
 /**
  * Adds the remote video menu element for the given <tt>jid</tt> in the
@@ -6856,26 +7448,22 @@ function positionVideo(video,
  * @param jid the jid indicating the video for which we're adding a menu.
  * @param parentElement the parent element where this menu will be added
  */
-function addRemoteVideoMenu(jid, parentElement) {
+RemoteVideo.prototype.addRemoteVideoMenu = function () {
     var spanElement = document.createElement('span');
     spanElement.className = 'remotevideomenu';
 
-    parentElement.appendChild(spanElement);
+    this.container.appendChild(spanElement);
 
     var menuElement = document.createElement('i');
     menuElement.className = 'fa fa-angle-down';
     menuElement.title = 'Remote user controls';
     spanElement.appendChild(menuElement);
 
-//        <ul class="popupmenu">
-//        <li><a href="#">Mute</a></li>
-//        <li><a href="#">Eject</a></li>
-//        </ul>
 
     var popupmenuElement = document.createElement('ul');
     popupmenuElement.className = 'popupmenu';
     popupmenuElement.id
-        = 'remote_popupmenu_' + Strophe.getResourceFromJid(jid);
+        = 'remote_popupmenu_' + this.resourceJid;
     spanElement.appendChild(popupmenuElement);
 
     var muteMenuItem = document.createElement('li');
@@ -6883,7 +7471,7 @@ function addRemoteVideoMenu(jid, parentElement) {
 
     var mutedIndicator = "<i style='float:left;' class='icon-mic-disabled'></i>";
 
-    if (!mutedAudios[jid]) {
+    if (!this.isMuted) {
         muteLinkItem.innerHTML = mutedIndicator +
             " <div style='width: 90px;margin-left: 20px;' data-i18n='videothumbnail.domute'></div>";
         muteLinkItem.className = 'mutelink';
@@ -6894,12 +7482,13 @@ function addRemoteVideoMenu(jid, parentElement) {
         muteLinkItem.className = 'mutelink disabled';
     }
 
+    var self = this;
     muteLinkItem.onclick = function(){
         if ($(this).attr('disabled') != undefined) {
             event.preventDefault();
         }
-        var isMute = mutedAudios[jid] == true;
-        APP.xmpp.setMute(jid, !isMute);
+        var isMute = self.isMuted == true;
+        APP.xmpp.setMute(self.peerJid, !isMute);
 
         popupmenuElement.setAttribute('style', 'display:none;');
 
@@ -6925,7 +7514,7 @@ function addRemoteVideoMenu(jid, parentElement) {
     var ejectText = "<div style='width: 90px;margin-left: 20px;' data-i18n='videothumbnail.kick'>&nbsp;</div>";
     ejectLinkItem.innerHTML = ejectIndicator + ' ' + ejectText;
     ejectLinkItem.onclick = function(){
-        APP.xmpp.eject(jid);
+        APP.xmpp.eject(self.peerJid);
         popupmenuElement.setAttribute('style', 'display:none;');
     };
 
@@ -6938,18 +7527,380 @@ function addRemoteVideoMenu(jid, parentElement) {
     APP.translation.translateElement($("#" + popupmenuElement.id + " > li > a > div"));
 }
 
+
+/**
+ * Removes the remote stream element corresponding to the given stream and
+ * parent container.
+ *
+ * @param stream the stream
+ * @param isVideo <tt>true</tt> if given <tt>stream</tt> is a video one.
+ * @param container
+ */
+RemoteVideo.prototype.removeRemoteStreamElement = function (stream, isVideo, id) {
+    if (!this.container)
+        return false;
+
+    var select = null;
+    var removedVideoSrc = null;
+    if (isVideo) {
+        select = $('#' + id);
+        removedVideoSrc = APP.RTC.getVideoSrc(select.get(0));
+    }
+    else
+        select = $('#' + this.videoSpanId + '>audio');
+
+
+    // Mark video as removed to cancel waiting loop(if video is removed
+    // before has started)
+    select.removed = true;
+    select.remove();
+
+    var audioCount = $('#' + this.videoSpanId + '>audio').length;
+    var videoCount = $('#' + this.videoSpanId + '>video').length;
+
+    if (!audioCount && !videoCount) {
+        console.log("Remove whole user", this.videoSpanId);
+        if(this.connectionIndicator)
+            this.connectionIndicator.remove();
+        // Remove whole container
+        this.container.remove();
+
+        this.VideoLayout.resizeThumbnails();
+    }
+
+    if (removedVideoSrc)
+        this.VideoLayout.updateRemovedVideo(removedVideoSrc);
+};
+
+RemoteVideo.prototype.addRemoteStreamElement = function (sid, stream, thessrc) {
+    var isVideo = stream.getVideoTracks().length > 0;
+    if(!this.container)
+        return;
+
+    var streamElement = SmallVideo.createStreamElement(sid, stream);
+    var newElementId = streamElement.id;
+
+    this.container.appendChild(streamElement);
+
+    var sel = $('#' + newElementId);
+    sel.hide();
+
+    // If the container is currently visible we attach the stream.
+    if (!isVideo
+        || (this.container.offsetParent !== null && isVideo)) {
+        APP.RTC.attachMediaStream(sel, stream);
+
+        if (isVideo)
+            this.waitForRemoteVideo(sel, thessrc, stream);
+    }
+
+    var self = this;
+    stream.onended = function () {
+        console.log('stream ended', this);
+
+        self.removeRemoteStreamElement(stream, isVideo, newElementId);
+
+    };
+
+    // Add click handler.
+    this.container.onclick = function (event) {
+        /*
+         * FIXME It turns out that videoThumb may not exist (if there is
+         * no actual video).
+         */
+        var videoThumb = $('#' + self.videoSpanId + '>video').get(0);
+        if (videoThumb) {
+            self.VideoLayout.handleVideoThumbClicked(
+                false,
+                self.resourceJid);
+        }
+
+        event.stopPropagation();
+        event.preventDefault();
+        return false;
+    };
+
+    //FIXME
+    // Add hover handler
+    $(this.container).hover(
+        function() {
+            self.showDisplayName(true);
+        },
+        function() {
+            var videoSrc = null;
+            if ($('#' + self.videoSpanId + '>video')
+                && $('#' + self.videoSpanId + '>video').length > 0) {
+                videoSrc = APP.RTC.getVideoSrc($('#' + self.videoSpanId + '>video').get(0));
+            }
+
+            // If the video has been "pinned" by the user we want to
+            // keep the display name on place.
+            if (!LargeVideo.isLargeVideoVisible()
+                || videoSrc !== APP.RTC.getVideoSrc($('#largeVideo')[0]))
+                self.showDisplayName(false);
+        }
+    );
+}
+
+
+RemoteVideo.prototype.waitForRemoteVideo = function(selector, ssrc, stream) {
+    if (selector.removed || !selector.parent().is(":visible")) {
+        console.warn("Media removed before had started", selector);
+        return;
+    }
+
+    if (stream.id === 'mixedmslabel') return;
+
+    if (selector[0].currentTime > 0) {
+        APP.RTC.attachMediaStream(selector, stream); // FIXME: why do i have to do this for FF?
+        this.VideoLayout.videoactive(selector, this.resourceJid);
+    } else {
+        var self = this;
+        setTimeout(function () {
+            self.waitForRemoteVideo(selector, ssrc, stream);
+        }, 250);
+    }
+}
+
+/**
+ * Show/hide peer container for the given resourceJid.
+ */
+RemoteVideo.prototype.showPeerContainer = function (state) {
+    if (!this.container)
+        return;
+
+    var isHide = state === 'hide';
+    var resizeThumbnails = false;
+
+    if (!isHide) {
+        if (!$(this.container).is(':visible')) {
+            resizeThumbnails = true;
+            $(this.container).show();
+        }
+
+        Avatar.showUserAvatar(this.peerJid, (state !== 'show'));
+    }
+    else if ($(this.container).is(':visible') && isHide)
+    {
+        resizeThumbnails = true;
+        $(this.container).hide();
+        if(this.connectionIndicator)
+            this.connectionIndicator.hide();
+    }
+
+    if (resizeThumbnails) {
+        this.VideoLayout.resizeThumbnails();
+    }
+
+    // We want to be able to pin a participant from the contact list, even
+    // if he's not in the lastN set!
+    // ContactList.setClickable(resourceJid, !isHide);
+
+};
+
+RemoteVideo.prototype.removeConnectionIndicator = function () {
+    if(this.connectionIndicator)
+        this.connectionIndicator.remove();
+}
+
+RemoteVideo.prototype.hideConnectionIndicator = function () {
+    if(this.connectionIndicator)
+        this.connectionIndicator.hide();
+}
+
+/**
+ * Updates the remote video menu.
+ *
+ * @param jid the jid indicating the video for which we're adding a menu.
+ * @param isMuted indicates the current mute state
+ */
+RemoteVideo.prototype.updateRemoteVideoMenu = function (isMuted) {
+    var muteMenuItem
+        = $('#remote_popupmenu_'
+        + this.resourceJid
+        + '>li>a.mutelink');
+
+    var mutedIndicator = "<i class='icon-mic-disabled'></i>";
+
+    if (muteMenuItem.length) {
+        var muteLink = muteMenuItem.get(0);
+
+        if (isMuted === 'true') {
+            muteLink.innerHTML = mutedIndicator + ' Muted';
+            muteLink.className = 'mutelink disabled';
+        }
+        else {
+            muteLink.innerHTML = mutedIndicator + ' Mute';
+            muteLink.className = 'mutelink';
+        }
+    }
+}
+
+/**
+ * Sets the display name for the given video span id.
+ */
+RemoteVideo.prototype.setDisplayName = function(displayName, key) {
+
+    if (!this.container) {
+        console.warn(
+                "Unable to set displayName - " + this.videoSpanId + " does not exist");
+        return;
+    }
+
+    var nameSpan = $('#' + this.videoSpanId + '>span.displayname');
+
+    // If we already have a display name for this video.
+    if (nameSpan.length > 0) {
+        if (displayName && displayName.length > 0)
+        {
+            $('#' + this.videoSpanId + '_name').html(displayName);
+        }
+        else if (key && key.length > 0)
+        {
+            var nameHtml = APP.translation.generateTranslatonHTML(key);
+            $('#' + this.videoSpanId + '_name').html(nameHtml);
+        }
+        else
+            $('#' + this.videoSpanId + '_name').text(
+                interfaceConfig.DEFAULT_REMOTE_DISPLAY_NAME);
+    } else {
+        nameSpan = document.createElement('span');
+        nameSpan.className = 'displayname';
+        $('#' + this.videoSpanId)[0].appendChild(nameSpan);
+
+
+        if (displayName && displayName.length > 0) {
+
+            nameSpan.innerText = displayName;
+        }
+        else
+            nameSpan.innerText = interfaceConfig.DEFAULT_REMOTE_DISPLAY_NAME;
+
+
+        nameSpan.id = this.videoSpanId + '_name';
+
+    }
+}
+
 /**
  * Removes remote video menu element from video element identified by
  * given <tt>videoElementId</tt>.
  *
  * @param videoElementId the id of local or remote video element.
  */
-function removeRemoteVideoMenu(videoElementId) {
-    var menuSpan = $('#' + videoElementId + '>span.remotevideomenu');
+RemoteVideo.prototype.removeRemoteVideoMenu = function() {
+    var menuSpan = $('#' + this.videoSpanId + '>span.remotevideomenu');
     if (menuSpan.length) {
         menuSpan.remove();
     }
 }
+
+RemoteVideo.createContainer = function (spanId) {
+    var container = document.createElement('span');
+    container.id = spanId;
+    container.className = 'videocontainer';
+    var remotes = document.getElementById('remoteVideos');
+    return remotes.appendChild(container);
+};
+
+module.exports = RemoteVideo;
+},{"../audio_levels/AudioLevels":10,"../avatar/Avatar":14,"./ConnectionIndicator":32,"./LargeVideo":33,"./SmallVideo":36}],36:[function(require,module,exports){
+var UIUtil = require("../util/UIUtil");
+var LargeVideo = require("./LargeVideo");
+
+function SmallVideo(){
+    this.isMuted = false;
+}
+
+SmallVideo.prototype.showDisplayName = function(isShow) {
+    var nameSpan = $('#' + this.videoSpanId + '>span.displayname').get(0);
+    if (isShow) {
+        if (nameSpan && nameSpan.innerHTML && nameSpan.innerHTML.length)
+            nameSpan.setAttribute("style", "display:inline-block;");
+    }
+    else {
+        if (nameSpan)
+            nameSpan.setAttribute("style", "display:none;");
+    }
+};
+
+SmallVideo.prototype.setDeviceAvailabilityIcons = function (devices) {
+    if(!this.container)
+        return;
+
+    $("#" + this.videoSpanId + " > .noMic").remove();
+    $("#" + this.videoSpanId + " > .noVideo").remove();
+    if(!devices.audio)
+    {
+        this.container.appendChild(
+            document.createElement("div")).setAttribute("class","noMic");
+    }
+
+    if(!devices.video)
+    {
+        this.container.appendChild(
+            document.createElement("div")).setAttribute("class","noVideo");
+    }
+
+    if(!devices.audio && !devices.video)
+    {
+        $("#" + this.videoSpanId + " > .noMic").css("background-position", "75%");
+        $("#" + this.videoSpanId + " > .noVideo").css("background-position", "25%");
+        $("#" + this.videoSpanId + " > .noVideo").css("background-color", "transparent");
+    }
+}
+
+/**
+ * Shows the presence status message for the given video.
+ */
+SmallVideo.prototype.setPresenceStatus = function (statusMsg) {
+
+    if (!this.container) {
+        // No container
+        return;
+    }
+
+    var statusSpan = $('#' + this.videoSpanId + '>span.status');
+    if (!statusSpan.length) {
+        //Add status span
+        statusSpan = document.createElement('span');
+        statusSpan.className = 'status';
+        statusSpan.id = this.videoSpanId + '_status';
+        $('#' + this.videoSpanId)[0].appendChild(statusSpan);
+
+        statusSpan = $('#' + this.videoSpanId + '>span.status');
+    }
+
+    // Display status
+    if (statusMsg && statusMsg.length) {
+        $('#' + this.videoSpanId + '_status').text(statusMsg);
+        statusSpan.get(0).setAttribute("style", "display:inline-block;");
+    }
+    else {
+        // Hide
+        statusSpan.get(0).setAttribute("style", "display:none;");
+    }
+};
+
+/**
+ * Creates an audio or video stream element.
+ */
+
+SmallVideo.createStreamElement = function (sid, stream) {
+    var isVideo = stream.getVideoTracks().length > 0;
+
+    var element = isVideo
+        ? document.createElement('video')
+        : document.createElement('audio');
+    var id = (isVideo ? 'remoteVideo_' : 'remoteAudio_')
+        + sid + '_' + APP.RTC.getStreamID(stream);
+
+    element.id = id;
+    element.autoplay = true;
+    element.oncontextmenu = function () { return false; };
+
+    return element;
+};
 
 /**
  * Updates the data for the indicator
@@ -6957,65 +7908,134 @@ function removeRemoteVideoMenu(videoElementId) {
  * @param percent the percent for connection quality
  * @param object the data
  */
-function updateStatsIndicator(id, percent, object) {
-    if(VideoLayout.connectionIndicators[id])
-        VideoLayout.connectionIndicators[id].updateConnectionQuality(percent, object);
+SmallVideo.prototype.updateStatsIndicator = function (percent, object) {
+    if(this.connectionIndicator)
+        this.connectionIndicator.updateConnectionQuality(percent, object);
+}
+
+SmallVideo.prototype.hideIndicator = function () {
+    if(this.connectionIndicator)
+        this.connectionIndicator.hideIndicator();
 }
 
 
 /**
- * Returns an array of the video dimensions, so that it keeps it's aspect
- * ratio and fits available area with it's larger dimension. This method
- * ensures that whole video will be visible and can leave empty areas.
- *
- * @return an array with 2 elements, the video width and the video height
+ * Shows audio muted indicator over small videos.
+ * @param {string} isMuted
  */
-function getDesktopVideoSize(videoWidth,
-                             videoHeight,
-                             videoSpaceWidth,
-                             videoSpaceHeight) {
-    if (!videoWidth)
-        videoWidth = currentVideoWidth;
-    if (!videoHeight)
-        videoHeight = currentVideoHeight;
+SmallVideo.prototype.showAudioIndicator = function(isMuted) {
+    var audioMutedSpan = $('#' + this.videoSpanId + '>span.audioMuted');
 
-    var aspectRatio = videoWidth / videoHeight;
-
-    var availableWidth = Math.max(videoWidth, videoSpaceWidth);
-    var availableHeight = Math.max(videoHeight, videoSpaceHeight);
-
-    videoSpaceHeight -= $('#remoteVideos').outerHeight();
-
-    if (availableWidth / aspectRatio >= videoSpaceHeight)
-    {
-        availableHeight = videoSpaceHeight;
-        availableWidth = availableHeight * aspectRatio;
+    if (isMuted === 'false') {
+        if (audioMutedSpan.length > 0) {
+            audioMutedSpan.popover('hide');
+            audioMutedSpan.remove();
+        }
     }
+    else {
+        if(audioMutedSpan.length == 0 ) {
+            audioMutedSpan = document.createElement('span');
+            audioMutedSpan.className = 'audioMuted';
+            UIUtil.setTooltip(audioMutedSpan,
+                "videothumbnail.mute",
+                "top");
 
-    if (availableHeight * aspectRatio >= videoSpaceWidth)
-    {
-        availableWidth = videoSpaceWidth;
-        availableHeight = availableWidth / aspectRatio;
+            this.container.appendChild(audioMutedSpan);
+            APP.translation.translateElement($('#' + this.videoSpanId + " > span"));
+            var mutedIndicator = document.createElement('i');
+            mutedIndicator.className = 'icon-mic-disabled';
+            audioMutedSpan.appendChild(mutedIndicator);
+
+        }
+        this.updateIconPositions();
     }
-
-    return [availableWidth, availableHeight];
-}
+    this.isMuted = isMuted;
+};
 
 /**
- * Creates the edit display name button.
- *
- * @returns the edit button
+ * Shows video muted indicator over small videos.
  */
-function createEditDisplayNameButton() {
-    var editButton = document.createElement('a');
-    editButton.className = 'displayname';
-    UIUtil.setTooltip(editButton,
-        "videothumbnail.editnickname",
-        "top");
-    editButton.innerHTML = '<i class="fa fa-pencil"></i>';
+SmallVideo.prototype.showVideoIndicator = function(isMuted) {
+    var videoMutedSpan = $('#' + this.videoSpanId + '>span.videoMuted');
 
-    return editButton;
+    if (isMuted === false) {
+        if (videoMutedSpan.length > 0) {
+            videoMutedSpan.remove();
+        }
+    }
+    else {
+        if(videoMutedSpan.length == 0) {
+            videoMutedSpan = document.createElement('span');
+            videoMutedSpan.className = 'videoMuted';
+
+            this.container.appendChild(videoMutedSpan);
+
+            var mutedIndicator = document.createElement('i');
+            mutedIndicator.className = 'icon-camera-disabled';
+            UIUtil.setTooltip(mutedIndicator,
+                "videothumbnail.videomute",
+                "top");
+            videoMutedSpan.appendChild(mutedIndicator);
+            //translate texts for muted indicator
+            APP.translation.translateElement($('#' + this.videoSpanId  + " > span > i"));
+        }
+
+        this.updateIconPositions();
+
+    }
+};
+
+SmallVideo.prototype.enableDominantSpeaker = function (isEnable)
+{
+    var displayName = this.resourceJid;
+    var nameSpan = $('#' + this.videoSpanId + '>span.displayname');
+    if (nameSpan.length > 0)
+        displayName = nameSpan.html();
+
+    console.log("UI enable dominant speaker",
+        displayName,
+        this.resourceJid,
+        isEnable);
+
+
+    if (!this.container) {
+        return;
+    }
+
+    var video = $('#' + this.videoSpanId + '>video');
+
+    if (video && video.length > 0) {
+        if (isEnable) {
+            this.showDisplayName(LargeVideo.isLargeVideoOnTop());
+
+            if (!this.container.classList.contains("dominantspeaker"))
+                this.container.classList.add("dominantspeaker");
+        }
+        else {
+            this.showDisplayName(false);
+
+            if (this.container.classList.contains("dominantspeaker"))
+                this.container.classList.remove("dominantspeaker");
+        }
+    }
+};
+
+SmallVideo.prototype.updateIconPositions = function () {
+    var audioMutedSpan = $('#' + this.videoSpanId + '>span.audioMuted');
+    var connectionIndicator = $('#' + this.videoSpanId + '>div.connectionindicator');
+    var videoMutedSpan = $('#' + this.videoSpanId + '>span.videoMuted');
+    if(connectionIndicator.length > 0
+        && connectionIndicator[0].style.display != "none") {
+        audioMutedSpan.css({right: "23px"});
+        videoMutedSpan.css({right: ((audioMutedSpan.length > 0? 23 : 0) + 30) + "px"});
+    }
+    else
+    {
+        audioMutedSpan.css({right: "0px"});
+        videoMutedSpan.css({right: (audioMutedSpan.length > 0? 30 : 0) + "px"});
+    }
 }
+
 
 /**
  * Creates the element indicating the moderator(owner) of the conference.
@@ -7023,33 +8043,91 @@ function createEditDisplayNameButton() {
  * @param parentElement the parent element where the owner indicator will
  * be added
  */
-function createModeratorIndicatorElement(parentElement) {
+SmallVideo.prototype.createModeratorIndicatorElement = function () {
+    // Show moderator indicator
+    var indicatorSpan = $('#' + this.videoSpanId + ' .focusindicator');
+
+    if (!indicatorSpan || indicatorSpan.length === 0) {
+        indicatorSpan = document.createElement('span');
+        indicatorSpan.className = 'focusindicator';
+
+        this.container.appendChild(indicatorSpan);
+        indicatorSpan = $('#' + this.videoSpanId + ' .focusindicator');
+    }
+
+    if (indicatorSpan.children().length !== 0)
+        return;
     var moderatorIndicator = document.createElement('i');
     moderatorIndicator.className = 'fa fa-star';
-    parentElement.appendChild(moderatorIndicator);
+    indicatorSpan[0].appendChild(moderatorIndicator);
 
-    UIUtil.setTooltip(parentElement,
+    UIUtil.setTooltip(indicatorSpan[0],
         "videothumbnail.moderator",
         "top");
+
+    //translates text in focus indicators
+    APP.translation.translateElement($('#' + this.videoSpanId + ' .focusindicator'));
 }
 
 
+SmallVideo.prototype.getSrc = function () {
+    return APP.RTC.getVideoSrc($('#' + this.videoSpanId).find("video").get(0));
+}
+
+SmallVideo.prototype.focus = function(isFocused)
+{
+    if(!isFocused) {
+        this.container.classList.remove("videoContainerFocused");
+    }
+    else
+    {
+        this.container.classList.add("videoContainerFocused");
+    }
+}
+
+SmallVideo.prototype.hasVideo = function () {
+    return $("#" + this.videoSpanId).find("video").length !== 0;
+}
+
+module.exports = SmallVideo;
+},{"../util/UIUtil":31,"./LargeVideo":33}],37:[function(require,module,exports){
+var AudioLevels = require("../audio_levels/AudioLevels");
+var Avatar = require("../avatar/Avatar");
+var ContactList = require("../side_pannels/contactlist/ContactList");
+var MediaStreamType = require("../../../service/RTC/MediaStreamTypes");
+var UIEvents = require("../../../service/UI/UIEvents");
+var RemoteVideo = require("./RemoteVideo");
+var LargeVideo = require("./LargeVideo");
+var LocalVideo = require("./LocalVideo");
+
+var remoteVideos = {};
+var localVideoThumbnail = null;
+
+
+
+
+var currentDominantSpeaker = null;
+var lastNCount = config.channelLastN;
+var localLastNCount = config.channelLastN;
+var localLastNSet = [];
+var lastNEndpointsCache = [];
+var lastNPickupJid = null;
+
+var eventEmitter = null;
+
+
+/**
+ * Currently focused video jid
+ * @type {String}
+ */
+var focusedVideoResourceJid = null;
+
 var VideoLayout = (function (my) {
-    my.connectionIndicators = {};
-
-    // By default we use camera
-    my.getVideoSize = getCameraVideoSize;
-    my.getVideoPosition = getCameraVideoPosition;
-
     my.init = function (emitter) {
-        // Listen for large video size updates
-        document.getElementById('largeVideo')
-            .addEventListener('loadedmetadata', function (e) {
-                currentVideoWidth = this.videoWidth;
-                currentVideoHeight = this.videoHeight;
-                VideoLayout.positionLarge(currentVideoWidth, currentVideoHeight);
-            });
         eventEmitter = emitter;
+        localVideoThumbnail = new LocalVideo(VideoLayout);
+        VideoLayout.resizeLargeVideoContainer();
+        LargeVideo.init(VideoLayout, emitter);
     };
 
     my.isInLastN = function(resource) {
@@ -7058,102 +8136,68 @@ var VideoLayout = (function (my) {
             || (lastNEndpointsCache && lastNEndpointsCache.indexOf(resource) !== -1);
     };
 
-    my.changeLocalStream = function (stream) {
-        VideoLayout.changeLocalVideo(stream);
+    my.changeLocalStream = function (stream, isMuted) {
+        VideoLayout.changeLocalVideo(stream, isMuted);
     };
 
-    my.changeLocalAudio = function(stream) {
+    my.changeLocalAudio = function(stream, isMuted) {
+        if(isMuted)
+            APP.UI.setAudioMuted(true, true);
         APP.RTC.attachMediaStream($('#localAudio'), stream.getOriginalStream());
         document.getElementById('localAudio').autoplay = true;
         document.getElementById('localAudio').volume = 0;
-        if (preMuted) {
-            if(!APP.UI.setAudioMuted(true))
-            {
-                preMuted = mute;
-            }
-            preMuted = false;
-        }
     };
 
-    my.changeLocalVideo = function(stream) {
-        var flipX = true;
-        if(stream.videoType == "screen")
-            flipX = false;
-        var localVideo = document.createElement('video');
-        localVideo.id = 'localVideo_' +
-            APP.RTC.getStreamID(stream.getOriginalStream());
-        localVideo.autoplay = true;
-        localVideo.volume = 0; // is it required if audio is separated ?
-        localVideo.oncontextmenu = function () { return false; };
-
-        var localVideoContainer = document.getElementById('localVideoWrapper');
-        localVideoContainer.appendChild(localVideo);
-
+    my.changeLocalVideo = function(stream, isMuted) {
         // Set default display name.
-        setDisplayName('localVideoContainer');
-
-        if(!VideoLayout.connectionIndicators["localVideoContainer"]) {
-            VideoLayout.connectionIndicators["localVideoContainer"]
-                = new ConnectionIndicator($("#localVideoContainer")[0], null, VideoLayout);
-        }
+        localVideoThumbnail.setDisplayName();
+        localVideoThumbnail.createConnectionIndicator();
 
         AudioLevels.updateAudioLevelCanvas(null, VideoLayout);
 
-        var localVideoSelector = $('#' + localVideo.id);
+        localVideoThumbnail.changeVideo(stream, isMuted);
 
-        function localVideoClick(event) {
-            event.stopPropagation();
-            VideoLayout.handleVideoThumbClicked(
-                APP.RTC.getVideoSrc(localVideo),
-                false,
-                APP.xmpp.myResource());
-        }
-        // Add click handler to both video and video wrapper elements in case
-        // there's no video.
-        localVideoSelector.click(localVideoClick);
-        $('#localVideoContainer').click(localVideoClick);
-
-        // Add hover handler
-        $('#localVideoContainer').hover(
-            function() {
-                VideoLayout.showDisplayName('localVideoContainer', true);
-            },
-            function() {
-                if (!VideoLayout.isLargeVideoVisible()
-                        || APP.RTC.getVideoSrc(localVideo) !== APP.RTC.getVideoSrc($('#largeVideo')[0]))
-                    VideoLayout.showDisplayName('localVideoContainer', false);
-            }
-        );
-        // Add stream ended handler
-        stream.getOriginalStream().onended = function () {
-            localVideoContainer.removeChild(localVideo);
-            VideoLayout.updateRemovedVideo(APP.RTC.getVideoSrc(localVideo));
-        };
-        // Flip video x axis if needed
-        flipXLocalVideo = flipX;
-        if (flipX) {
-            localVideoSelector.addClass("flipVideoX");
-        }
-        // Attach WebRTC stream
-        var videoStream = APP.simulcast.getLocalVideoStream();
-        APP.RTC.attachMediaStream(localVideoSelector, videoStream);
-
-        localVideoSrc = APP.RTC.getVideoSrc(localVideo);
-
-        var myResourceJid = APP.xmpp.myResource();
-
-        VideoLayout.updateLargeVideo(localVideoSrc, 0,
-            myResourceJid);
+        LargeVideo.updateLargeVideo(APP.xmpp.myResource());
 
     };
+
+    my.mucJoined = function () {
+        var myResourceJid = APP.xmpp.myResource();
+        localVideoThumbnail.joined(APP.xmpp.myJid());
+
+        if (!LargeVideo.getResourceJid())
+            LargeVideo.updateLargeVideo(myResourceJid, true);
+    };
+
+    /**
+     * Adds or removes icons for not available camera and microphone.
+     * @param resourceJid the jid of user
+     * @param devices available devices
+     */
+    my.setDeviceAvailabilityIcons = function (resourceJid, devices) {
+        if(!devices)
+            return;
+
+        if(!resourceJid)
+        {
+            localVideoThumbnail.setDeviceAvailabilityIcons(devices);
+        }
+        else
+        {
+            if(remoteVideos[resourceJid])
+                remoteVideos[resourceJid].setDeviceAvailabilityIcons(devices);
+        }
+
+
+    }
 
     /**
      * Checks if removed video is currently displayed and tries to display
      * another one instead.
      * @param removedVideoSrc src stream identifier of the video.
      */
-    my.updateRemovedVideo = function(removedVideoSrc) {
-        if (removedVideoSrc === APP.RTC.getVideoSrc($('#largeVideo')[0])) {
+    my.updateRemovedVideo = function(resourceJid) {
+        if (resourceJid === LargeVideo.getResourceJid()) {
             // this is currently displayed as large
             // pick the last visible video in the row
             // if nobody else is left, this picks the local video
@@ -7175,246 +8219,65 @@ var VideoLayout = (function (my) {
             // mute if localvideo
             if (pick) {
                 var container = pick.parentNode;
-                var jid = null;
-                if(container)
-                {
-                    if(container.id == "localVideoWrapper")
-                    {
-                        jid = APP.xmpp.myResource();
-                    }
-                    else
-                    {
-                        jid = VideoLayout.getPeerContainerResourceJid(container);
-                    }
-                }
-
-                VideoLayout.updateLargeVideo(APP.RTC.getVideoSrc(pick), pick.volume, jid);
             } else {
                 console.warn("Failed to elect large video");
+                container = $('#remoteVideos>span[id!="mixedstream"]:visible:last').get(0);
+
             }
+
+            var jid = null;
+            if(container)
+            {
+                if(container.id == "localVideoWrapper")
+                {
+                    jid = APP.xmpp.myResource();
+                }
+                else
+                {
+                    jid = VideoLayout.getPeerContainerResourceJid(container);
+                }
+            }
+            else
+                return;
+
+            LargeVideo.updateLargeVideo(jid);
         }
     };
     
     my.onRemoteStreamAdded = function (stream) {
-        var container;
-        var remotes = document.getElementById('remoteVideos');
-
         if (stream.peerjid) {
             VideoLayout.ensurePeerContainerExists(stream.peerjid);
 
-            container  = document.getElementById(
-                    'participant_' + Strophe.getResourceFromJid(stream.peerjid));
-        } else {
-            var id = stream.getOriginalStream().id;
-            if (id !== 'mixedmslabel'
-                // FIXME: default stream is added always with new focus
-                // (to be investigated)
-                && id !== 'default') {
-                console.error('can not associate stream',
-                    id,
-                    'with a participant');
-                // We don't want to add it here since it will cause troubles
-                return;
-            }
-            // FIXME: for the mixed ms we dont need a video -- currently
-            container = document.createElement('span');
-            container.id = 'mixedstream';
-            container.className = 'videocontainer';
-            remotes.appendChild(container);
-            UIUtil.playSoundNotification('userJoined');
-        }
-
-        if (container) {
-            VideoLayout.addRemoteStreamElement( container,
+            var resourceJid = Strophe.getResourceFromJid(stream.peerjid);
+            remoteVideos[resourceJid].addRemoteStreamElement(
                 stream.sid,
                 stream.getOriginalStream(),
-                stream.peerjid,
                 stream.ssrc);
         }
-    }
-
-    my.getLargeVideoState = function () {
-        return largeVideoState;
     };
 
-    /**
-     * Updates the large video with the given new video source.
-     */
-    my.updateLargeVideo = function(newSrc, vol, resourceJid) {
-        console.log('hover in', newSrc);
-
-        if (APP.RTC.getVideoSrc($('#largeVideo')[0]) !== newSrc) {
-
-            $('#activeSpeaker').css('visibility', 'hidden');
-            // Due to the simulcast the localVideoSrc may have changed when the
-            // fadeOut event triggers. In that case the getJidFromVideoSrc and
-            // isVideoSrcDesktop methods will not function correctly.
-            //
-            // Also, again due to the simulcast, the updateLargeVideo method can
-            // be called multiple times almost simultaneously. Therefore, we
-            // store the state here and update only once.
-
-            largeVideoState.newSrc = newSrc;
-            largeVideoState.isVisible = $('#largeVideo').is(':visible');
-            largeVideoState.isDesktop = APP.RTC.isVideoSrcDesktop(
-                APP.xmpp.findJidFromResource(resourceJid));
-
-            if(largeVideoState.userResourceJid) {
-                largeVideoState.oldResourceJid = largeVideoState.userResourceJid;
-            } else {
-                largeVideoState.oldResourceJid = null;
-            }
-            largeVideoState.userResourceJid = resourceJid;
-
-            // Screen stream is already rotated
-            largeVideoState.flipX = (newSrc === localVideoSrc) && flipXLocalVideo;
-
-            var userChanged = false;
-            if (largeVideoState.oldResourceJid !== largeVideoState.userResourceJid) {
-                userChanged = true;
-                // we want the notification to trigger even if userJid is undefined,
-                // or null.
-                eventEmitter.emit(UIEvents.SELECTED_ENDPOINT,
-                    largeVideoState.userResourceJid);
-            }
-
-            if (!largeVideoState.updateInProgress) {
-                largeVideoState.updateInProgress = true;
-
-                var doUpdate = function () {
-
-                    Avatar.updateActiveSpeakerAvatarSrc(
-                        APP.xmpp.findJidFromResource(
-                            largeVideoState.userResourceJid));
-
-                    if (!userChanged && largeVideoState.preload &&
-                        largeVideoState.preload !== null &&
-                        APP.RTC.getVideoSrc($(largeVideoState.preload)[0]) === newSrc)
-                    {
-
-                        console.info('Switching to preloaded video');
-                        var attributes = $('#largeVideo').prop("attributes");
-
-                        // loop through largeVideo attributes and apply them on
-                        // preload.
-                        $.each(attributes, function () {
-                            if (this.name !== 'id' && this.name !== 'src') {
-                                largeVideoState.preload.attr(this.name, this.value);
-                            }
-                        });
-
-                        largeVideoState.preload.appendTo($('#largeVideoContainer'));
-                        $('#largeVideo').attr('id', 'previousLargeVideo');
-                        largeVideoState.preload.attr('id', 'largeVideo');
-                        $('#previousLargeVideo').remove();
-
-                        largeVideoState.preload.on('loadedmetadata', function (e) {
-                            currentVideoWidth = this.videoWidth;
-                            currentVideoHeight = this.videoHeight;
-                            VideoLayout.positionLarge(currentVideoWidth, currentVideoHeight);
-                        });
-                        largeVideoState.preload = null;
-                        largeVideoState.preload_ssrc = 0;
-                    } else {
-                        APP.RTC.setVideoSrc($('#largeVideo')[0], largeVideoState.newSrc);
-                    }
-
-                    var videoTransform = document.getElementById('largeVideo')
-                        .style.webkitTransform;
-
-                    if (largeVideoState.flipX && videoTransform !== 'scaleX(-1)') {
-                        document.getElementById('largeVideo').style.webkitTransform
-                            = "scaleX(-1)";
-                    }
-                    else if (!largeVideoState.flipX && videoTransform === 'scaleX(-1)') {
-                        document.getElementById('largeVideo').style.webkitTransform
-                            = "none";
-                    }
-
-                    // Change the way we'll be measuring and positioning large video
-
-                    VideoLayout.getVideoSize = largeVideoState.isDesktop
-                        ? getDesktopVideoSize
-                        : getCameraVideoSize;
-                    VideoLayout.getVideoPosition = largeVideoState.isDesktop
-                        ? getDesktopVideoPosition
-                        : getCameraVideoPosition;
-
-
-                    // Only if the large video is currently visible.
-                    // Disable previous dominant speaker video.
-                    if (largeVideoState.oldResourceJid) {
-                        VideoLayout.enableDominantSpeaker(
-                            largeVideoState.oldResourceJid,
-                            false);
-                    }
-
-                    // Enable new dominant speaker in the remote videos section.
-                    if (largeVideoState.userResourceJid) {
-                        VideoLayout.enableDominantSpeaker(
-                            largeVideoState.userResourceJid,
-                            true);
-                    }
-
-                    if (userChanged && largeVideoState.isVisible) {
-                        // using "this" should be ok because we're called
-                        // from within the fadeOut event.
-                        $(this).fadeIn(300);
-                    }
-
-                    if(userChanged) {
-                        Avatar.showUserAvatar(
-                            APP.xmpp.findJidFromResource(
-                                largeVideoState.oldResourceJid));
-                    }
-
-                    largeVideoState.updateInProgress = false;
-                };
-
-                if (userChanged) {
-                    $('#largeVideo').fadeOut(300, doUpdate);
-                } else {
-                    doUpdate();
-                }
-            }
-        } else {
-            Avatar.showUserAvatar(
-                APP.xmpp.findJidFromResource(
-                    largeVideoState.userResourceJid));
-        }
-
+    my.getLargeVideoJid = function () {
+        return LargeVideo.getResourceJid();
     };
 
-    my.handleVideoThumbClicked = function(videoSrc,
-                                          noPinnedEndpointChangedEvent, 
+    my.handleVideoThumbClicked = function(noPinnedEndpointChangedEvent,
                                           resourceJid) {
-        // Restore style for previously focused video
-        var oldContainer = null;
-        if(focusedVideoInfo) {
-            var focusResourceJid = focusedVideoInfo.resourceJid;
-            oldContainer = getParticipantContainer(focusResourceJid);
+        if(focusedVideoResourceJid) {
+            var oldSmallVideo = VideoLayout.getSmallVideo(focusedVideoResourceJid);
+            if(oldSmallVideo)
+                oldSmallVideo.focus(false);
         }
 
-        if (oldContainer) {
-            oldContainer.removeClass("videoContainerFocused");
-        }
-
+        var smallVideo = VideoLayout.getSmallVideo(resourceJid);
         // Unlock current focused.
-        if (focusedVideoInfo && focusedVideoInfo.src === videoSrc)
+        if (focusedVideoResourceJid === resourceJid)
         {
-            focusedVideoInfo = null;
-            var dominantSpeakerVideo = null;
+            focusedVideoResourceJid = null;
             // Enable the currently set dominant speaker.
             if (currentDominantSpeaker) {
-                dominantSpeakerVideo
-                    = $('#participant_' + currentDominantSpeaker + '>video')
-                        .get(0);
-
-                if (dominantSpeakerVideo) {
-                    VideoLayout.updateLargeVideo(
-                        APP.RTC.getVideoSrc(dominantSpeakerVideo),
-                        1,
-                        currentDominantSpeaker);
+                if(smallVideo && smallVideo.hasVideo())
+                {
+                    LargeVideo.updateLargeVideo(currentDominantSpeaker);
                 }
             }
 
@@ -7424,25 +8287,23 @@ var VideoLayout = (function (my) {
             return;
         }
 
+
         // Lock new video
-        focusedVideoInfo = {
-            src: videoSrc,
-            resourceJid: resourceJid
-        };
+        focusedVideoResourceJid = resourceJid;
 
         // Update focused/pinned interface.
         if (resourceJid)
         {
-            var container = getParticipantContainer(resourceJid);
-            container.addClass("videoContainerFocused");
+            if(smallVideo)
+                smallVideo.focus(true);
 
             if (!noPinnedEndpointChangedEvent) {
                 eventEmitter.emit(UIEvents.PINNED_ENDPOINT, resourceJid);
             }
         }
 
-        if ($('#largeVideo').attr('src') === videoSrc &&
-            VideoLayout.isLargeVideoOnTop()) {
+        if (LargeVideo.getResourceJid() === resourceJid &&
+            LargeVideo.isLargeVideoOnTop()) {
             return;
         }
 
@@ -7450,94 +8311,14 @@ var VideoLayout = (function (my) {
         // this isn't a prezi.
         $(document).trigger("video.selected", [false]);
 
-        VideoLayout.updateLargeVideo(videoSrc, 1, resourceJid);
+        LargeVideo.updateLargeVideo(resourceJid);
 
         $('audio').each(function (idx, el) {
-            if (el.id.indexOf('mixedmslabel') !== -1) {
-                el.volume = 0;
-                el.volume = 1;
-            }
+            el.volume = 0;
+            el.volume = 1;
         });
     };
 
-    /**
-     * Positions the large video.
-     *
-     * @param videoWidth the stream video width
-     * @param videoHeight the stream video height
-     */
-    my.positionLarge = function (videoWidth, videoHeight) {
-        var videoSpaceWidth = $('#videospace').width();
-        var videoSpaceHeight = window.innerHeight;
-
-        var videoSize = VideoLayout.getVideoSize(videoWidth,
-                                     videoHeight,
-                                     videoSpaceWidth,
-                                     videoSpaceHeight);
-
-        var largeVideoWidth = videoSize[0];
-        var largeVideoHeight = videoSize[1];
-
-        var videoPosition = VideoLayout.getVideoPosition(largeVideoWidth,
-                                             largeVideoHeight,
-                                             videoSpaceWidth,
-                                             videoSpaceHeight);
-
-        var horizontalIndent = videoPosition[0];
-        var verticalIndent = videoPosition[1];
-
-        positionVideo($('#largeVideo'),
-                      largeVideoWidth,
-                      largeVideoHeight,
-                      horizontalIndent, verticalIndent);
-    };
-
-    /**
-     * Shows/hides the large video.
-     */
-    my.setLargeVideoVisible = function(isVisible) {
-        var resourceJid = largeVideoState.userResourceJid;
-
-        if (isVisible) {
-            $('#largeVideo').css({visibility: 'visible'});
-            $('.watermark').css({visibility: 'visible'});
-            VideoLayout.enableDominantSpeaker(resourceJid, true);
-        }
-        else {
-            $('#largeVideo').css({visibility: 'hidden'});
-            $('#activeSpeaker').css('visibility', 'hidden');
-            $('.watermark').css({visibility: 'hidden'});
-            VideoLayout.enableDominantSpeaker(resourceJid, false);
-            if(focusedVideoInfo) {
-                var focusResourceJid = focusedVideoInfo.resourceJid;
-                var oldContainer = getParticipantContainer(focusResourceJid);
-
-                if (oldContainer && oldContainer.length > 0) {
-                    oldContainer.removeClass("videoContainerFocused");
-                }
-                focusedVideoInfo = null;
-                if(focusResourceJid) {
-                    Avatar.showUserAvatar(
-                        APP.xmpp.findJidFromResource(focusResourceJid));
-                }
-            }
-        }
-    };
-
-    /**
-     * Indicates if the large video is currently visible.
-     *
-     * @return <tt>true</tt> if visible, <tt>false</tt> - otherwise
-     */
-    my.isLargeVideoVisible = function() {
-        return $('#largeVideo').is(':visible');
-    };
-
-    my.isLargeVideoOnTop = function () {
-        var Etherpad = require("../etherpad/Etherpad");
-        var Prezi = require("../prezi/Prezi");
-        return !Prezi.isPresentationVisible() && !Etherpad.isVisible();
-    };
 
     /**
      * Checks if container for participant identified by given peerJid exists
@@ -7554,322 +8335,48 @@ var VideoLayout = (function (my) {
 
         var resourceJid = Strophe.getResourceFromJid(peerJid);
 
-        var videoSpanId = 'participant_' + resourceJid;
-
-        if (!$('#' + videoSpanId).length) {
-            var container =
-                VideoLayout.addRemoteVideoContainer(peerJid, videoSpanId, userId);
+        if(!remoteVideos[resourceJid])
+        {
+            remoteVideos[resourceJid] = new RemoteVideo(peerJid, VideoLayout);
             Avatar.setUserAvatar(peerJid, userId);
-            // Set default display name.
-            setDisplayName(videoSpanId);
-
-            VideoLayout.connectionIndicators[videoSpanId] =
-                new ConnectionIndicator(container, peerJid, VideoLayout);
-
-            var nickfield = document.createElement('span');
-            nickfield.className = "nick";
-            nickfield.appendChild(document.createTextNode(resourceJid));
-            container.appendChild(nickfield);
 
             // In case this is not currently in the last n we don't show it.
             if (localLastNCount
                 && localLastNCount > 0
                 && $('#remoteVideos>span').length >= localLastNCount + 2) {
-                showPeerContainer(resourceJid, 'hide');
+                remoteVideos[resourceJid].showPeerContainer('hide');
             }
             else
                 VideoLayout.resizeThumbnails();
         }
     };
 
-    my.addRemoteVideoContainer = function(peerJid, spanId) {
-        var container = document.createElement('span');
-        container.id = spanId;
-        container.className = 'videocontainer';
-        var remotes = document.getElementById('remoteVideos');
-        remotes.appendChild(container);
-        // If the peerJid is null then this video span couldn't be directly
-        // associated with a participant (this could happen in the case of prezi).
-        if (APP.xmpp.isModerator() && peerJid !== null)
-            addRemoteVideoMenu(peerJid, container);
-        AudioLevels.updateAudioLevelCanvas(peerJid, VideoLayout);
-
-        return container;
-    };
-
-    /**
-     * Creates an audio or video stream element.
-     */
-    my.createStreamElement = function (sid, stream) {
-        var isVideo = stream.getVideoTracks().length > 0;
-
-        var element = isVideo
-                        ? document.createElement('video')
-                        : document.createElement('audio');
-        var id = (isVideo ? 'remoteVideo_' : 'remoteAudio_')
-                    + sid + '_' + APP.RTC.getStreamID(stream);
-
-        element.id = id;
-        element.autoplay = true;
-        element.oncontextmenu = function () { return false; };
-
-        return element;
-    };
-
-    my.addRemoteStreamElement
-        = function (container, sid, stream, peerJid, thessrc) {
-        var newElementId = null;
-
-        var isVideo = stream.getVideoTracks().length > 0;
-
-        if (container) {
-            var streamElement = VideoLayout.createStreamElement(sid, stream);
-            newElementId = streamElement.id;
-
-            container.appendChild(streamElement);
-
-            var sel = $('#' + newElementId);
-            sel.hide();
-
-            // If the container is currently visible we attach the stream.
-            if (!isVideo
-                || (container.offsetParent !== null && isVideo)) {
-                var videoStream = APP.simulcast.getReceivingVideoStream(stream);
-                APP.RTC.attachMediaStream(sel, videoStream);
-
-                if (isVideo)
-                    waitForRemoteVideo(sel, thessrc, stream, peerJid);
-            }
-
-            stream.onended = function () {
-                console.log('stream ended', this);
-
-                VideoLayout.removeRemoteStreamElement(
-                    stream, isVideo, container);
-
-                // NOTE(gp) it seems that under certain circumstances, the
-                // onended event is not fired and thus the contact list is not
-                // updated.
-                //
-                // The onended event of a stream should be fired when the SSRCs
-                // corresponding to that stream are removed from the SDP; but
-                // this doesn't seem to always be the case, resulting in ghost
-                // contacts.
-                //
-                // In an attempt to fix the ghost contacts problem, I'm moving
-                // the removeContact() method call in app.js, inside the
-                // 'muc.left' event handler.
-
-                //if (peerJid)
-                //    ContactList.removeContact(peerJid);
-            };
-
-            // Add click handler.
-            container.onclick = function (event) {
-                /*
-                 * FIXME It turns out that videoThumb may not exist (if there is
-                 * no actual video).
-                 */
-                var videoThumb = $('#' + container.id + '>video').get(0);
-                if (videoThumb) {
-                    VideoLayout.handleVideoThumbClicked(
-                        APP.RTC.getVideoSrc(videoThumb),
-                        false,
-                        Strophe.getResourceFromJid(peerJid));
-                }
-
-                event.stopPropagation();
-                event.preventDefault();
-                return false;
-            };
-
-            // Add hover handler
-            $(container).hover(
-                function() {
-                    VideoLayout.showDisplayName(container.id, true);
-                },
-                function() {
-                    var videoSrc = null;
-                    if ($('#' + container.id + '>video')
-                            && $('#' + container.id + '>video').length > 0) {
-                        videoSrc = APP.RTC.getVideoSrc($('#' + container.id + '>video').get(0));
-                    }
-
-                    // If the video has been "pinned" by the user we want to
-                    // keep the display name on place.
-                    if (!VideoLayout.isLargeVideoVisible()
-                            || videoSrc !== APP.RTC.getVideoSrc($('#largeVideo')[0]))
-                        VideoLayout.showDisplayName(container.id, false);
-                }
-            );
-        }
-
-        return newElementId;
-    };
-
-    /**
-     * Removes the remote stream element corresponding to the given stream and
-     * parent container.
-     * 
-     * @param stream the stream
-     * @param isVideo <tt>true</tt> if given <tt>stream</tt> is a video one.
-     * @param container
-     */
-    my.removeRemoteStreamElement = function (stream, isVideo, container) {
-        if (!container)
-            return;
-
-        var select = null;
-        var removedVideoSrc = null;
-        if (isVideo) {
-            select = $('#' + container.id + '>video');
-            removedVideoSrc = APP.RTC.getVideoSrc(select.get(0));
-        }
-        else
-            select = $('#' + container.id + '>audio');
-
-
-        // Mark video as removed to cancel waiting loop(if video is removed
-        // before has started)
-        select.removed = true;
-        select.remove();
-
-        var audioCount = $('#' + container.id + '>audio').length;
-        var videoCount = $('#' + container.id + '>video').length;
-
-        if (!audioCount && !videoCount) {
-            console.log("Remove whole user", container.id);
-            if(VideoLayout.connectionIndicators[container.id])
-                VideoLayout.connectionIndicators[container.id].remove();
-            // Remove whole container
-            container.remove();
-
-            UIUtil.playSoundNotification('userLeft');
-            VideoLayout.resizeThumbnails();
-        }
-
-        if (removedVideoSrc)
-            VideoLayout.updateRemovedVideo(removedVideoSrc);
-    };
-
-    /**
-     * Show/hide peer container for the given resourceJid.
-     */
-    function showPeerContainer(resourceJid, state) {
-        var peerContainer = $('#participant_' + resourceJid);
-
-        if (!peerContainer)
-            return;
-
-        var isHide = state === 'hide';
-        var resizeThumbnails = false;
-
-        if (!isHide) {
-            if (!peerContainer.is(':visible')) {
-                resizeThumbnails = true;
-                peerContainer.show();
-            }
-
-            var jid = APP.xmpp.findJidFromResource(resourceJid);
-            if (state == 'show')
-            {
-                // peerContainer.css('-webkit-filter', '');
-
-                Avatar.showUserAvatar(jid, false);
-            }
-            else // if (state == 'avatar')
-            {
-                // peerContainer.css('-webkit-filter', 'grayscale(100%)');
-                Avatar.showUserAvatar(jid, true);
-            }
-        }
-        else if (peerContainer.is(':visible') && isHide)
-        {
-            resizeThumbnails = true;
-            peerContainer.hide();
-            if(VideoLayout.connectionIndicators['participant_' + resourceJid])
-                VideoLayout.connectionIndicators['participant_' + resourceJid].hide();
-        }
-
-        if (resizeThumbnails) {
-            VideoLayout.resizeThumbnails();
-        }
-
-        // We want to be able to pin a participant from the contact list, even
-        // if he's not in the lastN set!
-        // ContactList.setClickable(resourceJid, !isHide);
-
-    };
 
     my.inputDisplayNameHandler = function (name) {
-        NicknameHandler.setNickname(name);
-
-        if (!$('#localDisplayName').is(":visible")) {
-            if (NicknameHandler.getNickname())
-            {
-                var meHTML = APP.translation.generateTranslatonHTML("me");
-                $('#localDisplayName').html(NicknameHandler.getNickname() + " (" + meHTML + ")");
-            }
-            else
-            {
-                var defaultHTML = APP.translation.generateTranslatonHTML(
-                    interfaceConfig.DEFAULT_LOCAL_DISPLAY_NAME);
-                $('#localDisplayName')
-                    .html(defaultHTML);
-            }
-            $('#localDisplayName').show();
-        }
-
-        $('#editDisplayName').hide();
+        localVideoThumbnail.inputDisplayNameHandler(name);
     };
 
-    /**
-     * Shows/hides the display name on the remote video.
-     * @param videoSpanId the identifier of the video span element
-     * @param isShow indicates if the display name should be shown or hidden
-     */
-    my.showDisplayName = function(videoSpanId, isShow) {
-        var nameSpan = $('#' + videoSpanId + '>span.displayname').get(0);
-        if (isShow) {
-            if (nameSpan && nameSpan.innerHTML && nameSpan.innerHTML.length) 
-                nameSpan.setAttribute("style", "display:inline-block;");
+    my.videoactive = function (videoelem, resourceJid) {
+        videoelem.show();
+        VideoLayout.resizeThumbnails();
+
+        // Update the large video to the last added video only if there's no
+        // current dominant, focused speaker or prezi playing or update it to
+        // the current dominant speaker.
+        if ((!focusedVideoResourceJid &&
+            !VideoLayout.getDominantSpeakerResourceJid() &&
+            !require("../prezi/Prezi").isPresentationVisible()) ||
+            (resourceJid &&
+                VideoLayout.getDominantSpeakerResourceJid() === resourceJid)) {
+            LargeVideo.updateLargeVideo(resourceJid, true);
         }
-        else {
-            if (nameSpan)
-                nameSpan.setAttribute("style", "display:none;");
-        }
-    };
+    }
 
     /**
      * Shows the presence status message for the given video.
      */
-    my.setPresenceStatus = function (videoSpanId, statusMsg) {
-
-        if (!$('#' + videoSpanId).length) {
-            // No container
-            return;
-        }
-
-        var statusSpan = $('#' + videoSpanId + '>span.status');
-        if (!statusSpan.length) {
-            //Add status span
-            statusSpan = document.createElement('span');
-            statusSpan.className = 'status';
-            statusSpan.id = videoSpanId + '_status';
-            $('#' + videoSpanId)[0].appendChild(statusSpan);
-
-            statusSpan = $('#' + videoSpanId + '>span.status');
-        }
-
-        // Display status
-        if (statusMsg && statusMsg.length) {
-            $('#' + videoSpanId + '_status').text(statusMsg);
-            statusSpan.get(0).setAttribute("style", "display:inline-block;");
-        }
-        else {
-            // Hide
-            statusSpan.get(0).setAttribute("style", "display:none;");
-        }
+    my.setPresenceStatus = function (resourceJid, statusMsg) {
+        remoteVideos[resourceJid].setPresenceStatus(statusMsg);
     };
 
     /**
@@ -7879,14 +8386,7 @@ var VideoLayout = (function (my) {
 
         var isModerator = APP.xmpp.isModerator();
         if (isModerator) {
-            var indicatorSpan = $('#localVideoContainer .focusindicator');
-
-            if (indicatorSpan.children().length === 0)
-            {
-                createModeratorIndicatorElement(indicatorSpan[0]);
-                //translates text in focus indicator
-                APP.translation.translateElement($('#localVideoContainer .focusindicator'));
-            }
+            localVideoThumbnail.createModeratorIndicatorElement();
         }
 
         var members = APP.xmpp.getMembers();
@@ -7899,125 +8399,21 @@ var VideoLayout = (function (my) {
             }
 
             var resourceJid = Strophe.getResourceFromJid(jid);
-            var videoSpanId = 'participant_' + resourceJid;
-            var videoContainer = document.getElementById(videoSpanId);
-
-            if (!videoContainer) {
-                console.error("No video container for " + jid);
-                return;
-            }
 
             var member = members[jid];
 
             if (member.role === 'moderator') {
-                // Remove menu if peer is moderator
-                var menuSpan = $('#' + videoSpanId + '>span.remotevideomenu');
-                if (menuSpan.length) {
-                    removeRemoteVideoMenu(videoSpanId);
-                }
-                // Show moderator indicator
-                var indicatorSpan
-                    = $('#' + videoSpanId + ' .focusindicator');
 
-                if (!indicatorSpan || indicatorSpan.length === 0) {
-                    indicatorSpan = document.createElement('span');
-                    indicatorSpan.className = 'focusindicator';
+                remoteVideos[resourceJid].removeRemoteVideoMenu();
 
-                    videoContainer.appendChild(indicatorSpan);
-
-                    createModeratorIndicatorElement(indicatorSpan);
-                    //translates text in focus indicators
-                    APP.translation.translateElement($('#' + videoSpanId + ' .focusindicator'));
-                }
+                remoteVideos[resourceJid].createModeratorIndicatorElement();
             } else if (isModerator) {
                 // We are moderator, but user is not - add menu
                 if ($('#remote_popupmenu_' + resourceJid).length <= 0) {
-                    addRemoteVideoMenu(
-                        jid,
-                        document.getElementById('participant_' + resourceJid));
+                    remoteVideos[resourceJid].addRemoteVideoMenu();
                 }
             }
         });
-    };
-
-    /**
-     * Shows video muted indicator over small videos.
-     */
-    my.showVideoIndicator = function(videoSpanId, isMuted) {
-        var videoMutedSpan = $('#' + videoSpanId + '>span.videoMuted');
-
-        if (isMuted === 'false') {
-            if (videoMutedSpan.length > 0) {
-                videoMutedSpan.remove();
-            }
-        }
-        else {
-            if(videoMutedSpan.length == 0) {
-                videoMutedSpan = document.createElement('span');
-                videoMutedSpan.className = 'videoMuted';
-
-                $('#' + videoSpanId)[0].appendChild(videoMutedSpan);
-
-                var mutedIndicator = document.createElement('i');
-                mutedIndicator.className = 'icon-camera-disabled';
-                UIUtil.setTooltip(mutedIndicator,
-                    "videothumbnail.videomute",
-                    "top");
-                videoMutedSpan.appendChild(mutedIndicator);
-                //translate texts for muted indicator
-                APP.translation.translateElement($('#' + videoSpanId  + " > span > i"));
-            }
-
-            VideoLayout.updateMutePosition(videoSpanId);
-
-        }
-    };
-
-    my.updateMutePosition = function (videoSpanId) {
-        var audioMutedSpan = $('#' + videoSpanId + '>span.audioMuted');
-        var connectionIndicator = $('#' + videoSpanId + '>div.connectionindicator');
-        var videoMutedSpan = $('#' + videoSpanId + '>span.videoMuted');
-        if(connectionIndicator.length > 0
-            && connectionIndicator[0].style.display != "none") {
-            audioMutedSpan.css({right: "23px"});
-            videoMutedSpan.css({right: ((audioMutedSpan.length > 0? 23 : 0) + 30) + "px"});
-        }
-        else
-        {
-            audioMutedSpan.css({right: "0px"});
-            videoMutedSpan.css({right: (audioMutedSpan.length > 0? 30 : 0) + "px"});
-        }
-    }
-    /**
-     * Shows audio muted indicator over small videos.
-     * @param {string} isMuted
-     */
-    my.showAudioIndicator = function(videoSpanId, isMuted) {
-        var audioMutedSpan = $('#' + videoSpanId + '>span.audioMuted');
-
-        if (isMuted === 'false') {
-            if (audioMutedSpan.length > 0) {
-                audioMutedSpan.popover('hide');
-                audioMutedSpan.remove();
-            }
-        }
-        else {
-            if(audioMutedSpan.length == 0 ) {
-                audioMutedSpan = document.createElement('span');
-                audioMutedSpan.className = 'audioMuted';
-                UIUtil.setTooltip(audioMutedSpan,
-                    "videothumbnail.mute",
-                    "top");
-
-                $('#' + videoSpanId)[0].appendChild(audioMutedSpan);
-                APP.translation.translateElement($('#' + videoSpanId + " > span"));
-                var mutedIndicator = document.createElement('i');
-                mutedIndicator.className = 'icon-mic-disabled';
-                audioMutedSpan.appendChild(mutedIndicator);
-
-            }
-            VideoLayout.updateMutePosition(videoSpanId);
-        }
     };
 
     /*
@@ -8025,52 +8421,67 @@ var VideoLayout = (function (my) {
      * @param {boolean} isMuted
      */
     my.showLocalAudioIndicator = function(isMuted) {
-        VideoLayout.showAudioIndicator('localVideoContainer', isMuted.toString());
+        localVideoThumbnail.showAudioIndicator(isMuted.toString());
     };
 
     /**
      * Resizes the large video container.
      */
     my.resizeLargeVideoContainer = function () {
-        Chat.resizeChat();
-        var availableHeight = window.innerHeight;
-        var availableWidth = UIUtil.getAvailableVideoWidth();
-
-        if (availableWidth < 0 || availableHeight < 0) return;
-
-        $('#videospace').width(availableWidth);
-        $('#videospace').height(availableHeight);
-        $('#largeVideoContainer').width(availableWidth);
-        $('#largeVideoContainer').height(availableHeight);
-
-        var avatarSize = interfaceConfig.ACTIVE_SPEAKER_AVATAR_SIZE;
-        var top = availableHeight / 2 - avatarSize / 4 * 3;
-        $('#activeSpeaker').css('top', top);
-
+        LargeVideo.resize();
         VideoLayout.resizeThumbnails();
+        LargeVideo.position();
     };
 
     /**
      * Resizes thumbnails.
      */
-    my.resizeThumbnails = function() {
+    my.resizeThumbnails = function(animate) {
         var videoSpaceWidth = $('#remoteVideos').width();
 
         var thumbnailSize = VideoLayout.calculateThumbnailSize(videoSpaceWidth);
         var width = thumbnailSize[0];
         var height = thumbnailSize[1];
 
-        // size videos so that while keeping AR and max height, we have a
-        // nice fit
-        $('#remoteVideos').height(height);
-        $('#remoteVideos>span').width(width);
-        $('#remoteVideos>span').height(height);
-
         $('.userAvatar').css('left', (width - height) / 2);
 
+        if(animate)
+        {
+            $('#remoteVideos').animate({
+                    height: height
+                },
+                {
+                    queue: false,
+                    duration: 500
+                });
+
+            $('#remoteVideos>span').animate({
+                    height: height,
+                    width: width
+                },
+                {
+                    queue: false,
+                    duration: 500,
+                    complete: function () {
+                        $(document).trigger(
+                            "remotevideo.resized",
+                            [width,
+                                height]);
+                    }
+                });
+
+        }
+        else
+        {
+            // size videos so that while keeping AR and max height, we have a
+            // nice fit
+            $('#remoteVideos').height(height);
+            $('#remoteVideos>span').width(width);
+            $('#remoteVideos>span').height(height);
 
 
-        $(document).trigger("remotevideo.resized", [width, height]);
+            $(document).trigger("remotevideo.resized", [width, height]);
+        }
     };
 
     /**
@@ -8083,54 +8494,17 @@ var VideoLayout = (function (my) {
      */
     my.enableDominantSpeaker = function(resourceJid, isEnable) {
 
-        var videoSpanId = null;
-        var videoContainerId = null;
         if (resourceJid
                 === APP.xmpp.myResource()) {
-            videoSpanId = 'localVideoWrapper';
-            videoContainerId = 'localVideoContainer';
+            localVideoThumbnail.enableDominantSpeaker(isEnable);
         }
         else {
-            videoSpanId = 'participant_' + resourceJid;
-            videoContainerId = videoSpanId;
+            remoteVideos[resourceJid].enableDominantSpeaker(isEnable);
         }
 
-        var displayName = resourceJid;
-        var nameSpan = $('#' + videoContainerId + '>span.displayname');
-        if (nameSpan.length > 0)
-            displayName = nameSpan.html();
 
-        console.log("UI enable dominant speaker",
-            displayName,
-            resourceJid,
-            isEnable);
-
-        videoSpan = document.getElementById(videoContainerId);
-
-        if (!videoSpan) {
-            return;
-        }
-
-        var video = $('#' + videoSpanId + '>video');
-
-        if (video && video.length > 0) {
-            if (isEnable) {
-                var isLargeVideoVisible = VideoLayout.isLargeVideoOnTop();
-                VideoLayout.showDisplayName(videoContainerId, isLargeVideoVisible);
-
-                if (!videoSpan.classList.contains("dominantspeaker"))
-                    videoSpan.classList.add("dominantspeaker");
-            }
-            else {
-                VideoLayout.showDisplayName(videoContainerId, false);
-
-                if (videoSpan.classList.contains("dominantspeaker"))
-                    videoSpan.classList.remove("dominantspeaker");
-            }
-
-            Avatar.showUserAvatar(
-                APP.xmpp.findJidFromResource(resourceJid));
-        }
+        Avatar.showUserAvatar(
+            APP.xmpp.findJidFromResource(resourceJid));
     };
 
     /**
@@ -8165,34 +8539,6 @@ var VideoLayout = (function (my) {
 
        return [availableWidth, availableHeight];
    };
-
-    /**
-     * Updates the remote video menu.
-     *
-     * @param jid the jid indicating the video for which we're adding a menu.
-     * @param isMuted indicates the current mute state
-     */
-    my.updateRemoteVideoMenu = function(jid, isMuted) {
-        var muteMenuItem
-            = $('#remote_popupmenu_'
-                    + Strophe.getResourceFromJid(jid)
-                    + '>li>a.mutelink');
-
-        var mutedIndicator = "<i class='icon-mic-disabled'></i>";
-
-        if (muteMenuItem.length) {
-            var muteLink = muteMenuItem.get(0);
-
-            if (isMuted === 'true') {
-                muteLink.innerHTML = mutedIndicator + ' Muted';
-                muteLink.className = 'mutelink disabled';
-            }
-            else {
-                muteLink.innerHTML = mutedIndicator + ' Mute';
-                muteLink.className = 'mutelink';
-            }
-        }
-    };
 
     /**
      * Returns the current dominant speaker resource jid.
@@ -8236,7 +8582,6 @@ var VideoLayout = (function (my) {
                     // now.
 
                     VideoLayout.handleVideoThumbClicked(
-                        videoThumb.src,
                         false,
                         Strophe.getResourceFromJid(jid));
                 } else {
@@ -8265,29 +8610,18 @@ var VideoLayout = (function (my) {
      * On audio muted event.
      */
     $(document).bind('audiomuted.muc', function (event, jid, isMuted) {
-        /*
-         // FIXME: but focus can not mute in this case ? - check
-        if (jid === xmpp.myJid()) {
-
-            // The local mute indicator is controlled locally
-            return;
-        }*/
-        var videoSpanId = null;
-        if (jid === APP.xmpp.myJid()) {
-            videoSpanId = 'localVideoContainer';
+        var resourceJid = Strophe.getResourceFromJid(jid);
+        if (resourceJid === APP.xmpp.myResource()) {
+            localVideoThumbnail.showAudioIndicator(isMuted);
         } else {
             VideoLayout.ensurePeerContainerExists(jid);
-            videoSpanId = 'participant_' + Strophe.getResourceFromJid(jid);
+            remoteVideos[resourceJid].showAudioIndicator(isMuted);
+            if (APP.xmpp.isModerator()) {
+                remoteVideos[resourceJid].updateRemoteVideoMenu(isMuted);
+            }
         }
 
-        mutedAudios[jid] = isMuted;
 
-        if (APP.xmpp.isModerator()) {
-            VideoLayout.updateRemoteVideoMenu(jid, isMuted);
-        }
-
-        if (videoSpanId)
-            VideoLayout.showAudioIndicator(videoSpanId, isMuted);
     });
 
     /**
@@ -8295,20 +8629,16 @@ var VideoLayout = (function (my) {
      */
     $(document).bind('videomuted.muc', function (event, jid, value) {
         var isMuted = (value === "true");
-        if(!APP.RTC.muteRemoteVideoStream(jid, isMuted))
+        if(jid !== APP.xmpp.myJid() && !APP.RTC.muteRemoteVideoStream(jid, isMuted))
             return;
 
         Avatar.showUserAvatar(jid, isMuted);
-        var videoSpanId = null;
         if (jid === APP.xmpp.myJid()) {
-            videoSpanId = 'localVideoContainer';
+            localVideoThumbnail.showVideoIndicator(isMuted);
         } else {
             VideoLayout.ensurePeerContainerExists(jid);
-            videoSpanId = 'participant_' + Strophe.getResourceFromJid(jid);
+            remoteVideos[Strophe.getResourceFromJid(jid)].showVideoIndicator(isMuted);
         }
-
-        if (videoSpanId)
-            VideoLayout.showVideoIndicator(videoSpanId, value);
     });
 
     /**
@@ -8318,12 +8648,10 @@ var VideoLayout = (function (my) {
                     function (jid, displayName, status) {
         if (jid === 'localVideoContainer'
             || jid === APP.xmpp.myJid()) {
-            setDisplayName('localVideoContainer',
-                           displayName);
+            localVideoThumbnail.setDisplayName(displayName);
         } else {
             VideoLayout.ensurePeerContainerExists(jid);
-            setDisplayName(
-                'participant_' + Strophe.getResourceFromJid(jid),
+            remoteVideos[Strophe.getResourceFromJid(jid)].setDisplayName(
                 displayName,
                 status);
         }
@@ -8335,24 +8663,21 @@ var VideoLayout = (function (my) {
      */
     my.onDominantSpeakerChanged = function (resourceJid) {
         // We ignore local user events.
-        if (resourceJid
-                === APP.xmpp.myResource())
+        if (resourceJid === APP.xmpp.myResource())
             return;
 
         var members = APP.xmpp.getMembers();
         // Update the current dominant speaker.
         if (resourceJid !== currentDominantSpeaker) {
-            var oldSpeakerVideoSpanId = "participant_" + currentDominantSpeaker,
-                newSpeakerVideoSpanId = "participant_" + resourceJid;
             var currentJID = APP.xmpp.findJidFromResource(currentDominantSpeaker);
             var newJID = APP.xmpp.findJidFromResource(resourceJid);
             if(currentDominantSpeaker && (!members || !members[currentJID] ||
                 !members[currentJID].displayName)) {
-                setDisplayName(oldSpeakerVideoSpanId, null);
+                remoteVideos[resourceJid].setDisplayName(null);
             }
             if(resourceJid && (!members || !members[newJID] ||
                 !members[newJID].displayName)) {
-                setDisplayName(newSpeakerVideoSpanId, null,
+                remoteVideos[resourceJid].setDisplayName(null,
                     interfaceConfig.DEFAULT_DOMINANT_SPEAKER_DISPLAY_NAME);
             }
             currentDominantSpeaker = resourceJid;
@@ -8366,14 +8691,15 @@ var VideoLayout = (function (my) {
 
         // Local video will not have container found, but that's ok
         // since we don't want to switch to local video.
-        if (container && !focusedVideoInfo)
+        if (container && !focusedVideoResourceJid)
         {
             var video = container.getElementsByTagName("video");
 
             // Update the large video if the video source is already available,
             // otherwise wait for the "videoactive.jingle" event.
-            if (video.length && video[0].currentTime > 0)
-                VideoLayout.updateLargeVideo(APP.RTC.getVideoSrc(video[0]), resourceJid);
+            if (video.length && video[0].currentTime > 0) {
+                LargeVideo.updateLargeVideo(resourceJid);
+            }
         }
     };
 
@@ -8435,13 +8761,13 @@ var VideoLayout = (function (my) {
                 && lastNEndpoints.indexOf(resourceJid) < 0
                 && localLastNSet.indexOf(resourceJid) < 0) {
                 console.log("Remove from last N", resourceJid);
-                showPeerContainer(resourceJid, 'hide');
+                remoteVideos[resourceJid].showPeerContainer('hide');
                 isReceived = false;
             } else if (resourceJid
                 && $('#participant_' + resourceJid).is(':visible')
                 && lastNEndpoints.indexOf(resourceJid) < 0
                 && localLastNSet.indexOf(resourceJid) >= 0) {
-                showPeerContainer(resourceJid, 'avatar');
+                remoteVideos[resourceJid].showPeerContainer('avatar');
                 isReceived = false;
             }
 
@@ -8450,8 +8776,7 @@ var VideoLayout = (function (my) {
                 // it is no longer being received. If resourceJid was being
                 // displayed in the large video we have to switch to another
                 // user.
-                var largeVideoResource = largeVideoState.userResourceJid;
-                if (!updateLargeVideo && resourceJid === largeVideoResource) {
+                if (!updateLargeVideo && resourceJid === LargeVideo.getResourceJid()) {
                     updateLargeVideo = true;
                 }
             }
@@ -8464,7 +8789,7 @@ var VideoLayout = (function (my) {
             endpointsEnteringLastN.forEach(function (resourceJid) {
 
                 var isVisible = $('#participant_' + resourceJid).is(':visible');
-                showPeerContainer(resourceJid, 'show');
+                remoteVideos[resourceJid].showPeerContainer('show');
                 if (!isVisible) {
                     console.log("Add to last N", resourceJid);
 
@@ -8472,9 +8797,7 @@ var VideoLayout = (function (my) {
                     var mediaStream = APP.RTC.remoteStreams[jid][MediaStreamType.VIDEO_TYPE];
                     var sel = $('#participant_' + resourceJid + '>video');
 
-                    var videoStream = APP.simulcast.getReceivingVideoStream(
-                        mediaStream.stream);
-                    APP.RTC.attachMediaStream(sel, videoStream);
+                    APP.RTC.attachMediaStream(sel, mediaStream.stream);
                     if (lastNPickupJid == mediaStream.peerjid) {
                         // Clean up the lastN pickup jid.
                         lastNPickupJid = null;
@@ -8482,13 +8805,12 @@ var VideoLayout = (function (my) {
                         // Don't fire the events again, they've already
                         // been fired in the contact list click handler.
                         VideoLayout.handleVideoThumbClicked(
-                            $(sel).attr('src'),
                             false,
                             Strophe.getResourceFromJid(mediaStream.peerjid));
 
                         updateLargeVideo = false;
                     }
-                    waitForRemoteVideo(sel, mediaStream.ssrc, mediaStream.stream, resourceJid);
+                    remoteVideos[resourceJid].waitForRemoteVideo(sel, mediaStream.ssrc, mediaStream.stream);
                 }
             })
         }
@@ -8509,160 +8831,12 @@ var VideoLayout = (function (my) {
                 if (!resource || resource === myResource)
                     continue;
 
-                container = $("#participant_" + resource);
-                if (container.length == 0)
-                    continue;
-
-                src = $('video', container).attr('src');
-                if (!src)
-                    continue;
-
                 // videoSrcToSsrc needs to be update for this call to succeed.
-                VideoLayout.updateLargeVideo(src);
+                LargeVideo.updateLargeVideo(resource);
                 break;
 
             }
         }
-    };
-
-    my.onSimulcastLayersChanging = function (endpointSimulcastLayers) {
-        endpointSimulcastLayers.forEach(function (esl) {
-
-            var resource = esl.endpoint;
-
-            // if lastN is enabled *and* the endpoint is *not* in the lastN set,
-            // then ignore the event (= do not preload anything).
-            //
-            // The bridge could probably stop sending this message if it's for
-            // an endpoint that's not in lastN.
-
-            if (lastNCount != -1
-                && (lastNCount < 1 || lastNEndpointsCache.indexOf(resource) === -1)) {
-                return;
-            }
-
-            var primarySSRC = esl.simulcastLayer.primarySSRC;
-
-            // Get session and stream from primary ssrc.
-            var res = APP.simulcast.getReceivingVideoStreamBySSRC(primarySSRC);
-            var sid = res.sid;
-            var electedStream = res.stream;
-
-            if (sid && electedStream) {
-                var msid = APP.simulcast.getRemoteVideoStreamIdBySSRC(primarySSRC);
-
-                console.info([esl, primarySSRC, msid, sid, electedStream]);
-
-                var preload = (Strophe.getResourceFromJid(APP.xmpp.getJidFromSSRC(primarySSRC)) == largeVideoState.userResourceJid);
-
-                if (preload) {
-                    if (largeVideoState.preload)
-                    {
-                        $(largeVideoState.preload).remove();
-                    }
-                    console.info('Preloading remote video');
-                    largeVideoState.preload = $('<video autoplay></video>');
-                    // ssrcs are unique in an rtp session
-                    largeVideoState.preload_ssrc = primarySSRC;
-
-                    APP.RTC.attachMediaStream(largeVideoState.preload, electedStream)
-                }
-
-            } else {
-                console.error('Could not find a stream or a session.', sid, electedStream);
-            }
-        });
-    };
-
-    /**
-     * On simulcast layers changed event.
-     */
-    my.onSimulcastLayersChanged = function (endpointSimulcastLayers) {
-        endpointSimulcastLayers.forEach(function (esl) {
-
-            var resource = esl.endpoint;
-
-            // if lastN is enabled *and* the endpoint is *not* in the lastN set,
-            // then ignore the event (= do not change large video/thumbnail
-            // SRCs).
-            //
-            // Note that even if we ignore the "changed" event in this event
-            // handler, the bridge must continue sending these events because
-            // the simulcast code in simulcast.js uses it to know what's going
-            // to be streamed by the bridge when/if the endpoint gets back into
-            // the lastN set.
-
-            if (lastNCount != -1
-                && (lastNCount < 1 || lastNEndpointsCache.indexOf(resource) === -1)) {
-                return;
-            }
-
-            var primarySSRC = esl.simulcastLayer.primarySSRC;
-
-            // Get session and stream from primary ssrc.
-            var res = APP.simulcast.getReceivingVideoStreamBySSRC(primarySSRC);
-            var sid = res.sid;
-            var electedStream = res.stream;
-
-            if (sid && electedStream) {
-                var msid = APP.simulcast.getRemoteVideoStreamIdBySSRC(primarySSRC);
-
-                console.info('Switching simulcast substream.');
-                console.info([esl, primarySSRC, msid, sid, electedStream]);
-
-                var msidParts = msid.split(' ');
-                var selRemoteVideo = $(['#', 'remoteVideo_', sid, '_', msidParts[0]].join(''));
-
-                var updateLargeVideo = (Strophe.getResourceFromJid(APP.xmpp.getJidFromSSRC(primarySSRC))
-                    == largeVideoState.userResourceJid);
-                var updateFocusedVideoSrc = (focusedVideoInfo && focusedVideoInfo.src && focusedVideoInfo.src != '' &&
-                    (APP.RTC.getVideoSrc(selRemoteVideo[0]) == focusedVideoInfo.src));
-
-                var electedStreamUrl;
-                if (largeVideoState.preload_ssrc == primarySSRC)
-                {
-                    APP.RTC.setVideoSrc(selRemoteVideo[0], APP.RTC.getVideoSrc(largeVideoState.preload[0]));
-                }
-                else
-                {
-                    if (largeVideoState.preload
-                        && largeVideoState.preload != null) {
-                        $(largeVideoState.preload).remove();
-                    }
-
-                    largeVideoState.preload_ssrc = 0;
-
-                    APP.RTC.attachMediaStream(selRemoteVideo, electedStream);
-                }
-
-                var jid = APP.xmpp.getJidFromSSRC(primarySSRC);
-
-                if (updateLargeVideo) {
-                    VideoLayout.updateLargeVideo(APP.RTC.getVideoSrc(selRemoteVideo[0]), null,
-                        Strophe.getResourceFromJid(jid));
-                }
-
-                if (updateFocusedVideoSrc) {
-                    focusedVideoInfo.src = APP.RTC.getVideoSrc(selRemoteVideo[0]);
-                }
-
-                var videoId;
-                if(resource == APP.xmpp.myResource())
-                {
-                    videoId = "localVideoContainer";
-                }
-                else
-                {
-                    videoId = "participant_" + resource;
-                }
-                var connectionIndicator = VideoLayout.connectionIndicators[videoId];
-                if(connectionIndicator)
-                    connectionIndicator.updatePopoverData();
-
-            } else {
-                console.error('Could not find a stream or a sid.', sid, electedStream);
-            }
-        });
     };
 
     /**
@@ -8678,15 +8852,15 @@ var VideoLayout = (function (my) {
             object.resolution = resolution[APP.xmpp.myJid()];
             delete resolution[APP.xmpp.myJid()];
         }
-        updateStatsIndicator("localVideoContainer", percent, object);
+        localVideoThumbnail.updateStatsIndicator(percent, object);
         for(var jid in resolution)
         {
             if(resolution[jid] === null)
                 continue;
-            var id = 'participant_' + Strophe.getResourceFromJid(jid);
-            if(VideoLayout.connectionIndicators[id])
+            var resourceJid = Strophe.getResourceFromJid(jid);
+            if(remoteVideos[resourceJid] && remoteVideos[resourceJid].connectionIndicator)
             {
-                VideoLayout.connectionIndicators[id].updateResolution(resolution[jid]);
+                remoteVideos[resourceJid].connectionIndicator.updateResolution(resolution[jid]);
             }
         }
 
@@ -8701,8 +8875,8 @@ var VideoLayout = (function (my) {
     my.updateConnectionStats = function (jid, percent, object) {
         var resourceJid = Strophe.getResourceFromJid(jid);
 
-        var videoSpanId = 'participant_' + resourceJid;
-        updateStatsIndicator(videoSpanId, percent, object);
+        if(remoteVideos[resourceJid])
+            remoteVideos[resourceJid].updateStatsIndicator(percent, object);
     };
 
     /**
@@ -8710,8 +8884,7 @@ var VideoLayout = (function (my) {
      * @param jid
      */
     my.removeConnectionIndicator = function (jid) {
-        if(VideoLayout.connectionIndicators['participant_' + Strophe.getResourceFromJid(jid)])
-            VideoLayout.connectionIndicators['participant_' + Strophe.getResourceFromJid(jid)].remove();
+        remoteVideos[Strophe.getResourceFromJid(jid)].removeConnectionIndicator();
     };
 
     /**
@@ -8719,49 +8892,92 @@ var VideoLayout = (function (my) {
      * @param jid
      */
     my.hideConnectionIndicator = function (jid) {
-        if(VideoLayout.connectionIndicators['participant_' + Strophe.getResourceFromJid(jid)])
-            VideoLayout.connectionIndicators['participant_' + Strophe.getResourceFromJid(jid)].hide();
+        remoteVideos[Strophe.getResourceFromJid(jid)].hideConnectionIndicator();
     };
 
     /**
      * Hides all the indicators
      */
     my.onStatsStop = function () {
-        for(var indicator in VideoLayout.connectionIndicators)
+        for(var video in remoteVideos)
         {
-            VideoLayout.connectionIndicators[indicator].hideIndicator();
+            video.hideIndicator();
         }
+        localVideoThumbnail.hideIndicator();
     };
 
     my.participantLeft = function (jid) {
         // Unlock large video
-        if (focusedVideoInfo && focusedVideoInfo.jid === jid)
+        var resourceJid = Strophe.getResourceFromJid(jid);
+        if (focusedVideoResourceJid === resourceJid)
         {
             console.info("Focused video owner has left the conference");
-            focusedVideoInfo = null;
+            focusedVideoResourceJid = null;
         }
     }
     
     my.onVideoTypeChanged = function (jid) {
-        if(jid &&
-            Strophe.getResourceFromJid(jid) === largeVideoState.userResourceJid)
+        LargeVideo.onVideoTypeChanged();
+    }
+
+    my.showMore = function (jid) {
+        if(APP.xmpp.myJid = jid)
         {
-            largeVideoState.isDesktop = APP.RTC.isVideoSrcDesktop(jid);
-            VideoLayout.getVideoSize = largeVideoState.isDesktop
-                ? getDesktopVideoSize
-                : getCameraVideoSize;
-            VideoLayout.getVideoPosition = largeVideoState.isDesktop
-                ? getDesktopVideoPosition
-                : getCameraVideoPosition;
-            VideoLayout.positionLarge(null, null);
+            localVideoThumbnail.connectionIndicator.showMore();
+        }
+        else
+        {
+            remoteVideos[Strophe.getResourceFromJid(jid)].connectionIndicator.showMore();
+        }
+
+    }
+
+    my.addPreziContainer = function (id) {
+        return RemoteVideo.createContainer(id);
+    }
+
+    my.setLargeVideoVisible = function (isVisible) {
+        LargeVideo.setLargeVideoVisible(isVisible);
+        if(!isVisible && focusedVideoResourceJid)
+        {
+            var smallVideo = VideoLayout.getSmallVideo(focusedVideoResourceJid);
+            if(smallVideo)
+                smallVideo.focus(false);
+            Avatar.showUserAvatar(
+                APP.xmpp.findJidFromResource(focusedVideoResourceJid));
+            focusedVideoResourceJid = null;
+
         }
     }
 
+
+    /**
+     * Resizes the video area
+     * @param completeFunction a function to be called when the video space is resized
+     */
+    my.resizeVideoArea = function(isVisible, completeFunction) {
+        LargeVideo.resizeVideoAreaAnimated(isVisible, completeFunction);
+        VideoLayout.resizeThumbnails(true);
+
+    };
+
+    my.getSmallVideo = function (resourceJid) {
+        if(resourceJid == APP.xmpp.myResource())
+        {
+            return localVideoThumbnail;
+        }
+        else
+        {
+            if(!remoteVideos[resourceJid])
+                return null;
+            return remoteVideos[resourceJid];
+        }
+    }
     return my;
 }(VideoLayout || {}));
 
 module.exports = VideoLayout;
-},{"../../../service/RTC/MediaStreamTypes":87,"../../../service/UI/UIEvents":92,"../audio_levels/AudioLevels":9,"../avatar/Avatar":13,"../etherpad/Etherpad":14,"../prezi/Prezi":15,"../side_pannels/chat/Chat":18,"../side_pannels/contactlist/ContactList":22,"../util/NicknameHandler":29,"../util/UIUtil":30,"./ConnectionIndicator":31}],33:[function(require,module,exports){
+},{"../../../service/RTC/MediaStreamTypes":95,"../../../service/UI/UIEvents":100,"../audio_levels/AudioLevels":10,"../avatar/Avatar":14,"../prezi/Prezi":16,"../side_pannels/contactlist/ContactList":23,"./LargeVideo":33,"./LocalVideo":34,"./RemoteVideo":35}],38:[function(require,module,exports){
 //var nouns = [
 //];
 var pluralNouns = [
@@ -8942,7 +9158,7 @@ var RoomNameGenerator = {
 
 module.exports = RoomNameGenerator;
 
-},{}],34:[function(require,module,exports){
+},{}],39:[function(require,module,exports){
 var animateTimeout, updateTimeout;
 
 var RoomNameGenerator = require("./RoomnameGenerator");
@@ -9044,7 +9260,48 @@ function setupWelcomePage()
 }
 
 module.exports = setupWelcomePage;
-},{"./RoomnameGenerator":33}],35:[function(require,module,exports){
+},{"./RoomnameGenerator":38}],40:[function(require,module,exports){
+var params = {};
+function getConfigParamsFromUrl() {
+    if(!location.hash)
+        return {};
+    var hash = location.hash.substr(1);
+    var result = {};
+    hash.split("&").forEach(function(part) {
+        var item = part.split("=");
+        result[item[0]] = JSON.parse(
+            decodeURIComponent(item[1]).replace(/\\&/, "&"));
+    });
+    return result;
+}
+
+params = getConfigParamsFromUrl();
+
+var URLProcessor = {
+    setConfigParametersFromUrl: function () {
+        for(var k in params)
+        {
+            if(typeof k !== "string" || k.indexOf("config.") === -1)
+                continue;
+
+            var v = params[k];
+            var confKey = k.substr(7);
+            if(config[confKey] && typeof config[confKey] !== typeof v)
+            {
+                console.warn("The type of " + k +
+                    " is wrong. That parameter won't be updated in config.js.");
+                continue;
+            }
+
+            config[confKey] = v;
+
+        }
+
+    }
+};
+
+module.exports = URLProcessor;
+},{}],41:[function(require,module,exports){
 var EventEmitter = require("events");
 var eventEmitter = new EventEmitter();
 var CQEvents = require("../../service/connectionquality/CQEvents");
@@ -9179,15 +9436,17 @@ var ConnectionQuality = {
 };
 
 module.exports = ConnectionQuality;
-},{"../../service/connectionquality/CQEvents":94,"../../service/xmpp/XMPPEvents":97,"events":98}],36:[function(require,module,exports){
-/* global $, alert, changeLocalVideo, chrome, config, getConferenceHandler, getUserMediaWithConstraints */
+},{"../../service/connectionquality/CQEvents":102,"../../service/xmpp/XMPPEvents":106,"events":107}],42:[function(require,module,exports){
+/* global $, alert, APP, changeLocalVideo, chrome, config, getConferenceHandler,
+ getUserMediaWithConstraints */
 /**
  * Indicates that desktop stream is currently in use(for toggle purpose).
  * @type {boolean}
  */
 var isUsingScreenStream = false;
 /**
- * Indicates that switch stream operation is in progress and prevent from triggering new events.
+ * Indicates that switch stream operation is in progress and prevent from
+ * triggering new events.
  * @type {boolean}
  */
 var switchInProgress = false;
@@ -9200,7 +9459,21 @@ var switchInProgress = false;
 var obtainDesktopStream = null;
 
 /**
- * Flag used to cache desktop sharing enabled state. Do not use directly as it can be <tt>null</tt>.
+ * Indicates whether desktop sharing extension is installed.
+ * @type {boolean}
+ */
+var extInstalled = false;
+
+/**
+ * Indicates whether update of desktop sharing extension is required.
+ * @type {boolean}
+ */
+var extUpdateRequired = false;
+
+/**
+ * Flag used to cache desktop sharing enabled state. Do not use directly as
+ * it can be <tt>null</tt>.
+ *
  * @type {null|boolean}
  */
 var _desktopSharingEnabled = null;
@@ -9209,7 +9482,8 @@ var EventEmitter = require("events");
 
 var eventEmitter = new EventEmitter();
 
-var DesktopSharingEventTypes = require("../../service/desktopsharing/DesktopSharingEventTypes");
+var DesktopSharingEventTypes
+    = require("../../service/desktopsharing/DesktopSharingEventTypes");
 
 /**
  * Method obtains desktop stream from WebRTC 'screen' source.
@@ -9230,7 +9504,8 @@ function obtainWebRTCScreen(streamCallback, failCallback) {
  */
 function getWebStoreInstallUrl()
 {
-    return "https://chrome.google.com/webstore/detail/" + config.chromeExtensionId;
+    return "https://chrome.google.com/webstore/detail/" +
+        config.chromeExtensionId;
 }
 
 /**
@@ -9280,11 +9555,10 @@ function isUpdateRequired(minVersion, extVersion)
     }
 }
 
-
-function checkExtInstalled(isInstalledCallback) {
+function checkExtInstalled(callback) {
     if (!chrome.runtime) {
         // No API, so no extension for sure
-        isInstalledCallback(false);
+        callback(false, false);
         return;
     }
     chrome.runtime.sendMessage(
@@ -9293,26 +9567,24 @@ function checkExtInstalled(isInstalledCallback) {
         function (response) {
             if (!response || !response.version) {
                 // Communication failure - assume that no endpoint exists
-                console.warn("Extension not installed?: " + chrome.runtime.lastError);
-                isInstalledCallback(false);
-            } else {
-                // Check installed extension version
-                var extVersion = response.version;
-                console.log('Extension version is: ' + extVersion);
-                var updateRequired = isUpdateRequired(config.minChromeExtVersion, extVersion);
-                if (updateRequired) {
-                    alert(
-                        'Jitsi Desktop Streamer requires update. ' +
-                        'Changes will take effect after next Chrome restart.');
-                }
-                isInstalledCallback(!updateRequired);
+                console.warn(
+                    "Extension not installed?: ", chrome.runtime.lastError);
+                callback(false, false);
+                return;
             }
+            // Check installed extension version
+            var extVersion = response.version;
+            console.log('Extension version is: ' + extVersion);
+            var updateRequired
+                = isUpdateRequired(config.minChromeExtVersion, extVersion);
+            callback(!updateRequired, updateRequired);
         }
     );
 }
 
 function doGetStreamFromExtension(streamCallback, failCallback) {
-    // Sends 'getStream' msg to the extension. Extension id must be defined in the config.
+    // Sends 'getStream' msg to the extension.
+    // Extension id must be defined in the config.
     chrome.runtime.sendMessage(
         config.chromeExtensionId,
         { getStream: true, sources: config.desktopSharingSources },
@@ -9338,38 +9610,46 @@ function doGetStreamFromExtension(streamCallback, failCallback) {
     );
 }
 /**
- * Asks Chrome extension to call chooseDesktopMedia and gets chrome 'desktop' stream for returned stream token.
+ * Asks Chrome extension to call chooseDesktopMedia and gets chrome 'desktop'
+ * stream for returned stream token.
  */
 function obtainScreenFromExtension(streamCallback, failCallback) {
-    checkExtInstalled(
-        function (isInstalled) {
-            if (isInstalled) {
-                doGetStreamFromExtension(streamCallback, failCallback);
-            } else {
-                chrome.webstore.install(
-                    getWebStoreInstallUrl(),
-                    function (arg) {
-                        console.log("Extension installed successfully", arg);
-                        // We need to reload the page in order to get the access to chrome.runtime
-                        window.location.reload(false);
-                    },
-                    function (arg) {
-                        console.log("Failed to install the extension", arg);
-                        failCallback(arg);
-                        APP.UI.messageHandler.showError("dialog.error",
-                            "dialog.failtoinstall");
-                    }
-                );
-            }
+    if (extInstalled) {
+        doGetStreamFromExtension(streamCallback, failCallback);
+    } else {
+        if (extUpdateRequired) {
+            alert(
+                'Jitsi Desktop Streamer requires update. ' +
+                'Changes will take effect after next Chrome restart.');
         }
-    );
+
+        chrome.webstore.install(
+            getWebStoreInstallUrl(),
+            function (arg) {
+                console.log("Extension installed successfully", arg);
+                extInstalled = true;
+                // We need to give a moment for the endpoint to become available
+                window.setTimeout(function () {
+                    doGetStreamFromExtension(streamCallback, failCallback);
+                }, 500);
+            },
+            function (arg) {
+                console.log("Failed to install the extension", arg);
+                failCallback(arg);
+                APP.UI.messageHandler.showError("dialog.error",
+                    "dialog.failtoinstall");
+            }
+        );
+    }
 }
 
 /**
  * Call this method to toggle desktop sharing feature.
- * @param method pass "ext" to use chrome extension for desktop capture(chrome extension required),
- *        pass "webrtc" to use WebRTC "screen" desktop source('chrome://flags/#enable-usermedia-screen-capture'
- *        must be enabled), pass any other string or nothing in order to disable this feature completely.
+ * @param method pass "ext" to use chrome extension for desktop capture(chrome
+ *        extension required), pass "webrtc" to use WebRTC "screen" desktop
+ *        source('chrome://flags/#enable-usermedia-screen-capture' must be
+ *        enabled), pass any other string or nothing in order to disable this
+ *        feature completely.
  */
 function setDesktopSharing(method) {
     // Check if we are running chrome
@@ -9389,15 +9669,23 @@ function setDesktopSharing(method) {
 }
 
 /**
- * Initializes <link rel=chrome-webstore-item /> with extension id set in config.js to support inline installs.
- * Host site must be selected as main website of published extension.
+ * Initializes <link rel=chrome-webstore-item /> with extension id set in
+ * config.js to support inline installs. Host site must be selected as main
+ * website of published extension.
  */
 function initInlineInstalls()
 {
     $("link[rel=chrome-webstore-item]").attr("href", getWebStoreInstallUrl());
 }
 
-function getSwitchStreamFailed(error) {
+function getVideoStreamFailed(error) {
+    console.error("Failed to obtain the stream to switch to", error);
+    switchInProgress = false;
+    isUsingScreenStream = false;
+    newStreamCreated(null);
+}
+
+function getDesktopStreamFailed(error) {
     console.error("Failed to obtain the stream to switch to", error);
     switchInProgress = false;
 }
@@ -9422,19 +9710,22 @@ module.exports = {
     },
 
     /**
-     * @returns {boolean} <tt>true</tt> if desktop sharing feature is available and enabled.
+     * @returns {boolean} <tt>true</tt> if desktop sharing feature is available
+     *          and enabled.
      */
     isDesktopSharingEnabled: function () {
         if (_desktopSharingEnabled === null) {
             if (obtainDesktopStream === obtainScreenFromExtension) {
                 // Parse chrome version
                 var userAgent = navigator.userAgent.toLowerCase();
-                // We can assume that user agent is chrome, because it's enforced when 'ext' streaming method is set
+                // We can assume that user agent is chrome, because it's
+                // enforced when 'ext' streaming method is set
                 var ver = parseInt(userAgent.match(/chrome\/(\d+)\./)[1], 10);
                 console.log("Chrome version" + userAgent, ver);
                 _desktopSharingEnabled = ver >= 34;
             } else {
-                _desktopSharingEnabled = obtainDesktopStream === obtainWebRTCScreen;
+                _desktopSharingEnabled =
+                    obtainDesktopStream === obtainWebRTCScreen;
             }
         }
         return _desktopSharingEnabled;
@@ -9445,18 +9736,28 @@ module.exports = {
 
         // Initialize Chrome extension inline installs
         if (config.chromeExtensionId) {
+
             initInlineInstalls();
+
+            // Check if extension is installed
+            checkExtInstalled(function (installed, updateRequired) {
+                extInstalled = installed;
+                extUpdateRequired = updateRequired;
+                console.info(
+                    "Chrome extension installed: " + extInstalled +
+                    " updateRequired: " + extUpdateRequired);
+            });
         }
 
         eventEmitter.emit(DesktopSharingEventTypes.INIT);
     },
 
-    addListener: function(listener, type)
+    addListener: function (listener, type)
     {
         eventEmitter.on(type, listener);
     },
 
-    removeListener: function (listener,type) {
+    removeListener: function (listener, type) {
         eventEmitter.removeListener(type, listener);
     },
 
@@ -9477,17 +9778,18 @@ module.exports = {
                 function (stream) {
                     // We now use screen stream
                     isUsingScreenStream = true;
-                    // Hook 'ended' event to restore camera when screen stream stops
+                    // Hook 'ended' event to restore camera
+                    // when screen stream stops
                     stream.addEventListener('ended',
                         function (e) {
                             if (!switchInProgress && isUsingScreenStream) {
-                                toggleScreenSharing();
+                                APP.desktopsharing.toggleScreenSharing();
                             }
                         }
                     );
                     newStreamCreated(stream);
                 },
-                getSwitchStreamFailed);
+                getDesktopStreamFailed);
         } else {
             // Disable screen stream
             APP.RTC.getUserMediaWithConstraints(
@@ -9497,14 +9799,14 @@ module.exports = {
                     isUsingScreenStream = false;
                     newStreamCreated(stream);
                 },
-                getSwitchStreamFailed, config.resolution || '360'
+                getVideoStreamFailed, config.resolution || '360'
             );
         }
     }
 };
 
 
-},{"../../service/desktopsharing/DesktopSharingEventTypes":95,"events":98}],37:[function(require,module,exports){
+},{"../../service/desktopsharing/DesktopSharingEventTypes":103,"events":107}],43:[function(require,module,exports){
 //maps keycode to character, id of popover for given function and function
 var shortcuts = {
     67: {
@@ -9597,7 +9899,138 @@ var KeyboardShortcut = {
 
 module.exports = KeyboardShortcut;
 
-},{}],38:[function(require,module,exports){
+},{}],44:[function(require,module,exports){
+/* global APP */
+
+/**
+ * This module is meant to (eventually) contain and manage all information
+ * about members/participants of the conference, so that other modules don't
+ * have to do it on their own, and so that other modules can access members'
+ * information from a single place.
+ *
+ * Currently this module only manages information about the support of jingle
+ * DTMF of the members. Other fields, as well as accessor methods are meant to
+ * be added as needed.
+ */
+
+var XMPPEvents = require("../../service/xmpp/XMPPEvents");
+var Events = require("../../service/members/Events");
+var EventEmitter = require("events");
+
+var eventEmitter = new EventEmitter();
+
+/**
+ * The actual container.
+ */
+var members = {};
+
+/**
+ * There is at least one member that supports DTMF (i.e. is jigasi).
+ */
+var atLeastOneDtmf = false;
+
+
+function registerListeners() {
+    APP.xmpp.addListener(XMPPEvents.MUC_MEMBER_JOINED, onMucMemberJoined);
+    APP.xmpp.addListener(XMPPEvents.MUC_MEMBER_LEFT, onMucMemberLeft);
+}
+
+/**
+ * Handles a new member joining the MUC.
+ */
+function onMucMemberJoined(jid, id, displayName) {
+    var member = {
+        displayName: displayName
+    };
+
+    APP.xmpp.getConnection().disco.info(
+        jid, "" /* node */, function(iq) { onDiscoInfoReceived(jid, iq); });
+
+    members[jid] = member;
+}
+
+/**
+ * Handles a member leaving the MUC.
+ */
+function onMucMemberLeft(jid) {
+    delete members[jid];
+    updateAtLeastOneDtmf();
+}
+
+/**
+ * Handles the reception of a disco#info packet from a particular JID.
+ * @param jid the JID sending the packet.
+ * @param iq the packet.
+ */
+function onDiscoInfoReceived(jid, iq) {
+    if (!members[jid])
+        return;
+
+    var supportsDtmf
+        = $(iq).find('>query>feature[var="urn:xmpp:jingle:dtmf:0"]').length > 0;
+    updateDtmf(jid, supportsDtmf);
+}
+
+/**
+ * Updates the 'supportsDtmf' field for a member.
+ * @param jid the jid of the member.
+ * @param newValue the new value for the 'supportsDtmf' field.
+ */
+function updateDtmf(jid, newValue) {
+    var oldValue = members[jid].supportsDtmf;
+    members[jid].supportsDtmf = newValue;
+
+    if (newValue != oldValue) {
+        updateAtLeastOneDtmf();
+    }
+}
+
+/**
+ * Checks each member's 'supportsDtmf' field and updates
+ * 'atLastOneSupportsDtmf'.
+ */
+function updateAtLeastOneDtmf(){
+    var newAtLeastOneDtmf = false;
+    for (var key in members) {
+        if (typeof members[key].supportsDtmf !== 'undefined'
+            && members[key].supportsDtmf) {
+            newAtLeastOneDtmf= true;
+            break;
+        }
+    }
+
+    if (atLeastOneDtmf != newAtLeastOneDtmf) {
+        atLeastOneDtmf = newAtLeastOneDtmf;
+        eventEmitter.emit(Events.DTMF_SUPPORT_CHANGED, atLeastOneDtmf);
+    }
+}
+
+
+/**
+ * Exported interface.
+ */
+var Members = {
+    start: function(){
+        registerListeners();
+    },
+    addListener: function(type, listener)
+    {
+        eventEmitter.on(type, listener);
+    },
+    removeListener: function (type, listener) {
+        eventEmitter.removeListener(type, listener);
+    },
+    size: function () {
+        return Object.keys(members).length;
+    },
+    getMembers: function () {
+        return members;
+    }
+};
+
+module.exports = Members;
+
+},{"../../service/members/Events":104,"../../service/xmpp/XMPPEvents":106,"events":107}],45:[function(require,module,exports){
 var email = '';
 var displayName = '';
 var userId;
@@ -9664,1269 +10097,7 @@ var Settings =
 
 module.exports = Settings;
 
-},{}],39:[function(require,module,exports){
-/**
- *
- * @constructor
- */
-function SimulcastLogger(name, lvl) {
-    this.name = name;
-    this.lvl = lvl;
-}
-
-SimulcastLogger.prototype.log = function (text) {
-    if (this.lvl) {
-        console.log(text);
-    }
-};
-
-SimulcastLogger.prototype.info = function (text) {
-    if (this.lvl > 1) {
-        console.info(text);
-    }
-};
-
-SimulcastLogger.prototype.fine = function (text) {
-    if (this.lvl > 2) {
-        console.log(text);
-    }
-};
-
-SimulcastLogger.prototype.error = function (text) {
-    console.error(text);
-};
-
-module.exports = SimulcastLogger;
-},{}],40:[function(require,module,exports){
-var SimulcastLogger = require("./SimulcastLogger");
-var SimulcastUtils = require("./SimulcastUtils");
-var MediaStreamType = require("../../service/RTC/MediaStreamTypes");
-
-function SimulcastReceiver() {
-    this.simulcastUtils = new SimulcastUtils();
-    this.logger = new SimulcastLogger('SimulcastReceiver', 1);
-}
-
-SimulcastReceiver.prototype._remoteVideoSourceCache = '';
-SimulcastReceiver.prototype._remoteMaps = {
-    msid2Quality: {},
-    ssrc2Msid: {},
-    msid2ssrc: {},
-    receivingVideoStreams: {}
-};
-
-SimulcastReceiver.prototype._cacheRemoteVideoSources = function (lines) {
-    this._remoteVideoSourceCache = this.simulcastUtils._getVideoSources(lines);
-};
-
-SimulcastReceiver.prototype._restoreRemoteVideoSources = function (lines) {
-    this.simulcastUtils._replaceVideoSources(lines, this._remoteVideoSourceCache);
-};
-
-SimulcastReceiver.prototype._ensureGoogConference = function (lines) {
-    var sb;
-
-    this.logger.info('Ensuring x-google-conference flag...')
-
-    if (this.simulcastUtils._indexOfArray('a=x-google-flag:conference', lines) === this.simulcastUtils._emptyCompoundIndex) {
-        // TODO(gp) do that for the audio as well as suggested by fippo.
-        // Add the google conference flag
-        sb = this.simulcastUtils._getVideoSources(lines);
-        sb = ['a=x-google-flag:conference'].concat(sb);
-        this.simulcastUtils._replaceVideoSources(lines, sb);
-    }
-};
-
-SimulcastReceiver.prototype._restoreSimulcastGroups = function (sb) {
-    this._restoreRemoteVideoSources(sb);
-};
-
-/**
- * Restores the simulcast groups of the remote description. In
- * transformRemoteDescription we remove those in order for the set remote
- * description to succeed. The focus needs the signal the groups to new
- * participants.
- *
- * @param desc
- * @returns {*}
- */
-SimulcastReceiver.prototype.reverseTransformRemoteDescription = function (desc) {
-    var sb;
-
-    if (!this.simulcastUtils.isValidDescription(desc)) {
-        return desc;
-    }
-
-    if (config.enableSimulcast) {
-        sb = desc.sdp.split('\r\n');
-
-        this._restoreSimulcastGroups(sb);
-
-        desc = new RTCSessionDescription({
-            type: desc.type,
-            sdp: sb.join('\r\n')
-        });
-    }
-
-    return desc;
-};
-
-SimulcastUtils.prototype._ensureOrder = function (lines) {
-    var videoSources, sb;
-
-    videoSources = this.parseMedia(lines, ['video'])[0];
-    sb = this._compileVideoSources(videoSources);
-
-    this._replaceVideoSources(lines, sb);
-};
-
-SimulcastReceiver.prototype._updateRemoteMaps = function (lines) {
-    var remoteVideoSources = this.simulcastUtils.parseMedia(lines, ['video'])[0],
-        videoSource, quality;
-
-    // (re) initialize the remote maps.
-    this._remoteMaps.msid2Quality = {};
-    this._remoteMaps.ssrc2Msid = {};
-    this._remoteMaps.msid2ssrc = {};
-
-    var self = this;
-    if (remoteVideoSources.groups && remoteVideoSources.groups.length !== 0) {
-        remoteVideoSources.groups.forEach(function (group) {
-            if (group.semantics === 'SIM' && group.ssrcs && group.ssrcs.length !== 0) {
-                quality = 0;
-                group.ssrcs.forEach(function (ssrc) {
-                    videoSource = remoteVideoSources.sources[ssrc];
-                    self._remoteMaps.msid2Quality[videoSource.msid] = quality++;
-                    self._remoteMaps.ssrc2Msid[videoSource.ssrc] = videoSource.msid;
-                    self._remoteMaps.msid2ssrc[videoSource.msid] = videoSource.ssrc;
-                });
-            }
-        });
-    }
-};
-
-SimulcastReceiver.prototype._setReceivingVideoStream = function (resource, ssrc) {
-    this._remoteMaps.receivingVideoStreams[resource] = ssrc;
-};
-
-/**
- * Returns a stream with single video track, the one currently being
- * received by this endpoint.
- *
- * @param stream the remote simulcast stream.
- * @returns {webkitMediaStream}
- */
-SimulcastReceiver.prototype.getReceivingVideoStream = function (stream) {
-    var tracks, i, electedTrack, msid, quality = 0, receivingTrackId;
-
-    var self = this;
-    if (config.enableSimulcast) {
-
-        stream.getVideoTracks().some(function (track) {
-            return Object.keys(self._remoteMaps.receivingVideoStreams).some(function (resource) {
-                var ssrc = self._remoteMaps.receivingVideoStreams[resource];
-                var msid = self._remoteMaps.ssrc2Msid[ssrc];
-                if (msid == [stream.id, track.id].join(' ')) {
-                    electedTrack = track;
-                    return true;
-                }
-            });
-        });
-
-        if (!electedTrack) {
-            // we don't have an elected track, choose by initial quality.
-            tracks = stream.getVideoTracks();
-            for (i = 0; i < tracks.length; i++) {
-                msid = [stream.id, tracks[i].id].join(' ');
-                if (this._remoteMaps.msid2Quality[msid] === quality) {
-                    electedTrack = tracks[i];
-                    break;
-                }
-            }
-
-            // TODO(gp) if the initialQuality could not be satisfied, lower
-            // the requirement and try again.
-        }
-    }
-
-    return (electedTrack)
-        ? new webkitMediaStream([electedTrack])
-        : stream;
-};
-
-SimulcastReceiver.prototype.getReceivingSSRC = function (jid) {
-    var resource = Strophe.getResourceFromJid(jid);
-    var ssrc = this._remoteMaps.receivingVideoStreams[resource];
-
-    // If we haven't receiving a "changed" event yet, then we must be receiving
-    // low quality (that the sender always streams).
-    if(!ssrc)
-    {
-        var remoteStreamObject = APP.RTC.remoteStreams[jid][MediaStreamType.VIDEO_TYPE];
-        var remoteStream = remoteStreamObject.getOriginalStream();
-        var tracks = remoteStream.getVideoTracks();
-        if (tracks) {
-            for (var k = 0; k < tracks.length; k++) {
-                var track = tracks[k];
-                var msid = [remoteStream.id, track.id].join(' ');
-                var _ssrc = this._remoteMaps.msid2ssrc[msid];
-                var quality = this._remoteMaps.msid2Quality[msid];
-                if (quality == 0) {
-                    ssrc = _ssrc;
-                }
-            }
-        }
-    }
-
-    return ssrc;
-};
-
-SimulcastReceiver.prototype.getReceivingVideoStreamBySSRC = function (ssrc)
-{
-    var sid, electedStream;
-    var i, j, k;
-    var jid = APP.xmpp.getJidFromSSRC(ssrc);
-    if(jid && APP.RTC.remoteStreams[jid])
-    {
-        var remoteStreamObject = APP.RTC.remoteStreams[jid][MediaStreamType.VIDEO_TYPE];
-        var remoteStream = remoteStreamObject.getOriginalStream();
-        var tracks = remoteStream.getVideoTracks();
-        if (tracks) {
-            for (k = 0; k < tracks.length; k++) {
-                var track = tracks[k];
-                var msid = [remoteStream.id, track.id].join(' ');
-                var tmp = this._remoteMaps.msid2ssrc[msid];
-                if (tmp == ssrc) {
-                    electedStream = new webkitMediaStream([track]);
-                    sid = remoteStreamObject.sid;
-                    // stream found, stop.
-                    break;
-                }
-            }
-        }
-
-    }
-    else
-    {
-        console.debug(APP.RTC.remoteStreams, jid, ssrc);
-    }
-
-    return {
-        sid: sid,
-        stream: electedStream
-    };
-};
-
-/**
- * Gets the fully qualified msid (stream.id + track.id) associated to the
- * SSRC.
- *
- * @param ssrc
- * @returns {*}
- */
-SimulcastReceiver.prototype.getRemoteVideoStreamIdBySSRC = function (ssrc) {
-    return this._remoteMaps.ssrc2Msid[ssrc];
-};
-
-/**
- * Removes the ssrc-group:SIM from the remote description bacause Chrome
- * either gets confused and thinks this is an FID group or, if an FID group
- * is already present, it fails to set the remote description.
- *
- * @param desc
- * @returns {*}
- */
-SimulcastReceiver.prototype.transformRemoteDescription = function (desc) {
-
-    if (desc && desc.sdp) {
-        var sb = desc.sdp.split('\r\n');
-
-        this._updateRemoteMaps(sb);
-        this._cacheRemoteVideoSources(sb);
-
-        // NOTE(gp) this needs to be called after updateRemoteMaps because we
-        // need the simulcast group in the _updateRemoteMaps() method.
-        this.simulcastUtils._removeSimulcastGroup(sb);
-
-        if (desc.sdp.indexOf('a=ssrc-group:SIM') !== -1) {
-            // We don't need the goog conference flag if we're not doing
-            // simulcast.
-            this._ensureGoogConference(sb);
-        }
-
-        desc = new RTCSessionDescription({
-            type: desc.type,
-            sdp: sb.join('\r\n')
-        });
-
-        this.logger.fine(['Transformed remote description', desc.sdp].join(' '));
-    }
-
-    return desc;
-};
-
-module.exports = SimulcastReceiver;
-},{"../../service/RTC/MediaStreamTypes":87,"./SimulcastLogger":39,"./SimulcastUtils":42}],41:[function(require,module,exports){
-var SimulcastLogger = require("./SimulcastLogger");
-var SimulcastUtils = require("./SimulcastUtils");
-
-function SimulcastSender() {
-    this.simulcastUtils = new SimulcastUtils();
-    this.logger = new SimulcastLogger('SimulcastSender', 1);
-}
-
-SimulcastSender.prototype.displayedLocalVideoStream = null;
-
-SimulcastSender.prototype._generateGuid = (function () {
-    function s4() {
-        return Math.floor((1 + Math.random()) * 0x10000)
-            .toString(16)
-            .substring(1);
-    }
-
-    return function () {
-        return s4() + s4() + '-' + s4() + '-' + s4() + '-' +
-            s4() + '-' + s4() + s4() + s4();
-    };
-}());
-
-// Returns a random integer between min (included) and max (excluded)
-// Using Math.round() gives a non-uniform distribution!
-SimulcastSender.prototype._generateRandomSSRC = function () {
-    var min = 0, max = 0xffffffff;
-    return Math.floor(Math.random() * (max - min)) + min;
-};
-
-SimulcastSender.prototype.getLocalVideoStream = function () {
-    return (this.displayedLocalVideoStream != null)
-        ? this.displayedLocalVideoStream
-        // in case we have no simulcast at all, i.e. we didn't perform the GUM
-        : APP.RTC.localVideo.getOriginalStream();
-};
-
-function NativeSimulcastSender() {
-    SimulcastSender.call(this); // call the super constructor.
-}
-
-NativeSimulcastSender.prototype = Object.create(SimulcastSender.prototype);
-
-NativeSimulcastSender.prototype._localExplosionMap = {};
-NativeSimulcastSender.prototype._isUsingScreenStream = false;
-NativeSimulcastSender.prototype._localVideoSourceCache = '';
-
-NativeSimulcastSender.prototype.reset = function () {
-    this._localExplosionMap = {};
-    this._isUsingScreenStream = APP.desktopsharing.isUsingScreenStream();
-};
-
-NativeSimulcastSender.prototype._cacheLocalVideoSources = function (lines) {
-    this._localVideoSourceCache = this.simulcastUtils._getVideoSources(lines);
-};
-
-NativeSimulcastSender.prototype._restoreLocalVideoSources = function (lines) {
-    this.simulcastUtils._replaceVideoSources(lines, this._localVideoSourceCache);
-};
-
-NativeSimulcastSender.prototype._appendSimulcastGroup = function (lines) {
-    var videoSources, ssrcGroup, simSSRC, numOfSubs = 2, i, sb, msid;
-
-    this.logger.info('Appending simulcast group...');
-
-    // Get the primary SSRC information.
-    videoSources = this.simulcastUtils.parseMedia(lines, ['video'])[0];
-
-    // Start building the SIM SSRC group.
-    ssrcGroup = ['a=ssrc-group:SIM'];
-
-    // The video source buffer.
-    sb = [];
-
-    // Create the simulcast sub-streams.
-    for (i = 0; i < numOfSubs; i++) {
-        // TODO(gp) prevent SSRC collision.
-        simSSRC = this._generateRandomSSRC();
-        ssrcGroup.push(simSSRC);
-
-        if (videoSources.base) {
-            sb.splice.apply(sb, [sb.length, 0].concat(
-                [["a=ssrc:", simSSRC, " cname:", videoSources.base.cname].join(''),
-                    ["a=ssrc:", simSSRC, " msid:", videoSources.base.msid].join('')]
-            ));
-        }
-
-        this.logger.info(['Generated substream ', i, ' with SSRC ', simSSRC, '.'].join(''));
-
-    }
-
-    // Add the group sim layers.
-    sb.splice(0, 0, ssrcGroup.join(' '))
-
-    this.simulcastUtils._replaceVideoSources(lines, sb);
-};
-
-// Does the actual patching.
-NativeSimulcastSender.prototype._ensureSimulcastGroup = function (lines) {
-
-    this.logger.info('Ensuring simulcast group...');
-
-    if (this.simulcastUtils._indexOfArray('a=ssrc-group:SIM', lines) === this.simulcastUtils._emptyCompoundIndex) {
-        this._appendSimulcastGroup(lines);
-        this._cacheLocalVideoSources(lines);
-    } else {
-        // verify that the ssrcs participating in the SIM group are present
-        // in the SDP (needed for presence).
-        this._restoreLocalVideoSources(lines);
-    }
-};
-
-/**
- * Produces a single stream with multiple tracks for local video sources.
- *
- * @param lines
- * @private
- */
-NativeSimulcastSender.prototype._explodeSimulcastSenderSources = function (lines) {
-    var sb, msid, sid, tid, videoSources, self;
-
-    this.logger.info('Exploding local video sources...');
-
-    videoSources = this.simulcastUtils.parseMedia(lines, ['video'])[0];
-
-    self = this;
-    if (videoSources.groups && videoSources.groups.length !== 0) {
-        videoSources.groups.forEach(function (group) {
-            if (group.semantics === 'SIM') {
-                group.ssrcs.forEach(function (ssrc) {
-
-                    // Get the msid for this ssrc..
-                    if (self._localExplosionMap[ssrc]) {
-                        // .. either from the explosion map..
-                        msid = self._localExplosionMap[ssrc];
-                    } else {
-                        // .. or generate a new one (msid).
-                        sid = videoSources.sources[ssrc].msid
-                            .substring(0, videoSources.sources[ssrc].msid.indexOf(' '));
-
-                        tid = self._generateGuid();
-                        msid = [sid, tid].join(' ');
-                        self._localExplosionMap[ssrc] = msid;
-                    }
-
-                    // Assign it to the source object.
-                    videoSources.sources[ssrc].msid = msid;
-
-                    // TODO(gp) Change the msid of associated sources.
-                });
-            }
-        });
-    }
-
-    sb = this.simulcastUtils._compileVideoSources(videoSources);
-
-    this.simulcastUtils._replaceVideoSources(lines, sb);
-};
-
-/**
- * GUM for simulcast.
- *
- * @param constraints
- * @param success
- * @param err
- */
-NativeSimulcastSender.prototype.getUserMedia = function (constraints, success, err) {
-
-    // There's nothing special to do for native simulcast, so just do a normal GUM.
-    navigator.webkitGetUserMedia(constraints, function (hqStream) {
-        success(hqStream);
-    }, err);
-};
-
-/**
- * Prepares the local description for public usage (i.e. to be signaled
- * through Jingle to the focus).
- *
- * @param desc
- * @returns {RTCSessionDescription}
- */
-NativeSimulcastSender.prototype.reverseTransformLocalDescription = function (desc) {
-    var sb;
-
-    if (!this.simulcastUtils.isValidDescription(desc) || this._isUsingScreenStream) {
-        return desc;
-    }
-
-
-    sb = desc.sdp.split('\r\n');
-
-    this._explodeSimulcastSenderSources(sb);
-
-    desc = new RTCSessionDescription({
-        type: desc.type,
-        sdp: sb.join('\r\n')
-    });
-
-    this.logger.fine(['Exploded local video sources', desc.sdp].join(' '));
-
-    return desc;
-};
-
-/**
- * Ensures that the simulcast group is present in the answer, _if_ native
- * simulcast is enabled,
- *
- * @param desc
- * @returns {*}
- */
-NativeSimulcastSender.prototype.transformAnswer = function (desc) {
-
-    if (!this.simulcastUtils.isValidDescription(desc) || this._isUsingScreenStream) {
-        return desc;
-    }
-
-    var sb = desc.sdp.split('\r\n');
-
-    // Even if we have enabled native simulcasting previously
-    // (with a call to SLD with an appropriate SDP, for example),
-    // createAnswer seems to consistently generate incomplete SDP
-    // with missing SSRCS.
-    //
-    // So, subsequent calls to SLD will have missing SSRCS and presence
-    // won't have the complete list of SRCs.
-    this._ensureSimulcastGroup(sb);
-
-    desc = new RTCSessionDescription({
-        type: desc.type,
-        sdp: sb.join('\r\n')
-    });
-
-    this.logger.fine(['Transformed answer', desc.sdp].join(' '));
-
-    return desc;
-};
-
-
-/**
- *
- *
- * @param desc
- * @returns {*}
- */
-NativeSimulcastSender.prototype.transformLocalDescription = function (desc) {
-    return desc;
-};
-
-NativeSimulcastSender.prototype._setLocalVideoStreamEnabled = function (ssrc, enabled) {
-    // Nothing to do here, native simulcast does that auto-magically.
-};
-
-NativeSimulcastSender.prototype.constructor = NativeSimulcastSender;
-
-function SimpleSimulcastSender() {
-    SimulcastSender.call(this);
-}
-
-SimpleSimulcastSender.prototype = Object.create(SimulcastSender.prototype);
-
-SimpleSimulcastSender.prototype.localStream = null;
-SimpleSimulcastSender.prototype._localMaps = {
-    msids: [],
-    msid2ssrc: {}
-};
-
-/**
- * Groups local video sources together in the ssrc-group:SIM group.
- *
- * @param lines
- * @private
- */
-SimpleSimulcastSender.prototype._groupLocalVideoSources = function (lines) {
-    var sb, videoSources, ssrcs = [], ssrc;
-
-    this.logger.info('Grouping local video sources...');
-
-    videoSources = this.simulcastUtils.parseMedia(lines, ['video'])[0];
-
-    for (ssrc in videoSources.sources) {
-        // jitsi-meet destroys/creates streams at various places causing
-        // the original local stream ids to change. The only thing that
-        // remains unchanged is the trackid.
-        this._localMaps.msid2ssrc[videoSources.sources[ssrc].msid.split(' ')[1]] = ssrc;
-    }
-
-    var self = this;
-    // TODO(gp) add only "free" sources.
-    this._localMaps.msids.forEach(function (msid) {
-        ssrcs.push(self._localMaps.msid2ssrc[msid]);
-    });
-
-    if (!videoSources.groups) {
-        videoSources.groups = [];
-    }
-
-    videoSources.groups.push({
-        'semantics': 'SIM',
-        'ssrcs': ssrcs
-    });
-
-    sb = this.simulcastUtils._compileVideoSources(videoSources);
-
-    this.simulcastUtils._replaceVideoSources(lines, sb);
-};
-
-/**
- * GUM for simulcast.
- *
- * @param constraints
- * @param success
- * @param err
- */
-SimpleSimulcastSender.prototype.getUserMedia = function (constraints, success, err) {
-
-    // TODO(gp) what if we request a resolution not supported by the hardware?
-    // TODO(gp) make the lq stream configurable; although this wouldn't work with native simulcast
-    var lqConstraints = {
-        audio: false,
-        video: {
-            mandatory: {
-                maxWidth: 320,
-                maxHeight: 180,
-                maxFrameRate: 15
-            }
-        }
-    };
-
-    this.logger.info('HQ constraints: ', constraints);
-    this.logger.info('LQ constraints: ', lqConstraints);
-
-
-    // NOTE(gp) if we request the lq stream first webkitGetUserMedia
-    // fails randomly. Tested with Chrome 37. As fippo suggested, the
-    // reason appears to be that Chrome only acquires the cam once and
-    // then downscales the picture (https://code.google.com/p/chromium/issues/detail?id=346616#c11)
-
-    var self = this;
-    navigator.webkitGetUserMedia(constraints, function (hqStream) {
-
-        self.localStream = hqStream;
-
-        // reset local maps.
-        self._localMaps.msids = [];
-        self._localMaps.msid2ssrc = {};
-
-        // add hq trackid to local map
-        self._localMaps.msids.push(hqStream.getVideoTracks()[0].id);
-
-        navigator.webkitGetUserMedia(lqConstraints, function (lqStream) {
-
-            self.displayedLocalVideoStream = lqStream;
-
-            // NOTE(gp) The specification says Array.forEach() will visit
-            // the array elements in numeric order, and that it doesn't
-            // visit elements that don't exist.
-
-            // add lq trackid to local map
-            self._localMaps.msids.splice(0, 0, lqStream.getVideoTracks()[0].id);
-
-            self.localStream.addTrack(lqStream.getVideoTracks()[0]);
-            success(self.localStream);
-        }, err);
-    }, err);
-};
-
-/**
- * Prepares the local description for public usage (i.e. to be signaled
- * through Jingle to the focus).
- *
- * @param desc
- * @returns {RTCSessionDescription}
- */
-SimpleSimulcastSender.prototype.reverseTransformLocalDescription = function (desc) {
-    var sb;
-
-    if (!this.simulcastUtils.isValidDescription(desc)) {
-        return desc;
-    }
-
-    sb = desc.sdp.split('\r\n');
-
-    this._groupLocalVideoSources(sb);
-
-    desc = new RTCSessionDescription({
-        type: desc.type,
-        sdp: sb.join('\r\n')
-    });
-
-    this.logger.fine('Grouped local video sources');
-    this.logger.fine(desc.sdp);
-
-    return desc;
-};
-
-/**
- * Ensures that the simulcast group is present in the answer, _if_ native
- * simulcast is enabled,
- *
- * @param desc
- * @returns {*}
- */
-SimpleSimulcastSender.prototype.transformAnswer = function (desc) {
-    return desc;
-};
-
-
-/**
- *
- *
- * @param desc
- * @returns {*}
- */
-SimpleSimulcastSender.prototype.transformLocalDescription = function (desc) {
-
-    var sb = desc.sdp.split('\r\n');
-
-    this.simulcastUtils._removeSimulcastGroup(sb);
-
-    desc = new RTCSessionDescription({
-        type: desc.type,
-        sdp: sb.join('\r\n')
-    });
-
-    this.logger.fine('Transformed local description');
-    this.logger.fine(desc.sdp);
-
-    return desc;
-};
-
-SimpleSimulcastSender.prototype._setLocalVideoStreamEnabled = function (ssrc, enabled) {
-    var trackid;
-
-    var self = this;
-    this.logger.log(['Requested to', enabled ? 'enable' : 'disable', ssrc].join(' '));
-    if (Object.keys(this._localMaps.msid2ssrc).some(function (tid) {
-        // Search for the track id that corresponds to the ssrc
-        if (self._localMaps.msid2ssrc[tid] == ssrc) {
-            trackid = tid;
-            return true;
-        }
-    }) && self.localStream.getVideoTracks().some(function (track) {
-        // Start/stop the track that corresponds to the track id
-        if (track.id === trackid) {
-            track.enabled = enabled;
-            return true;
-        }
-    })) {
-        this.logger.log([trackid, enabled ? 'enabled' : 'disabled'].join(' '));
-        $(document).trigger(enabled
-            ? 'simulcastlayerstarted'
-            : 'simulcastlayerstopped');
-    } else {
-        this.logger.error("I don't have a local stream with SSRC " + ssrc);
-    }
-};
-
-SimpleSimulcastSender.prototype.constructor = SimpleSimulcastSender;
-
-function NoSimulcastSender() {
-    SimulcastSender.call(this);
-}
-
-NoSimulcastSender.prototype = Object.create(SimulcastSender.prototype);
-
-/**
- * GUM for simulcast.
- *
- * @param constraints
- * @param success
- * @param err
- */
-NoSimulcastSender.prototype.getUserMedia = function (constraints, success, err) {
-    navigator.webkitGetUserMedia(constraints, function (hqStream) {
-        success(hqStream);
-    }, err);
-};
-
-/**
- * Prepares the local description for public usage (i.e. to be signaled
- * through Jingle to the focus).
- *
- * @param desc
- * @returns {RTCSessionDescription}
- */
-NoSimulcastSender.prototype.reverseTransformLocalDescription = function (desc) {
-    return desc;
-};
-
-/**
- * Ensures that the simulcast group is present in the answer, _if_ native
- * simulcast is enabled,
- *
- * @param desc
- * @returns {*}
- */
-NoSimulcastSender.prototype.transformAnswer = function (desc) {
-    return desc;
-};
-
-
-/**
- *
- *
- * @param desc
- * @returns {*}
- */
-NoSimulcastSender.prototype.transformLocalDescription = function (desc) {
-    return desc;
-};
-
-NoSimulcastSender.prototype._setLocalVideoStreamEnabled = function (ssrc, enabled) {
-
-};
-
-NoSimulcastSender.prototype.constructor = NoSimulcastSender;
-
-module.exports = {
-    "native": NativeSimulcastSender,
-    "no": NoSimulcastSender
-}
-
-},{"./SimulcastLogger":39,"./SimulcastUtils":42}],42:[function(require,module,exports){
-var SimulcastLogger = require("./SimulcastLogger");
-
-/**
- *
- * @constructor
- */
-function SimulcastUtils() {
-    this.logger = new SimulcastLogger("SimulcastUtils", 1);
-}
-
-/**
- *
- * @type {{}}
- * @private
- */
-SimulcastUtils.prototype._emptyCompoundIndex = {};
-
-/**
- *
- * @param lines
- * @param videoSources
- * @private
- */
-SimulcastUtils.prototype._replaceVideoSources = function (lines, videoSources) {
-    var i, inVideo = false, index = -1, howMany = 0;
-
-    this.logger.info('Replacing video sources...');
-
-    for (i = 0; i < lines.length; i++) {
-        if (inVideo && lines[i].substring(0, 'm='.length) === 'm=') {
-            // Out of video.
-            break;
-        }
-
-        if (!inVideo && lines[i].substring(0, 'm=video '.length) === 'm=video ') {
-            // In video.
-            inVideo = true;
-        }
-
-        if (inVideo && (lines[i].substring(0, 'a=ssrc:'.length) === 'a=ssrc:'
-            || lines[i].substring(0, 'a=ssrc-group:'.length) === 'a=ssrc-group:')) {
-
-            if (index === -1) {
-                index = i;
-            }
-
-            howMany++;
-        }
-    }
-
-    //  efficiency baby ;)
-    lines.splice.apply(lines,
-        [index, howMany].concat(videoSources));
-
-};
-
-SimulcastUtils.prototype.isValidDescription = function (desc)
-{
-    return desc && desc != null
-        && desc.type && desc.type != ''
-        && desc.sdp && desc.sdp != '';
-};
-
-SimulcastUtils.prototype._getVideoSources = function (lines) {
-    var i, inVideo = false, sb = [];
-
-    this.logger.info('Getting video sources...');
-
-    for (i = 0; i < lines.length; i++) {
-        if (inVideo && lines[i].substring(0, 'm='.length) === 'm=') {
-            // Out of video.
-            break;
-        }
-
-        if (!inVideo && lines[i].substring(0, 'm=video '.length) === 'm=video ') {
-            // In video.
-            inVideo = true;
-        }
-
-        if (inVideo && lines[i].substring(0, 'a=ssrc:'.length) === 'a=ssrc:') {
-            // In SSRC.
-            sb.push(lines[i]);
-        }
-
-        if (inVideo && lines[i].substring(0, 'a=ssrc-group:'.length) === 'a=ssrc-group:') {
-            sb.push(lines[i]);
-        }
-    }
-
-    return sb;
-};
-
-SimulcastUtils.prototype.parseMedia = function (lines, mediatypes) {
-    var i, res = [], type, cur_media, idx, ssrcs, cur_ssrc, ssrc,
-        ssrc_attribute, group, semantics, skip = true;
-
-    this.logger.info('Parsing media sources...');
-
-    for (i = 0; i < lines.length; i++) {
-        if (lines[i].substring(0, 'm='.length) === 'm=') {
-
-            type = lines[i]
-                .substr('m='.length, lines[i].indexOf(' ') - 'm='.length);
-            skip = mediatypes !== undefined && mediatypes.indexOf(type) === -1;
-
-            if (!skip) {
-                cur_media = {
-                    'type': type,
-                    'sources': {},
-                    'groups': []
-                };
-
-                res.push(cur_media);
-            }
-
-        } else if (!skip && lines[i].substring(0, 'a=ssrc:'.length) === 'a=ssrc:') {
-
-            idx = lines[i].indexOf(' ');
-            ssrc = lines[i].substring('a=ssrc:'.length, idx);
-            if (cur_media.sources[ssrc] === undefined) {
-                cur_ssrc = {'ssrc': ssrc};
-                cur_media.sources[ssrc] = cur_ssrc;
-            }
-
-            ssrc_attribute = lines[i].substr(idx + 1).split(':', 2)[0];
-            cur_ssrc[ssrc_attribute] = lines[i].substr(idx + 1).split(':', 2)[1];
-
-            if (cur_media.base === undefined) {
-                cur_media.base = cur_ssrc;
-            }
-
-        } else if (!skip && lines[i].substring(0, 'a=ssrc-group:'.length) === 'a=ssrc-group:') {
-            idx = lines[i].indexOf(' ');
-            semantics = lines[i].substr(0, idx).substr('a=ssrc-group:'.length);
-            ssrcs = lines[i].substr(idx).trim().split(' ');
-            group = {
-                'semantics': semantics,
-                'ssrcs': ssrcs
-            };
-            cur_media.groups.push(group);
-        } else if (!skip && (lines[i].substring(0, 'a=sendrecv'.length) === 'a=sendrecv' ||
-            lines[i].substring(0, 'a=recvonly'.length) === 'a=recvonly' ||
-            lines[i].substring(0, 'a=sendonly'.length) === 'a=sendonly' ||
-            lines[i].substring(0, 'a=inactive'.length) === 'a=inactive')) {
-
-            cur_media.direction = lines[i].substring('a='.length);
-        }
-    }
-
-    return res;
-};
-
-/**
- * The _indexOfArray() method returns the first a CompoundIndex at which a
- * given element can be found in the array, or _emptyCompoundIndex if it is
- * not present.
- *
- * Example:
- *
- * _indexOfArray('3', [ 'this is line 1', 'this is line 2', 'this is line 3' ])
- *
- * returns {row: 2, column: 14}
- *
- * @param needle
- * @param haystack
- * @param start
- * @returns {}
- * @private
- */
-SimulcastUtils.prototype._indexOfArray = function (needle, haystack, start) {
-    var length = haystack.length, idx, i;
-
-    if (!start) {
-        start = 0;
-    }
-
-    for (i = start; i < length; i++) {
-        idx = haystack[i].indexOf(needle);
-        if (idx !== -1) {
-            return {row: i, column: idx};
-        }
-    }
-    return this._emptyCompoundIndex;
-};
-
-SimulcastUtils.prototype._removeSimulcastGroup = function (lines) {
-    var i;
-
-    for (i = lines.length - 1; i >= 0; i--) {
-        if (lines[i].indexOf('a=ssrc-group:SIM') !== -1) {
-            lines.splice(i, 1);
-        }
-    }
-};
-
-SimulcastUtils.prototype._compileVideoSources = function (videoSources) {
-    var sb = [], ssrc, addedSSRCs = [];
-
-    this.logger.info('Compiling video sources...');
-
-    // Add the groups
-    if (videoSources.groups && videoSources.groups.length !== 0) {
-        videoSources.groups.forEach(function (group) {
-            if (group.ssrcs && group.ssrcs.length !== 0) {
-                sb.push([['a=ssrc-group:', group.semantics].join(''), group.ssrcs.join(' ')].join(' '));
-
-                // if (group.semantics !== 'SIM') {
-                group.ssrcs.forEach(function (ssrc) {
-                    addedSSRCs.push(ssrc);
-                    sb.splice.apply(sb, [sb.length, 0].concat([
-                        ["a=ssrc:", ssrc, " cname:", videoSources.sources[ssrc].cname].join(''),
-                        ["a=ssrc:", ssrc, " msid:", videoSources.sources[ssrc].msid].join('')]));
-                });
-                //}
-            }
-        });
-    }
-
-    // Then add any free sources.
-    if (videoSources.sources) {
-        for (ssrc in videoSources.sources) {
-            if (addedSSRCs.indexOf(ssrc) === -1) {
-                sb.splice.apply(sb, [sb.length, 0].concat([
-                    ["a=ssrc:", ssrc, " cname:", videoSources.sources[ssrc].cname].join(''),
-                    ["a=ssrc:", ssrc, " msid:", videoSources.sources[ssrc].msid].join('')]));
-            }
-        }
-    }
-
-    return sb;
-};
-
-module.exports = SimulcastUtils;
-},{"./SimulcastLogger":39}],43:[function(require,module,exports){
-/*jslint plusplus: true */
-/*jslint nomen: true*/
-
-var SimulcastSender = require("./SimulcastSender");
-var NoSimulcastSender = SimulcastSender["no"];
-var NativeSimulcastSender = SimulcastSender["native"];
-var SimulcastReceiver = require("./SimulcastReceiver");
-var SimulcastUtils = require("./SimulcastUtils");
-var RTCEvents = require("../../service/RTC/RTCEvents");
-
-
-/**
- *
- * @constructor
- */
-function SimulcastManager() {
-
-    // Create the simulcast utilities.
-    this.simulcastUtils = new SimulcastUtils();
-
-    // Create remote simulcast.
-    this.simulcastReceiver = new SimulcastReceiver();
-
-    // Initialize local simulcast.
-
-    // TODO(gp) move into SimulcastManager.prototype.getUserMedia and take into
-    // account constraints.
-    if (!config.enableSimulcast) {
-        this.simulcastSender = new NoSimulcastSender();
-    } else {
-
-        var isChromium = window.chrome,
-            vendorName = window.navigator.vendor;
-        if(isChromium !== null && isChromium !== undefined
-            /* skip opera */
-            && vendorName === "Google Inc."
-            /* skip Chromium as suggested by fippo */
-            && !window.navigator.appVersion.match(/Chromium\//) ) {
-            var ver = parseInt(window.navigator.appVersion.match(/Chrome\/(\d+)\./)[1], 10);
-            if (ver > 37) {
-                this.simulcastSender = new NativeSimulcastSender();
-            } else {
-                this.simulcastSender = new NoSimulcastSender();
-            }
-        } else {
-            this.simulcastSender = new NoSimulcastSender();
-        }
-
-    }
-    APP.RTC.addListener(RTCEvents.SIMULCAST_LAYER_CHANGED,
-        function (endpointSimulcastLayers) {
-            endpointSimulcastLayers.forEach(function (esl) {
-                var ssrc = esl.simulcastLayer.primarySSRC;
-                simulcast._setReceivingVideoStream(esl.endpoint, ssrc);
-            });
-        });
-    APP.RTC.addListener(RTCEvents.SIMULCAST_START, function (simulcastLayer) {
-        var ssrc = simulcastLayer.primarySSRC;
-        simulcast._setLocalVideoStreamEnabled(ssrc, true);
-    });
-    APP.RTC.addListener(RTCEvents.SIMULCAST_STOP, function (simulcastLayer) {
-        var ssrc = simulcastLayer.primarySSRC;
-        simulcast._setLocalVideoStreamEnabled(ssrc, false);
-    });
-
-}
-
-/**
- * Restores the simulcast groups of the remote description. In
- * transformRemoteDescription we remove those in order for the set remote
- * description to succeed. The focus needs the signal the groups to new
- * participants.
- *
- * @param desc
- * @returns {*}
- */
-SimulcastManager.prototype.reverseTransformRemoteDescription = function (desc) {
-    return this.simulcastReceiver.reverseTransformRemoteDescription(desc);
-};
-
-/**
- * Removes the ssrc-group:SIM from the remote description bacause Chrome
- * either gets confused and thinks this is an FID group or, if an FID group
- * is already present, it fails to set the remote description.
- *
- * @param desc
- * @returns {*}
- */
-SimulcastManager.prototype.transformRemoteDescription = function (desc) {
-    return this.simulcastReceiver.transformRemoteDescription(desc);
-};
-
-/**
- * Gets the fully qualified msid (stream.id + track.id) associated to the
- * SSRC.
- *
- * @param ssrc
- * @returns {*}
- */
-SimulcastManager.prototype.getRemoteVideoStreamIdBySSRC = function (ssrc) {
-    return this.simulcastReceiver.getRemoteVideoStreamIdBySSRC(ssrc);
-};
-
-/**
- * Returns a stream with single video track, the one currently being
- * received by this endpoint.
- *
- * @param stream the remote simulcast stream.
- * @returns {webkitMediaStream}
- */
-SimulcastManager.prototype.getReceivingVideoStream = function (stream) {
-    return this.simulcastReceiver.getReceivingVideoStream(stream);
-};
-
-/**
- *
- *
- * @param desc
- * @returns {*}
- */
-SimulcastManager.prototype.transformLocalDescription = function (desc) {
-    return this.simulcastSender.transformLocalDescription(desc);
-};
-
-/**
- *
- * @returns {*}
- */
-SimulcastManager.prototype.getLocalVideoStream = function() {
-    return this.simulcastSender.getLocalVideoStream();
-};
-
-/**
- * GUM for simulcast.
- *
- * @param constraints
- * @param success
- * @param err
- */
-SimulcastManager.prototype.getUserMedia = function (constraints, success, err) {
-
-    this.simulcastSender.getUserMedia(constraints, success, err);
-};
-
-/**
- * Prepares the local description for public usage (i.e. to be signaled
- * through Jingle to the focus).
- *
- * @param desc
- * @returns {RTCSessionDescription}
- */
-SimulcastManager.prototype.reverseTransformLocalDescription = function (desc) {
-    return this.simulcastSender.reverseTransformLocalDescription(desc);
-};
-
-/**
- * Ensures that the simulcast group is present in the answer, _if_ native
- * simulcast is enabled,
- *
- * @param desc
- * @returns {*}
- */
-SimulcastManager.prototype.transformAnswer = function (desc) {
-    return this.simulcastSender.transformAnswer(desc);
-};
-
-SimulcastManager.prototype.getReceivingSSRC = function (jid) {
-    return this.simulcastReceiver.getReceivingSSRC(jid);
-};
-
-SimulcastManager.prototype.getReceivingVideoStreamBySSRC = function (msid) {
-    return this.simulcastReceiver.getReceivingVideoStreamBySSRC(msid);
-};
-
-/**
- *
- * @param lines
- * @param mediatypes
- * @returns {*}
- */
-SimulcastManager.prototype.parseMedia = function(lines, mediatypes) {
-    var sb = lines.sdp.split('\r\n');
-    return this.simulcastUtils.parseMedia(sb, mediatypes);
-};
-
-SimulcastManager.prototype._setReceivingVideoStream = function(resource, ssrc) {
-    this.simulcastReceiver._setReceivingVideoStream(resource, ssrc);
-};
-
-SimulcastManager.prototype._setLocalVideoStreamEnabled = function(ssrc, enabled) {
-    this.simulcastSender._setLocalVideoStreamEnabled(ssrc, enabled);
-};
-
-SimulcastManager.prototype.resetSender = function() {
-    if (typeof this.simulcastSender.reset === 'function'){
-        this.simulcastSender.reset();
-    }
-};
-
-var simulcast = new SimulcastManager();
-
-module.exports = simulcast;
-},{"../../service/RTC/RTCEvents":89,"./SimulcastReceiver":40,"./SimulcastSender":41,"./SimulcastUtils":42}],44:[function(require,module,exports){
+},{}],46:[function(require,module,exports){
 /**
  * Provides statistics for the local stream.
  */
@@ -11057,7 +10228,7 @@ LocalStatsCollector.prototype.stop = function () {
 };
 
 module.exports = LocalStatsCollector;
-},{}],45:[function(require,module,exports){
+},{}],47:[function(require,module,exports){
 /* global ssrc2jid */
 /* jshint -W117 */
 var RTCBrowserType = require("../../service/RTC/RTCBrowserType");
@@ -11320,7 +10491,7 @@ StatsCollector.prototype.start = function ()
         );
     }
 
-    if(!config.disableStats) {
+    if(!config.disableStats && !navigator.mozGetUserMedia) {
         this.statsIntervalId = setInterval(
             function () {
                 // Interval updates
@@ -11354,7 +10525,7 @@ StatsCollector.prototype.start = function ()
         );
     }
 
-    if (config.logStats) {
+    if (config.logStats && !navigator.mozGetUserMedia) {
         this.gatherStatsIntervalId = setInterval(
             function () {
                 self.peerconnection.getStats(
@@ -11756,9 +10927,10 @@ StatsCollector.prototype.processAudioLevelReport = function ()
 
         var ssrc = getStatValue(now, 'ssrc');
         var jid = APP.xmpp.getJidFromSSRC(ssrc);
-        if (!jid && (Date.now() - now.timestamp) < 3000)
+        if (!jid)
         {
-            console.warn("No jid for ssrc: " + ssrc);
+            if((Date.now() - now.timestamp) < 3000)
+                console.warn("No jid for ssrc: " + ssrc);
             continue;
         }
 
@@ -11798,7 +10970,7 @@ StatsCollector.prototype.processAudioLevelReport = function ()
 
 };
 
-},{"../../service/RTC/RTCBrowserType":88}],46:[function(require,module,exports){
+},{"../../service/RTC/RTCBrowserType":96}],48:[function(require,module,exports){
 /**
  * Created by hristo on 8/4/14.
  */
@@ -11931,7 +11103,7 @@ var statistics =
 
 
 module.exports = statistics;
-},{"../../service/RTC/StreamEventTypes.js":91,"../../service/xmpp/XMPPEvents":97,"./LocalStatsCollector.js":44,"./RTPStatsCollector.js":45,"events":98}],47:[function(require,module,exports){
+},{"../../service/RTC/StreamEventTypes.js":99,"../../service/xmpp/XMPPEvents":106,"./LocalStatsCollector.js":46,"./RTPStatsCollector.js":47,"events":107}],49:[function(require,module,exports){
 var i18n = require("i18next-client");
 var languages = require("../../service/translation/languages");
 var Settings = require("../settings/Settings");
@@ -12028,6 +11200,11 @@ module.exports = {
                 var settings = Settings.getSettings();
                 if(settings)
                     lang = settings.language;
+
+                if(!lang && config.defaultLanguage)
+                {
+                    lang = config.defaultLanguage;
+                }
             }
         }
 
@@ -12065,13 +11242,15 @@ module.exports = {
     }
 };
 
-},{"../../service/translation/languages":96,"../settings/Settings":38,"i18next-client":62}],48:[function(require,module,exports){
+},{"../../service/translation/languages":105,"../settings/Settings":45,"i18next-client":65}],50:[function(require,module,exports){
 /* jshint -W117 */
 var TraceablePeerConnection = require("./TraceablePeerConnection");
 var SDPDiffer = require("./SDPDiffer");
 var SDPUtil = require("./SDPUtil");
 var SDP = require("./SDP");
 var RTCBrowserType = require("../../service/RTC/RTCBrowserType");
+var async = require("async");
+var transform = require("sdp-transform");
 
 // Jingle stuff
 function JingleSession(me, sid, connection, service) {
@@ -12120,10 +11299,21 @@ function JingleSession(me, sid, connection, service) {
      * by the application logic.
      */
     this.videoMuteByUser = false;
+    this.modifySourcesQueue = async.queue(this._modifySources.bind(this), 1);
+    // We start with the queue paused. We resume it when the signaling state is
+    // stable and the ice connection state is connected.
+    this.modifySourcesQueue.pause();
 }
 
-//TODO: this array must be removed when firefox implement multistream support
-JingleSession.notReceivedSSRCs = [];
+JingleSession.prototype.updateModifySourcesQueue = function() {
+    var signalingState = this.peerconnection.signalingState;
+    var iceConnectionState = this.peerconnection.iceConnectionState;
+    if (signalingState === 'stable' && iceConnectionState === 'connected') {
+        this.modifySourcesQueue.resume();
+    } else {
+        this.modifySourcesQueue.pause();
+    }
+};
 
 JingleSession.prototype.initiate = function (peerjid, isInitiator) {
     var self = this;
@@ -12150,8 +11340,16 @@ JingleSession.prototype.initiate = function (peerjid, isInitiator) {
         self.sendIceCandidate(event.candidate);
     };
     this.peerconnection.onaddstream = function (event) {
+        if (event.stream.id !== 'default') {
         console.log("REMOTE STREAM ADDED: " + event.stream + " - " + event.stream.id);
         self.remoteStreamAdded(event);
+        } else {
+            // This is a recvonly stream. Clients that implement Unified Plan,
+            // such as Firefox use recvonly "streams/channels/tracks" for
+            // receiving remote stream/tracks, as opposed to Plan B where there
+            // are only 3 channels: audio, video and data.
+            console.log("RECVONLY REMOTE STREAM IGNORED: " + event.stream + " - " + event.stream.id);
+        }
     };
     this.peerconnection.onremovestream = function (event) {
         // Remove the stream from remoteStreams
@@ -12160,9 +11358,11 @@ JingleSession.prototype.initiate = function (peerjid, isInitiator) {
     };
     this.peerconnection.onsignalingstatechange = function (event) {
         if (!(self && self.peerconnection)) return;
+        self.updateModifySourcesQueue();
     };
     this.peerconnection.oniceconnectionstatechange = function (event) {
         if (!(self && self.peerconnection)) return;
+        self.updateModifySourcesQueue();
         switch (self.peerconnection.iceConnectionState) {
             case 'connected':
                 this.startTime = new Date();
@@ -12245,7 +11445,6 @@ JingleSession.prototype.accept = function () {
         // FIXME: change any inactive to sendrecv or whatever they were originally
         pranswer.sdp = pranswer.sdp.replace('a=inactive', 'a=sendrecv');
     }
-    pranswer = APP.simulcast.reverseTransformLocalDescription(pranswer);
     var prsdp = new SDP(pranswer.sdp);
     var accept = $iq({to: this.peerjid,
         type: 'set'})
@@ -12698,9 +11897,7 @@ JingleSession.prototype.createdAnswer = function (sdp, provisional) {
                         initiator: self.initiator,
                         responder: self.responder,
                         sid: self.sid });
-                var publicLocalDesc = APP.simulcast.reverseTransformLocalDescription(sdp);
-                var publicLocalSDP = new SDP(publicLocalDesc.sdp);
-                publicLocalSDP.toJingle(accept, self.initiator == self.me ? 'initiator' : 'responder', ssrcs);
+                self.localSDP.toJingle(accept, self.initiator == self.me ? 'initiator' : 'responder', ssrcs);
                 self.connection.sendIQ(accept,
                     function () {
                         var ack = {};
@@ -12842,7 +12039,17 @@ JingleSession.prototype.addSource = function (elem, fromJid) {
         });
         sdp.raw = sdp.session + sdp.media.join('');
     });
-    this.modifySources();
+
+    this.modifySourcesQueue.push(function() {
+        // When a source is added and if this is FF, a new channel is allocated
+        // for receiving the added source. We need to diffuse the SSRC of this
+        // new recvonly channel to the rest of the peers.
+        console.log('modify sources done');
+
+        var newSdp = new SDP(self.peerconnection.localDescription.sdp);
+        console.log("SDPs", mySdp, newSdp);
+        self.notifyMySSRCUpdate(mySdp, newSdp);
+    });
 };
 
 JingleSession.prototype.removeSource = function (elem, fromJid) {
@@ -12903,11 +12110,22 @@ JingleSession.prototype.removeSource = function (elem, fromJid) {
         });
         sdp.raw = sdp.session + sdp.media.join('');
     });
-    this.modifySources();
+
+    this.modifySourcesQueue.push(function() {
+        // When a source is removed and if this is FF, the recvonly channel that
+        // receives the remote stream is deactivated . We need to diffuse the
+        // recvonly SSRC removal to the rest of the peers.
+        console.log('modify sources done');
+
+        var newSdp = new SDP(self.peerconnection.localDescription.sdp);
+        console.log("SDPs", mySdp, newSdp);
+        self.notifyMySSRCUpdate(mySdp, newSdp);
+    });
 };
 
-JingleSession.prototype.modifySources = function (successCallback) {
+JingleSession.prototype._modifySources = function (successCallback, queueCallback) {
     var self = this;
+
     if (this.peerconnection.signalingState == 'closed') return;
     if (!(this.addssrc.length || this.removessrc.length || this.pendingop !== null || this.switchstreams)){
         // There is nothing to do since scheduled job might have been executed by another succeeding call
@@ -12915,21 +12133,7 @@ JingleSession.prototype.modifySources = function (successCallback) {
         if(successCallback){
             successCallback();
         }
-        return;
-    }
-
-    // FIXME: this is a big hack
-    // https://code.google.com/p/webrtc/issues/detail?id=2688
-    // ^ has been fixed.
-    if (!(this.peerconnection.signalingState == 'stable' && this.peerconnection.iceConnectionState == 'connected')) {
-        console.warn('modifySources not yet', this.peerconnection.signalingState, this.peerconnection.iceConnectionState);
-        this.wait = true;
-        window.setTimeout(function() { self.modifySources(successCallback); }, 250);
-        return;
-    }
-    if (this.wait) {
-        window.setTimeout(function() { self.modifySources(successCallback); }, 2500);
-        this.wait = false;
+        queueCallback();
         return;
     }
 
@@ -12969,6 +12173,7 @@ JingleSession.prototype.modifySources = function (successCallback) {
 
             if(self.signalingState == 'closed') {
                 console.error("createAnswer attempt on closed state");
+                queueCallback("createAnswer attempt on closed state");
                 return;
             }
 
@@ -13005,22 +12210,27 @@ JingleSession.prototype.modifySources = function (successCallback) {
                             if(successCallback){
                                 successCallback();
                             }
+                            queueCallback();
                         },
                         function(error) {
                             console.error('modified setLocalDescription failed', error);
+                            queueCallback(error);
                         }
                     );
                 },
                 function(error) {
                     console.error('modified answer failed', error);
+                    queueCallback(error);
                 }
             );
         },
         function(error) {
             console.error('modify failed', error);
+            queueCallback(error);
         }
     );
 };
+
 
 /**
  * Switches video streams.
@@ -13028,7 +12238,7 @@ JingleSession.prototype.modifySources = function (successCallback) {
  * @param oldStream old video stream of this session.
  * @param success_callback callback executed after successful stream switch.
  */
-JingleSession.prototype.switchStreams = function (new_stream, oldStream, success_callback) {
+JingleSession.prototype.switchStreams = function (new_stream, oldStream, success_callback, isAudio) {
 
     var self = this;
 
@@ -13039,9 +12249,11 @@ JingleSession.prototype.switchStreams = function (new_stream, oldStream, success
             oldSdp = new SDP(self.peerconnection.localDescription.sdp);
         }
         self.peerconnection.removeStream(oldStream, true);
-        self.peerconnection.addStream(new_stream);
+        if(new_stream)
+            self.peerconnection.addStream(new_stream);
     }
 
+    if(!isAudio)
     APP.RTC.switchVideoStreams(new_stream, oldStream);
 
     // Conference is not active
@@ -13051,7 +12263,7 @@ JingleSession.prototype.switchStreams = function (new_stream, oldStream, success
     }
 
     self.switchstreams = true;
-    self.modifySources(function() {
+    self.modifySourcesQueue.push(function() {
         console.log('modify sources done');
 
         success_callback();
@@ -13125,26 +12337,6 @@ JingleSession.prototype.notifyMySSRCUpdate = function (old_sdp, new_sdp) {
 };
 
 /**
- * Determines whether the (local) video is mute i.e. all video tracks are
- * disabled.
- *
- * @return <tt>true</tt> if the (local) video is mute i.e. all video tracks are
- * disabled; otherwise, <tt>false</tt>
- */
-JingleSession.prototype.isVideoMute = function () {
-    var tracks = APP.RTC.localVideo.getVideoTracks();
-    var mute = true;
-
-    for (var i = 0; i < tracks.length; ++i) {
-        if (tracks[i].enabled) {
-            mute = false;
-            break;
-        }
-    }
-    return mute;
-};
-
-/**
  * Mutes/unmutes the (local) video i.e. enables/disables all video tracks.
  *
  * @param mute <tt>true</tt> to mute the (local) video i.e. to disable all video
@@ -13177,36 +12369,25 @@ JingleSession.prototype.setVideoMute = function (mute, callback, options) {
         return;
     }
 
+    this.hardMuteVideo(mute);
+
     var self = this;
-    var localCallback = function (mute) {
-        self.connection.emuc.addVideoInfoToPresence(mute);
-        self.connection.emuc.sendPresence();
-        return callback(mute)
-    };
-
-    if (mute == APP.RTC.localVideo.isMuted())
-    {
-        // Even if no change occurs, the specified callback is to be executed.
-        // The specified callback may, optionally, return a successCallback
-        // which is to be executed as well.
-        var successCallback = localCallback(mute);
-
-        if (successCallback) {
-            successCallback();
+    var oldSdp = null;
+    if(self.peerconnection) {
+        if(self.peerconnection.localDescription) {
+            oldSdp = new SDP(self.peerconnection.localDescription.sdp);
         }
-    } else {
-        APP.RTC.localVideo.setMute(!mute);
-
-        this.hardMuteVideo(mute);
-
-        this.modifySources(localCallback(mute));
     }
-};
 
-// SDP-based mute by going recvonly/sendrecv
-// FIXME: should probably black out the screen as well
-JingleSession.prototype.toggleVideoMute = function (callback) {
-    this.service.setVideoMute(APP.RTC.localVideo.isMuted(), callback);
+    this.modifySourcesQueue.push(function() {
+        console.log('modify sources done');
+
+        callback(mute);
+
+        var newSdp = new SDP(self.peerconnection.localDescription.sdp);
+        console.log("SDPs", oldSdp, newSdp);
+        self.notifyMySSRCUpdate(oldSdp, newSdp);
+    });
 };
 
 JingleSession.prototype.hardMuteVideo = function (muted) {
@@ -13301,14 +12482,17 @@ JingleSession.onJingleFatalError = function (session, error)
 JingleSession.prototype.setLocalDescription = function () {
     // put our ssrcs into presence so other clients can identify our stream
     var newssrcs = [];
-    var media = APP.simulcast.parseMedia(this.peerconnection.localDescription);
-    media.forEach(function (media) {
+    var session = transform.parse(this.peerconnection.localDescription.sdp);
+    session.media.forEach(function (media) {
 
-        if(Object.keys(media.sources).length > 0) {
+        if (media.ssrcs != null && media.ssrcs.length > 0) {
             // TODO(gp) maybe exclude FID streams?
-            Object.keys(media.sources).forEach(function (ssrc) {
+            media.ssrcs.forEach(function (ssrc) {
+                if (ssrc.attribute !== 'cname') {
+                    return;
+                }
                 newssrcs.push({
-                    'ssrc': ssrc,
+                    'ssrc': ssrc.id,
                     'type': media.type,
                     'direction': media.direction
                 });
@@ -13452,7 +12636,7 @@ JingleSession.prototype.remoteStreamAdded = function (data, times) {
 
 module.exports = JingleSession;
 
-},{"../../service/RTC/RTCBrowserType":88,"./SDP":49,"./SDPDiffer":50,"./SDPUtil":51,"./TraceablePeerConnection":52}],49:[function(require,module,exports){
+},{"../../service/RTC/RTCBrowserType":96,"./SDP":51,"./SDPDiffer":52,"./SDPUtil":53,"./TraceablePeerConnection":54,"async":64,"sdp-transform":92}],51:[function(require,module,exports){
 /* jshint -W117 */
 var SDPUtil = require("./SDPUtil");
 
@@ -14074,7 +13258,7 @@ SDP.prototype.jingle2media = function (content) {
 module.exports = SDP;
 
 
-},{"./SDPUtil":51}],50:[function(require,module,exports){
+},{"./SDPUtil":53}],52:[function(require,module,exports){
 function SDPDiffer(mySDP, otherSDP) {
     this.mySDP = mySDP;
     this.otherSDP = otherSDP;
@@ -14240,7 +13424,7 @@ SDPDiffer.prototype.toJingle = function(modify) {
 };
 
 module.exports = SDPDiffer;
-},{}],51:[function(require,module,exports){
+},{}],53:[function(require,module,exports){
 SDPUtil = {
     iceparams: function (mediadesc, sessiondesc) {
         var data = null;
@@ -14590,7 +13774,7 @@ SDPUtil = {
     }
 };
 module.exports = SDPUtil;
-},{}],52:[function(require,module,exports){
+},{}],54:[function(require,module,exports){
 function TraceablePeerConnection(ice_config, constraints) {
     var self = this;
     var RTCPeerconnection = navigator.mozGetUserMedia ? mozRTCPeerConnection : webkitRTCPeerConnection;
@@ -14601,6 +13785,8 @@ function TraceablePeerConnection(ice_config, constraints) {
     this.maxstats = 0; // limit to 300 values, i.e. 5 minutes; set to 0 to disable
     var Interop = require('sdp-interop').Interop;
     this.interop = new Interop();
+    var Simulcast = require('sdp-simulcast');
+    this.simulcast = new Simulcast({numOfLayers: 3, explodeRemoteSimulcast: false});
 
     // override as desired
     this.trace = function (what, info) {
@@ -14704,34 +13890,31 @@ if (TraceablePeerConnection.prototype.__defineGetter__ !== undefined) {
     TraceablePeerConnection.prototype.__defineGetter__('signalingState', function() { return this.peerconnection.signalingState; });
     TraceablePeerConnection.prototype.__defineGetter__('iceConnectionState', function() { return this.peerconnection.iceConnectionState; });
     TraceablePeerConnection.prototype.__defineGetter__('localDescription', function() {
-        this.trace('getLocalDescription::preTransform (Plan A)', dumpSDP(this.peerconnection.localDescription));
-        // if we're running on FF, transform to Plan B first.
         var desc = this.peerconnection.localDescription;
+        this.trace('getLocalDescription::preTransform', dumpSDP(desc));
+
+        // if we're running on FF, transform to Plan B first.
         if (navigator.mozGetUserMedia) {
             desc = this.interop.toPlanB(desc);
-        } else {
-            desc = APP.simulcast.reverseTransformLocalDescription(this.peerconnection.localDescription);
+            this.trace('getLocalDescription::postTransform (Plan B)', dumpSDP(desc));
         }
-        this.trace('getLocalDescription::postTransform (Plan B)', dumpSDP(desc));
         return desc;
     });
     TraceablePeerConnection.prototype.__defineGetter__('remoteDescription', function() {
-        this.trace('getRemoteDescription::preTransform (Plan A)', dumpSDP(this.peerconnection.remoteDescription));
-        // if we're running on FF, transform to Plan B first.
         var desc = this.peerconnection.remoteDescription;
+        this.trace('getRemoteDescription::preTransform', dumpSDP(desc));
+
+        // if we're running on FF, transform to Plan B first.
         if (navigator.mozGetUserMedia) {
             desc = this.interop.toPlanB(desc);
-        } else {
-            desc = APP.simulcast.reverseTransformRemoteDescription(this.peerconnection.remoteDescription);
+            this.trace('getRemoteDescription::postTransform (Plan B)', dumpSDP(desc));
         }
-        this.trace('getRemoteDescription::postTransform (Plan B)', dumpSDP(desc));
         return desc;
     });
 }
 
 TraceablePeerConnection.prototype.addStream = function (stream) {
     this.trace('addStream', stream.id);
-    APP.simulcast.resetSender();
     try
     {
         this.peerconnection.addStream(stream);
@@ -14745,7 +13928,6 @@ TraceablePeerConnection.prototype.addStream = function (stream) {
 
 TraceablePeerConnection.prototype.removeStream = function (stream, stopStreams) {
     this.trace('removeStream', stream.id);
-    APP.simulcast.resetSender();
     if(stopStreams) {
         stream.getAudioTracks().forEach(function (track) {
             track.stop();
@@ -14769,14 +13951,13 @@ TraceablePeerConnection.prototype.createDataChannel = function (label, opts) {
 };
 
 TraceablePeerConnection.prototype.setLocalDescription = function (description, successCallback, failureCallback) {
-    this.trace('setLocalDescription::preTransform (Plan B)', dumpSDP(description));
+    this.trace('setLocalDescription::preTransform', dumpSDP(description));
     // if we're running on FF, transform to Plan A first.
     if (navigator.mozGetUserMedia) {
-        description = this.interop.toPlanA(description);
-    } else {
-        description = APP.simulcast.transformLocalDescription(description);
+        description = this.interop.toUnifiedPlan(description);
+        this.trace('setLocalDescription::postTransform (Plan A)', dumpSDP(description));
     }
-    this.trace('setLocalDescription::postTransform (Plan A)', dumpSDP(description));
+
     var self = this;
     this.peerconnection.setLocalDescription(description,
         function () {
@@ -14796,15 +13977,16 @@ TraceablePeerConnection.prototype.setLocalDescription = function (description, s
 };
 
 TraceablePeerConnection.prototype.setRemoteDescription = function (description, successCallback, failureCallback) {
-    this.trace('setRemoteDescription::preTransform (Plan B)', dumpSDP(description));
+    this.trace('setRemoteDescription::preTransform', dumpSDP(description));
+    // TODO the focus should squeze or explode the remote simulcast
+    description = this.simulcast.mungeRemoteDescription(description);
+    this.trace('setRemoteDescription::postTransform (simulcast)', dumpSDP(description));
+
     // if we're running on FF, transform to Plan A first.
     if (navigator.mozGetUserMedia) {
-        description = this.interop.toPlanA(description);
+        description = this.interop.toUnifiedPlan(description);
+        this.trace('setRemoteDescription::postTransform (Plan A)', dumpSDP(description));
     }
-    else {
-        description = APP.simulcast.transformRemoteDescription(description);
-    }
-    this.trace('setRemoteDescription::postTransform (Plan A)', dumpSDP(description));
     var self = this;
     this.peerconnection.setRemoteDescription(description,
         function () {
@@ -14837,12 +14019,19 @@ TraceablePeerConnection.prototype.createOffer = function (successCallback, failu
     this.trace('createOffer', JSON.stringify(constraints, null, ' '));
     this.peerconnection.createOffer(
         function (offer) {
-            self.trace('createOfferOnSuccess::preTransform (Plan A)', dumpSDP(offer));
+            self.trace('createOfferOnSuccess::preTransform', dumpSDP(offer));
             // if we're running on FF, transform to Plan B first.
+            // NOTE this is not tested because in meet the focus generates the
+            // offer.
             if (navigator.mozGetUserMedia) {
                 offer = self.interop.toPlanB(offer);
+                self.trace('createOfferOnSuccess::postTransform (Plan B)', dumpSDP(offer));
             }
-            self.trace('createOfferOnSuccess::postTransform (Plan B)', dumpSDP(offer));
+
+            if (config.enableSimulcast && self.simulcast.isSupported()) {
+                offer = self.simulcast.mungeLocalDescription(offer);
+                self.trace('createOfferOnSuccess::postTransform (simulcast)', dumpSDP(offer));
+            }
             successCallback(offer);
         },
         function(err) {
@@ -14858,14 +14047,16 @@ TraceablePeerConnection.prototype.createAnswer = function (successCallback, fail
     this.trace('createAnswer', JSON.stringify(constraints, null, ' '));
     this.peerconnection.createAnswer(
         function (answer) {
-            self.trace('createAnswerOnSuccess::preTransfom (Plan A)', dumpSDP(answer));
+            self.trace('createAnswerOnSuccess::preTransfom', dumpSDP(answer));
             // if we're running on FF, transform to Plan A first.
             if (navigator.mozGetUserMedia) {
                 answer = self.interop.toPlanB(answer);
-            } else {
-                answer = APP.simulcast.transformAnswer(answer);
+                self.trace('createAnswerOnSuccess::postTransfom (Plan B)', dumpSDP(answer));
             }
-            self.trace('createAnswerOnSuccess::postTransfom (Plan B)', dumpSDP(answer));
+            if (config.enableSimulcast && self.simulcast.isSupported()) {
+                answer = self.simulcast.mungeLocalDescription(answer);
+                self.trace('createAnswerOnSuccess::postTransfom (simulcast)', dumpSDP(answer));
+            }
             successCallback(answer);
         },
         function(err) {
@@ -14910,7 +14101,7 @@ TraceablePeerConnection.prototype.getStats = function(callback, errback) {
 module.exports = TraceablePeerConnection;
 
 
-},{"sdp-interop":80}],53:[function(require,module,exports){
+},{"sdp-interop":86,"sdp-simulcast":89}],55:[function(require,module,exports){
 /* global $, $iq, APP, config, connection, UI, messageHandler,
  roomName, sessionTerminated, Strophe, Util */
 var XMPPEvents = require("../../service/xmpp/XMPPEvents");
@@ -14998,7 +14189,7 @@ var Moderator = {
         }
     },
 
-    onMucLeft: function (jid) {
+    onMucMemberLeft: function (jid) {
         console.info("Someone left is it focus ? " + jid);
         var resource = Strophe.getResourceFromJid(jid);
         if (resource === 'focus' && !this.xmppService.sessionTerminated) {
@@ -15090,13 +14281,24 @@ var Moderator = {
                 { name: 'openSctp', value: config.openSctp})
                 .up();
         }
-        if (config.enableFirefoxSupport !== undefined) {
+        if(config.startAudioMuted !== undefined)
+        {
             elem.c(
                 'property',
-                { name: 'enableFirefoxHacks',
-                    value: config.enableFirefoxSupport})
+                { name: 'startAudioMuted', value: config.startAudioMuted})
                 .up();
         }
+        if(config.startVideoMuted !== undefined)
+        {
+            elem.c(
+                'property',
+                { name: 'startVideoMuted', value: config.startVideoMuted})
+                .up();
+        }
+        elem.c(
+            'property',
+            { name: 'simulcastMode', value: 'rewriting'})
+            .up();
         elem.up();
         return elem;
     },
@@ -15335,7 +14537,7 @@ module.exports = Moderator;
 
 
 
-},{"../../service/authentication/AuthenticationEvents":93,"../../service/xmpp/XMPPEvents":97,"../settings/Settings":38}],54:[function(require,module,exports){
+},{"../../service/authentication/AuthenticationEvents":101,"../../service/xmpp/XMPPEvents":106,"../settings/Settings":45}],56:[function(require,module,exports){
 /* global $, $iq, config, connection, focusMucJid, messageHandler, Moderator,
    Toolbar, Util */
 var Moderator = require("./moderator");
@@ -15491,7 +14693,7 @@ var Recording = {
 }
 
 module.exports = Recording;
-},{"./moderator":53}],55:[function(require,module,exports){
+},{"./moderator":55}],57:[function(require,module,exports){
 /* jshint -W117 */
 /* a simple MUC connection plugin
  * can only handle a single MUC room
@@ -15522,6 +14724,15 @@ module.exports = function(XMPP, eventEmitter) {
         initPresenceMap: function (myroomjid) {
             this.presMap['to'] = myroomjid;
             this.presMap['xns'] = 'http://jabber.org/protocol/muc';
+            if(APP.RTC.localAudio.isMuted())
+            {
+                this.addAudioInfoToPresence(true);
+            }
+
+            if(APP.RTC.localVideo.isMuted())
+            {
+                this.addVideoInfoToPresence(true);
+            }
         },
         doJoin: function (jid, password) {
             this.myroomjid = jid;
@@ -15597,7 +14808,7 @@ module.exports = function(XMPP, eventEmitter) {
             // Parse etherpad tag.
             var etherpad = $(pres).find('>etherpad');
             if (etherpad.length) {
-                if (config.etherpad_base && !Moderator.isModerator()) {
+                if (config.etherpad_base) {
                     eventEmitter.emit(XMPPEvents.ETHERPAD, etherpad.text());
                 }
             }
@@ -15635,6 +14846,32 @@ module.exports = function(XMPP, eventEmitter) {
             var videoMuted = $(pres).find('>videomuted');
             if (videoMuted.length) {
                 $(document).trigger('videomuted.muc', [from, videoMuted.text()]);
+            }
+
+            var startMuted = $(pres).find('>startmuted');
+            if (startMuted.length)
+            {
+                eventEmitter.emit(XMPPEvents.START_MUTED,
+                    startMuted.attr("audio") === "true", startMuted.attr("video") === "true");
+            }
+
+            var devices = $(pres).find('>devices');
+            if(devices.length)
+            {
+                var audio = devices.find('>audio');
+                var video = devices.find('>video');
+                var devicesValues = {audio: false, video: false};
+                if(audio.length && audio.text() === "true")
+                {
+                    devicesValues.audio = true;
+                }
+
+                if(video.length && video.text() === "true")
+                {
+                    devicesValues.video = true;
+                }
+                eventEmitter.emit(XMPPEvents.DEVICE_AVAILABLE,
+                    Strophe.getResourceFromJid(from), devicesValues);
             }
 
             var stats = $(pres).find('>stats');
@@ -15676,7 +14913,7 @@ module.exports = function(XMPP, eventEmitter) {
                 if (this.role !== member.role) {
                     this.role = member.role;
 
-                    eventEmitter.emit(XMPPEvents.LOCALROLE_CHANGED,
+                    eventEmitter.emit(XMPPEvents.LOCAL_ROLE_CHANGED,
                         from, member, pres, Moderator.isModerator());
                 }
                 if (!this.joined) {
@@ -15694,12 +14931,12 @@ module.exports = function(XMPP, eventEmitter) {
                     console.info("Ignore focus: " + from + ", real JID: " + member.jid);
                 }
                 else {
-                    var id = $(pres).find('>userID').text();
+                    var id = $(pres).find('>userId').text();
                     var email = $(pres).find('>email');
                     if (email.length > 0) {
                         id = email.text();
                     }
-                    eventEmitter.emit(XMPPEvents.MUC_ENTER, from, id, member.displayName);
+                    eventEmitter.emit(XMPPEvents.MUC_MEMBER_JOINED, from, id, member.displayName);
                 }
             } else {
                 // Presence update for existing participant
@@ -15737,6 +14974,15 @@ module.exports = function(XMPP, eventEmitter) {
                 eventEmitter.emit(XMPPEvents.MUC_DESTROYED, reason);
                 return true;
             }
+
+            var self = this;
+            // Remove old ssrcs coming from the jid
+            Object.keys(this.ssrc2jid).forEach(function (ssrc) {
+                if (self.ssrc2jid[ssrc] == from) {
+                    delete self.ssrc2jid[ssrc];
+                }
+            });
+
             // Status code 110 indicates that this notification is "self-presence".
             if (!$(pres).find('>x[xmlns="http://jabber.org/protocol/muc#user"]>status[code="110"]').length) {
                 delete this.members[from];
@@ -15835,11 +15081,24 @@ module.exports = function(XMPP, eventEmitter) {
                 }
             }
 
+            // xep-0203 delay
+            var stamp = $(msg).find('>delay').attr('stamp');
+
+            if (!stamp) {
+                // or xep-0091 delay, UTC timestamp
+                stamp = $(msg).find('>[xmlns="jabber:x:delay"]').attr('stamp');
+
+                if (stamp) {
+                    // the format is CCYYMMDDThh:mm:ss
+                    var dateParts = stamp.match(/(\d{4})(\d{2})(\d{2}T\d{2}:\d{2}:\d{2})/);
+                    stamp = dateParts[1] + "-" + dateParts[2] + "-" + dateParts[3] + "Z";
+                }
+            }
 
             if (txt) {
                 console.log('chat', nick, txt);
                 eventEmitter.emit(XMPPEvents.MESSAGE_RECEIVED,
-                    from, nick, txt, this.myroomjid);
+                    from, nick, txt, this.myroomjid, stamp);
             }
             return true;
         },
@@ -15880,6 +15139,10 @@ module.exports = function(XMPP, eventEmitter) {
                 });
         },
         sendPresence: function () {
+            if (!this.presMap['to']) {
+                // Too early to send presence - not initialized
+                return;
+            }
             var pres = $pres({to: this.presMap['to'] });
             pres.c('x', {xmlns: this.presMap['xns']});
 
@@ -15916,6 +15179,11 @@ module.exports = function(XMPP, eventEmitter) {
                     .t(this.presMap['displayName']).up();
             }
 
+            if(this.presMap["devices"])
+            {
+                pres.c('devices').c('audio').t(this.presMap['devices'].audio).up()
+                    .c('video').t(this.presMap['devices'].video).up().up();
+            }
             if (this.presMap['audions']) {
                 pres.c('audiomuted', {xmlns: this.presMap['audions']})
                     .t(this.presMap['audiomuted']).up();
@@ -15941,11 +15209,6 @@ module.exports = function(XMPP, eventEmitter) {
                     .c('current').t(this.presMap['prezicurrent']).up().up();
             }
 
-            if (this.presMap['etherpadns']) {
-                pres.c('etherpad', {xmlns: this.presMap['etherpadns']})
-                    .t(this.presMap['etherpadname']).up();
-            }
-
             if (this.presMap['medians']) {
                 pres.c('media', {xmlns: this.presMap['medians']});
                 var sourceNumber = 0;
@@ -15963,6 +15226,15 @@ module.exports = function(XMPP, eventEmitter) {
                                     || 'sendrecv' }
                         ).up();
                     }
+                pres.up();
+            }
+
+            if(this.presMap["startMuted"] !== undefined)
+            {
+                pres.c("startmuted", {audio: this.presMap["startMuted"].audio,
+                    video: this.presMap["startMuted"].video,
+                    xmlns: "http://jitsi.org/jitmeet/start-muted"});
+                delete this.presMap["startMuted"];
             }
 
             pres.up();
@@ -15978,6 +15250,9 @@ module.exports = function(XMPP, eventEmitter) {
             this.presMap['source' + sourceNumber + '_type'] = mtype;
             this.presMap['source' + sourceNumber + '_ssrc'] = ssrcs;
             this.presMap['source' + sourceNumber + '_direction'] = direction;
+        },
+        addDevicesToPresence: function (devices) {
+            this.presMap['devices'] = devices;
         },
         clearPresenceMedia: function () {
             var self = this;
@@ -16002,10 +15277,6 @@ module.exports = function(XMPP, eventEmitter) {
         },
         getPrezi: function (roomjid) {
             return this.preziMap[roomjid];
-        },
-        addEtherpadToPresence: function (etherpadName) {
-            this.presMap['etherpadns'] = 'http://jitsi.org/jitmeet/etherpad';
-            this.presMap['etherpadname'] = etherpadName;
         },
         addAudioInfoToPresence: function (isMuted) {
             this.presMap['audions'] = 'http://jitsi.org/jitmeet/audio';
@@ -16040,6 +15311,9 @@ module.exports = function(XMPP, eventEmitter) {
         addUserIdToPresence: function (userId) {
             this.presMap['userId'] = userId;
         },
+        addStartMutedToPresence: function (audio, video) {
+            this.presMap["startMuted"] = {audio: audio, video: video};
+        },
         isModerator: function () {
             return this.role === 'moderator';
         },
@@ -16051,7 +15325,7 @@ module.exports = function(XMPP, eventEmitter) {
         },
         onParticipantLeft: function (jid) {
 
-            eventEmitter.emit(XMPPEvents.MUC_LEFT, jid);
+            eventEmitter.emit(XMPPEvents.MUC_MEMBER_LEFT, jid);
 
             this.connection.jingle.terminateByJid(jid);
 
@@ -16060,7 +15334,7 @@ module.exports = function(XMPP, eventEmitter) {
                     [jid, this.getPrezi(jid)]);
             }
 
-            Moderator.onMucLeft(jid);
+            Moderator.onMucMemberLeft(jid);
         },
         parsePresence: function (from, memeber, pres) {
             if($(pres).find(">bridgeIsDown").length > 0 && !bridgeIsDown) {
@@ -16084,8 +15358,6 @@ module.exports = function(XMPP, eventEmitter) {
                 //console.log(jid, 'assoc ssrc', ssrc.getAttribute('type'), ssrc.getAttribute('ssrc'));
                 var ssrcV = ssrc.getAttribute('ssrc');
                 self.ssrc2jid[ssrcV] = from;
-                JingleSession.notReceivedSSRCs.push(ssrcV);
-
 
                 var type = ssrc.getAttribute('type');
 
@@ -16095,7 +15367,7 @@ module.exports = function(XMPP, eventEmitter) {
 
             });
 
-            eventEmitter.emit(XMPPEvents.CHANGED_STREAMS, from, changedStreams);
+            eventEmitter.emit(XMPPEvents.STREAMS_CHANGED, from, changedStreams);
 
             var displayName = !config.displayJids
                 ? memeber.displayName : Strophe.getResourceFromJid(from);
@@ -16118,7 +15390,7 @@ module.exports = function(XMPP, eventEmitter) {
 };
 
 
-},{"../../service/xmpp/XMPPEvents":97,"./JingleSession":48,"./moderator":53}],56:[function(require,module,exports){
+},{"../../service/xmpp/XMPPEvents":106,"./JingleSession":50,"./moderator":55}],58:[function(require,module,exports){
 /* jshint -W117 */
 
 var JingleSession = require("./JingleSession");
@@ -16165,6 +15437,7 @@ module.exports = function(XMPP, eventEmitter)
                 this.connection.disco.addFeature('urn:xmpp:jingle:1');
                 this.connection.disco.addFeature('urn:xmpp:jingle:apps:rtp:1');
                 this.connection.disco.addFeature('urn:xmpp:jingle:transports:ice-udp:1');
+                this.connection.disco.addFeature('urn:xmpp:jingle:apps:dtls:0');
                 this.connection.disco.addFeature('urn:xmpp:jingle:transports:dtls-sctp:1');
                 this.connection.disco.addFeature('urn:xmpp:jingle:apps:rtp:audio');
                 this.connection.disco.addFeature('urn:xmpp:jingle:apps:rtp:video');
@@ -16229,6 +15502,14 @@ module.exports = function(XMPP, eventEmitter)
             // see http://xmpp.org/extensions/xep-0166.html#concepts-session
             switch (action) {
                 case 'session-initiate':
+                    var startMuted = $(iq).find('jingle>startmuted');
+                    if(startMuted && startMuted.length > 0)
+                    {
+                        var audioMuted = startMuted.attr("audio");
+                        var videoMuted = startMuted.attr("video");
+                        APP.UI.setInitialMuteFromFocus((audioMuted === "true"),
+                            (videoMuted === "true"));
+                    }
                     sess = new JingleSession(
                         $(iq).attr('to'), $(iq).find('jingle').attr('sid'),
                         this.connection, XMPP);
@@ -16440,8 +15721,9 @@ module.exports = function(XMPP, eventEmitter)
          */
         populateData: function () {
             var data = {};
+            var self = this;
             Object.keys(this.sessions).forEach(function (sid) {
-                var session = this.sessions[sid];
+                var session = self.sessions[sid];
                 if (session.peerconnection && session.peerconnection.updateLog) {
                     // FIXME: should probably be a .dump call
                     data["jingle_" + session.sid] = {
@@ -16457,7 +15739,7 @@ module.exports = function(XMPP, eventEmitter)
 };
 
 
-},{"../../service/xmpp/XMPPEvents":97,"./JingleSession":48}],57:[function(require,module,exports){
+},{"../../service/xmpp/XMPPEvents":106,"./JingleSession":50}],59:[function(require,module,exports){
 /* global Strophe */
 module.exports = function () {
 
@@ -16478,7 +15760,7 @@ module.exports = function () {
         }
     });
 };
-},{}],58:[function(require,module,exports){
+},{}],60:[function(require,module,exports){
 /* global $, $iq, config, connection, focusMucJid, forceMuted,
    setAudioMuted, Strophe */
 /**
@@ -16537,7 +15819,7 @@ module.exports = function (XMPP) {
         }
     });
 }
-},{}],59:[function(require,module,exports){
+},{}],61:[function(require,module,exports){
 /* jshint -W117 */
 module.exports = function() {
     Strophe.addConnectionPlugin('rayo',
@@ -16634,7 +15916,7 @@ module.exports = function() {
     );
 };
 
-},{}],60:[function(require,module,exports){
+},{}],62:[function(require,module,exports){
 /**
  * Strophe logger implementation. Logs from level WARN and above.
  */
@@ -16678,64 +15960,157 @@ module.exports = function () {
     };
 };
 
-},{}],61:[function(require,module,exports){
+},{}],63:[function(require,module,exports){
 /* global $, APP, config, Strophe*/
 var Moderator = require("./moderator");
 var EventEmitter = require("events");
 var Recording = require("./recording");
 var SDP = require("./SDP");
+var Settings = require("../settings/Settings");
 var Pako = require("pako");
 var StreamEventTypes = require("../../service/RTC/StreamEventTypes");
+var RTCEvents = require("../../service/RTC/RTCEvents");
 var UIEvents = require("../../service/UI/UIEvents");
 var XMPPEvents = require("../../service/xmpp/XMPPEvents");
+var retry = require('retry');
 
 var eventEmitter = new EventEmitter();
 var connection = null;
 var authenticatedUser = false;
 
 function connect(jid, password) {
-    connection = XMPP.createConnection();
-    Moderator.setConnection(connection);
 
-    if (connection.disco) {
-        // for chrome, add multistream cap
-    }
-    connection.jingle.pc_constraints = APP.RTC.getPCConstraints();
-    if (config.useIPv6) {
-        // https://code.google.com/p/webrtc/issues/detail?id=2828
-        if (!connection.jingle.pc_constraints.optional)
-            connection.jingle.pc_constraints.optional = [];
-        connection.jingle.pc_constraints.optional.push({googIPv6: true});
-    }
+    var faultTolerantConnect = retry.operation({
+        retries: 3
+    });
 
-    var anonymousConnectionFailed = false;
-    connection.connect(jid, password, function (status, msg) {
-        console.log('Strophe status changed to',
-            Strophe.getStatusString(status));
-        if (status === Strophe.Status.CONNECTED) {
-            if (config.useStunTurn) {
-                connection.jingle.getStunAndTurnCredentials();
-            }
+    // fault tolerant connect
+    faultTolerantConnect.attempt(function () {
 
-            console.info("My Jabber ID: " + connection.jid);
+        connection = XMPP.createConnection();
+        Moderator.setConnection(connection);
 
-            if(password)
-                authenticatedUser = true;
-            maybeDoJoin();
-        } else if (status === Strophe.Status.CONNFAIL) {
-            if(msg === 'x-strophe-bad-non-anon-jid') {
-                anonymousConnectionFailed = true;
-            }
-        } else if (status === Strophe.Status.DISCONNECTED) {
-            if(anonymousConnectionFailed) {
-                // prompt user for username and password
-                XMPP.promptLogin();
-            }
-        } else if (status === Strophe.Status.AUTHFAIL) {
-            // wrong password or username, prompt user
-            XMPP.promptLogin();
-
+        if (connection.disco) {
+            // for chrome, add multistream cap
         }
+        connection.jingle.pc_constraints = APP.RTC.getPCConstraints();
+        if (config.useIPv6) {
+            // https://code.google.com/p/webrtc/issues/detail?id=2828
+            if (!connection.jingle.pc_constraints.optional)
+                connection.jingle.pc_constraints.optional = [];
+            connection.jingle.pc_constraints.optional.push({googIPv6: true});
+        }
+
+        // Include user info in MUC presence
+        var settings = Settings.getSettings();
+        if (settings.email) {
+            connection.emuc.addEmailToPresence(settings.email);
+        }
+        if (settings.uid) {
+            connection.emuc.addUserIdToPresence(settings.uid);
+        }
+        if (settings.displayName) {
+            connection.emuc.addDisplayNameToPresence(settings.displayName);
+        }
+
+
+        // connection.connect() starts the connection process.
+        //
+        // As the connection process proceeds, the user supplied callback will
+        // be triggered multiple times with status updates. The callback should
+        // take two arguments - the status code and the error condition.
+        //
+        // The status code will be one of the values in the Strophe.Status
+        // constants. The error condition will be one of the conditions defined
+        // in RFC 3920 or the condition ‘strophe-parsererror’.
+        //
+        // The Parameters wait, hold and route are optional and only relevant
+        // for BOSH connections. Please see XEP 124 for a more detailed
+        // explanation of the optional parameters.
+        //
+        // Connection status constants for use by the connection handler
+        // callback.
+        //
+        //  Status.ERROR - An error has occurred (websockets specific)
+        //  Status.CONNECTING - The connection is currently being made
+        //  Status.CONNFAIL - The connection attempt failed
+        //  Status.AUTHENTICATING - The connection is authenticating
+        //  Status.AUTHFAIL - The authentication attempt failed
+        //  Status.CONNECTED - The connection has succeeded
+        //  Status.DISCONNECTED - The connection has been terminated
+        //  Status.DISCONNECTING - The connection is currently being terminated
+        //  Status.ATTACHED - The connection has been attached
+
+        var anonymousConnectionFailed = false;
+        var connectionFailed = false;
+        var lastErrorMsg;
+        connection.connect(jid, password, function (status, msg) {
+            console.log('Strophe status changed to',
+                Strophe.getStatusString(status), msg);
+            if (status === Strophe.Status.CONNECTED) {
+                if (config.useStunTurn) {
+                    connection.jingle.getStunAndTurnCredentials();
+                }
+
+                console.info("My Jabber ID: " + connection.jid);
+
+                if (password)
+                    authenticatedUser = true;
+                maybeDoJoin();
+            } else if (status === Strophe.Status.CONNFAIL) {
+                if (msg === 'x-strophe-bad-non-anon-jid') {
+                    anonymousConnectionFailed = true;
+                } else {
+                    connectionFailed = true;
+                }
+                lastErrorMsg = msg;
+            } else if (status === Strophe.Status.DISCONNECTED) {
+                if (anonymousConnectionFailed) {
+                    // prompt user for username and password
+                    XMPP.promptLogin();
+                } else {
+
+                    // Strophe already has built-in HTTP/BOSH error handling and
+                    // request retry logic. Requests are resent automatically
+                    // until their error count reaches 5. Strophe.js disconnects
+                    // if the error count is > 5. We are not replicating this
+                    // here.
+                    //
+                    // The "problem" is that failed HTTP/BOSH requests don't
+                    // trigger a callback with a status update, so when a
+                    // callback with status Strophe.Status.DISCONNECTED arrives,
+                    // we can't be sure if it's a graceful disconnect or if it's
+                    // triggered by some HTTP/BOSH error.
+                    //
+                    // But that's a minor issue in Jitsi Meet as we never
+                    // disconnect anyway, not even when the user closes the
+                    // browser window (which is kind of wrong, but the point is
+                    // that we should never ever get disconnected).
+                    //
+                    // On the other hand, failed connections due to XMPP layer
+                    // errors, trigger a callback with status Strophe.Status.CONNFAIL.
+                    //
+                    // Here we implement retry logic for failed connections due
+                    // to XMPP layer errors and we display an error to the user
+                    // if we get disconnected from the XMPP server permanently.
+
+                    // If the connection failed, retry.
+                    if (connectionFailed
+                        && faultTolerantConnect.retry("connection-failed")) {
+                        return;
+                    }
+
+                    // If we failed to connect to the XMPP server, fire an event
+                    // to let all the interested module now about it.
+                    eventEmitter.emit(XMPPEvents.CONNECTION_FAILED,
+                        msg ? msg : lastErrorMsg);
+                }
+            } else if (status === Strophe.Status.AUTHFAIL) {
+                // wrong password or username, prompt user
+                XMPP.promptLogin();
+
+            }
+        });
     });
 }
 
@@ -16770,13 +16145,21 @@ function initStrophePlugins()
 function registerListeners() {
     APP.RTC.addStreamListener(maybeDoJoin,
         StreamEventTypes.EVENT_TYPE_LOCAL_CREATED);
+    APP.RTC.addListener(RTCEvents.AVAILABLE_DEVICES_CHANGED, function (devices) {
+        XMPP.addToPresence("devices", devices);
+    })
     APP.UI.addListener(UIEvents.NICKNAME_CHANGED, function (nickname) {
         XMPP.addToPresence("displayName", nickname);
     });
 }
 
-function setupEvents() {
-    $(window).bind('beforeunload', function () {
+var unload = (function () {
+    var unloaded = false;
+
+    return function () {
+        if (unloaded) { return; }
+        unloaded = true;
+
         if (connection && connection.connected) {
             // ensure signout
             $.ajax({
@@ -16785,27 +16168,45 @@ function setupEvents() {
                 async: false,
                 cache: false,
                 contentType: 'application/xml',
-                data: "<body rid='" + (connection.rid || connection._proto.rid)
-                    + "' xmlns='http://jabber.org/protocol/httpbind' sid='"
-                    + (connection.sid || connection._proto.sid)
-                    + "' type='terminate'>" +
-                    "<presence xmlns='jabber:client' type='unavailable'/>" +
-                    "</body>",
+                data: "<body rid='" + (connection.rid || connection._proto.rid) +
+                    "' xmlns='http://jabber.org/protocol/httpbind' sid='" +
+                    (connection.sid || connection._proto.sid)  +
+                    "' type='terminate'>" +
+                "<presence xmlns='jabber:client' type='unavailable'/>" +
+                "</body>",
                 success: function (data) {
                     console.log('signed out');
                     console.log(data);
                 },
                 error: function (XMLHttpRequest, textStatus, errorThrown) {
                     console.log('signout error',
-                            textStatus + ' (' + errorThrown + ')');
+                        textStatus + ' (' + errorThrown + ')');
                 }
             });
         }
         XMPP.disposeConference(true);
-    });
+    };
+})();
+
+function setupEvents() {
+    // In recent versions of FF the 'beforeunload' event is not fired when the
+    // window or the tab is closed. It is only fired when we leave the page
+    // (change URL). If this participant doesn't unload properly, then it
+    // becomes a ghost for the rest of the participants that stay in the
+    // conference. Thankfully handling the 'unload' event in addition to the
+    // 'beforeunload' event seems to garante the execution of the 'unload'
+    // method at least once.
+    //
+    // The 'unload' method can safely be run multiple times, it will actually do
+    // something only the first time that it's run, so we're don't have to worry
+    // about browsers that fire both events.
+
+    $(window).bind('beforeunload', unload);
+    $(window).bind('unload', unload);
 }
 
 var XMPP = {
+    getConnection: function(){ return connection; },
     sessionTerminated: false,
 
     /**
@@ -16883,10 +16284,12 @@ var XMPP = {
             // FIXME: probably removing streams is not required and close() should
             // be enough
             if (APP.RTC.localAudio) {
-                handler.peerconnection.removeStream(APP.RTC.localAudio.getOriginalStream(), onUnload);
+                handler.peerconnection.removeStream(
+                    APP.RTC.localAudio.getOriginalStream(), onUnload);
             }
             if (APP.RTC.localVideo) {
-                handler.peerconnection.removeStream(APP.RTC.localVideo.getOriginalStream(), onUnload);
+                handler.peerconnection.removeStream(
+                    APP.RTC.localVideo.getOriginalStream(), onUnload);
             }
             handler.peerconnection.close();
         }
@@ -16922,21 +16325,40 @@ var XMPP = {
     isExternalAuthEnabled: function () {
         return Moderator.isExternalAuthEnabled();
     },
-    switchStreams: function (stream, oldStream, callback) {
+    switchStreams: function (stream, oldStream, callback, isAudio) {
         if (connection && connection.jingle.activecall) {
             // FIXME: will block switchInProgress on true value in case of exception
-            connection.jingle.activecall.switchStreams(stream, oldStream, callback);
+            connection.jingle.activecall.switchStreams(stream, oldStream, callback, isAudio);
         } else {
             // We are done immediately
             console.warn("No conference handler or conference not started yet");
             callback();
         }
     },
+    sendVideoInfoPresence: function (mute) {
+        if(!connection)
+            return;
+        connection.emuc.addVideoInfoToPresence(mute);
+        connection.emuc.sendPresence();
+    },
     setVideoMute: function (mute, callback, options) {
-       if(connection && APP.RTC.localVideo && connection.jingle.activecall)
-       {
-           connection.jingle.activecall.setVideoMute(mute, callback, options);
-       }
+        if(!connection)
+            return;
+        var self = this;
+        var localCallback = function (mute) {
+            self.sendVideoInfoPresence(mute);
+            return callback(mute);
+        };
+
+        if(connection.jingle.activecall)
+        {
+            connection.jingle.activecall.setVideoMute(
+                mute, localCallback, options);
+        }
+        else {
+            localCallback(mute);
+        }
+
     },
     setAudioMute: function (mute, callback) {
         if (!(connection && APP.RTC.localAudio)) {
@@ -16959,10 +16381,17 @@ var XMPP = {
         // It is not clear what is the right way to handle multiple tracks.
         // So at least make sure that they are all muted or all unmuted and
         // that we send presence just once.
-        APP.RTC.localAudio.mute();
+        APP.RTC.localAudio.setMute(!mute);
         // isMuted is the opposite of audioEnabled
-        connection.emuc.addAudioInfoToPresence(mute);
-        connection.emuc.sendPresence();
+        this.sendAudioInfoPresence(mute, callback);
+        return true;
+    },
+    sendAudioInfoPresence: function(mute, callback)
+    {
+        if(connection) {
+            connection.emuc.addAudioInfoToPresence(mute);
+            connection.emuc.sendPresence();
+        }
         callback();
         return true;
     },
@@ -17019,9 +16448,6 @@ var XMPP = {
             case "displayName":
                 connection.emuc.addDisplayNameToPresence(value);
                 break;
-            case "etherpad":
-                connection.emuc.addEtherpadToPresence(value);
-                break;
             case "prezi":
                 connection.emuc.addPreziToPresence(value, 0);
                 break;
@@ -17033,11 +16459,21 @@ var XMPP = {
                 break;
             case "email":
                 connection.emuc.addEmailToPresence(value);
+                break;
+            case "devices":
+                connection.emuc.addDevicesToPresence(value);
+                break;
+            case "startMuted":
+                if(!Moderator.isModerator())
+                    return;
+                connection.emuc.addStartMutedToPresence(value[0],
+                    value[1]);
+                break;
             default :
-                console.log("Unknown tag for presence.");
+                console.log("Unknown tag for presence: " + name);
                 return;
         }
-        if(!dontSend)
+        if (!dontSend)
             connection.emuc.sendPresence();
     },
     /**
@@ -17126,13 +16562,1145 @@ var XMPP = {
     },
     getSessions: function () {
         return connection.jingle.sessions;
+    },
+    removeStream: function (stream) {
+        if(!connection || !connection.jingle.activecall ||
+            !connection.jingle.activecall.peerconnection)
+            return;
+        connection.jingle.activecall.peerconnection.removeStream(stream);
     }
-
 };
 
 module.exports = XMPP;
 
-},{"../../service/RTC/StreamEventTypes":91,"../../service/UI/UIEvents":92,"../../service/xmpp/XMPPEvents":97,"./SDP":49,"./moderator":53,"./recording":54,"./strophe.emuc":55,"./strophe.jingle":56,"./strophe.logger":57,"./strophe.moderate":58,"./strophe.rayo":59,"./strophe.util":60,"events":98,"pako":63}],62:[function(require,module,exports){
+},{"../../service/RTC/RTCEvents":97,"../../service/RTC/StreamEventTypes":99,"../../service/UI/UIEvents":100,"../../service/xmpp/XMPPEvents":106,"../settings/Settings":45,"./SDP":51,"./moderator":55,"./recording":56,"./strophe.emuc":57,"./strophe.jingle":58,"./strophe.logger":59,"./strophe.moderate":60,"./strophe.rayo":61,"./strophe.util":62,"events":107,"pako":66,"retry":82}],64:[function(require,module,exports){
+(function (process){
+/*!
+ * async
+ * https://github.com/caolan/async
+ *
+ * Copyright 2010-2014 Caolan McMahon
+ * Released under the MIT license
+ */
+/*jshint onevar: false, indent:4 */
+/*global setImmediate: false, setTimeout: false, console: false */
+(function () {
+
+    var async = {};
+
+    // global on the server, window in the browser
+    var root, previous_async;
+
+    root = this;
+    if (root != null) {
+      previous_async = root.async;
+    }
+
+    async.noConflict = function () {
+        root.async = previous_async;
+        return async;
+    };
+
+    function only_once(fn) {
+        var called = false;
+        return function() {
+            if (called) throw new Error("Callback was already called.");
+            called = true;
+            fn.apply(root, arguments);
+        }
+    }
+
+    //// cross-browser compatiblity functions ////
+
+    var _toString = Object.prototype.toString;
+
+    var _isArray = Array.isArray || function (obj) {
+        return _toString.call(obj) === '[object Array]';
+    };
+
+    var _each = function (arr, iterator) {
+        if (arr.forEach) {
+            return arr.forEach(iterator);
+        }
+        for (var i = 0; i < arr.length; i += 1) {
+            iterator(arr[i], i, arr);
+        }
+    };
+
+    var _map = function (arr, iterator) {
+        if (arr.map) {
+            return arr.map(iterator);
+        }
+        var results = [];
+        _each(arr, function (x, i, a) {
+            results.push(iterator(x, i, a));
+        });
+        return results;
+    };
+
+    var _reduce = function (arr, iterator, memo) {
+        if (arr.reduce) {
+            return arr.reduce(iterator, memo);
+        }
+        _each(arr, function (x, i, a) {
+            memo = iterator(memo, x, i, a);
+        });
+        return memo;
+    };
+
+    var _keys = function (obj) {
+        if (Object.keys) {
+            return Object.keys(obj);
+        }
+        var keys = [];
+        for (var k in obj) {
+            if (obj.hasOwnProperty(k)) {
+                keys.push(k);
+            }
+        }
+        return keys;
+    };
+
+    //// exported async module functions ////
+
+    //// nextTick implementation with browser-compatible fallback ////
+    if (typeof process === 'undefined' || !(process.nextTick)) {
+        if (typeof setImmediate === 'function') {
+            async.nextTick = function (fn) {
+                // not a direct alias for IE10 compatibility
+                setImmediate(fn);
+            };
+            async.setImmediate = async.nextTick;
+        }
+        else {
+            async.nextTick = function (fn) {
+                setTimeout(fn, 0);
+            };
+            async.setImmediate = async.nextTick;
+        }
+    }
+    else {
+        async.nextTick = process.nextTick;
+        if (typeof setImmediate !== 'undefined') {
+            async.setImmediate = function (fn) {
+              // not a direct alias for IE10 compatibility
+              setImmediate(fn);
+            };
+        }
+        else {
+            async.setImmediate = async.nextTick;
+        }
+    }
+
+    async.each = function (arr, iterator, callback) {
+        callback = callback || function () {};
+        if (!arr.length) {
+            return callback();
+        }
+        var completed = 0;
+        _each(arr, function (x) {
+            iterator(x, only_once(done) );
+        });
+        function done(err) {
+          if (err) {
+              callback(err);
+              callback = function () {};
+          }
+          else {
+              completed += 1;
+              if (completed >= arr.length) {
+                  callback();
+              }
+          }
+        }
+    };
+    async.forEach = async.each;
+
+    async.eachSeries = function (arr, iterator, callback) {
+        callback = callback || function () {};
+        if (!arr.length) {
+            return callback();
+        }
+        var completed = 0;
+        var iterate = function () {
+            iterator(arr[completed], function (err) {
+                if (err) {
+                    callback(err);
+                    callback = function () {};
+                }
+                else {
+                    completed += 1;
+                    if (completed >= arr.length) {
+                        callback();
+                    }
+                    else {
+                        iterate();
+                    }
+                }
+            });
+        };
+        iterate();
+    };
+    async.forEachSeries = async.eachSeries;
+
+    async.eachLimit = function (arr, limit, iterator, callback) {
+        var fn = _eachLimit(limit);
+        fn.apply(null, [arr, iterator, callback]);
+    };
+    async.forEachLimit = async.eachLimit;
+
+    var _eachLimit = function (limit) {
+
+        return function (arr, iterator, callback) {
+            callback = callback || function () {};
+            if (!arr.length || limit <= 0) {
+                return callback();
+            }
+            var completed = 0;
+            var started = 0;
+            var running = 0;
+
+            (function replenish () {
+                if (completed >= arr.length) {
+                    return callback();
+                }
+
+                while (running < limit && started < arr.length) {
+                    started += 1;
+                    running += 1;
+                    iterator(arr[started - 1], function (err) {
+                        if (err) {
+                            callback(err);
+                            callback = function () {};
+                        }
+                        else {
+                            completed += 1;
+                            running -= 1;
+                            if (completed >= arr.length) {
+                                callback();
+                            }
+                            else {
+                                replenish();
+                            }
+                        }
+                    });
+                }
+            })();
+        };
+    };
+
+
+    var doParallel = function (fn) {
+        return function () {
+            var args = Array.prototype.slice.call(arguments);
+            return fn.apply(null, [async.each].concat(args));
+        };
+    };
+    var doParallelLimit = function(limit, fn) {
+        return function () {
+            var args = Array.prototype.slice.call(arguments);
+            return fn.apply(null, [_eachLimit(limit)].concat(args));
+        };
+    };
+    var doSeries = function (fn) {
+        return function () {
+            var args = Array.prototype.slice.call(arguments);
+            return fn.apply(null, [async.eachSeries].concat(args));
+        };
+    };
+
+
+    var _asyncMap = function (eachfn, arr, iterator, callback) {
+        arr = _map(arr, function (x, i) {
+            return {index: i, value: x};
+        });
+        if (!callback) {
+            eachfn(arr, function (x, callback) {
+                iterator(x.value, function (err) {
+                    callback(err);
+                });
+            });
+        } else {
+            var results = [];
+            eachfn(arr, function (x, callback) {
+                iterator(x.value, function (err, v) {
+                    results[x.index] = v;
+                    callback(err);
+                });
+            }, function (err) {
+                callback(err, results);
+            });
+        }
+    };
+    async.map = doParallel(_asyncMap);
+    async.mapSeries = doSeries(_asyncMap);
+    async.mapLimit = function (arr, limit, iterator, callback) {
+        return _mapLimit(limit)(arr, iterator, callback);
+    };
+
+    var _mapLimit = function(limit) {
+        return doParallelLimit(limit, _asyncMap);
+    };
+
+    // reduce only has a series version, as doing reduce in parallel won't
+    // work in many situations.
+    async.reduce = function (arr, memo, iterator, callback) {
+        async.eachSeries(arr, function (x, callback) {
+            iterator(memo, x, function (err, v) {
+                memo = v;
+                callback(err);
+            });
+        }, function (err) {
+            callback(err, memo);
+        });
+    };
+    // inject alias
+    async.inject = async.reduce;
+    // foldl alias
+    async.foldl = async.reduce;
+
+    async.reduceRight = function (arr, memo, iterator, callback) {
+        var reversed = _map(arr, function (x) {
+            return x;
+        }).reverse();
+        async.reduce(reversed, memo, iterator, callback);
+    };
+    // foldr alias
+    async.foldr = async.reduceRight;
+
+    var _filter = function (eachfn, arr, iterator, callback) {
+        var results = [];
+        arr = _map(arr, function (x, i) {
+            return {index: i, value: x};
+        });
+        eachfn(arr, function (x, callback) {
+            iterator(x.value, function (v) {
+                if (v) {
+                    results.push(x);
+                }
+                callback();
+            });
+        }, function (err) {
+            callback(_map(results.sort(function (a, b) {
+                return a.index - b.index;
+            }), function (x) {
+                return x.value;
+            }));
+        });
+    };
+    async.filter = doParallel(_filter);
+    async.filterSeries = doSeries(_filter);
+    // select alias
+    async.select = async.filter;
+    async.selectSeries = async.filterSeries;
+
+    var _reject = function (eachfn, arr, iterator, callback) {
+        var results = [];
+        arr = _map(arr, function (x, i) {
+            return {index: i, value: x};
+        });
+        eachfn(arr, function (x, callback) {
+            iterator(x.value, function (v) {
+                if (!v) {
+                    results.push(x);
+                }
+                callback();
+            });
+        }, function (err) {
+            callback(_map(results.sort(function (a, b) {
+                return a.index - b.index;
+            }), function (x) {
+                return x.value;
+            }));
+        });
+    };
+    async.reject = doParallel(_reject);
+    async.rejectSeries = doSeries(_reject);
+
+    var _detect = function (eachfn, arr, iterator, main_callback) {
+        eachfn(arr, function (x, callback) {
+            iterator(x, function (result) {
+                if (result) {
+                    main_callback(x);
+                    main_callback = function () {};
+                }
+                else {
+                    callback();
+                }
+            });
+        }, function (err) {
+            main_callback();
+        });
+    };
+    async.detect = doParallel(_detect);
+    async.detectSeries = doSeries(_detect);
+
+    async.some = function (arr, iterator, main_callback) {
+        async.each(arr, function (x, callback) {
+            iterator(x, function (v) {
+                if (v) {
+                    main_callback(true);
+                    main_callback = function () {};
+                }
+                callback();
+            });
+        }, function (err) {
+            main_callback(false);
+        });
+    };
+    // any alias
+    async.any = async.some;
+
+    async.every = function (arr, iterator, main_callback) {
+        async.each(arr, function (x, callback) {
+            iterator(x, function (v) {
+                if (!v) {
+                    main_callback(false);
+                    main_callback = function () {};
+                }
+                callback();
+            });
+        }, function (err) {
+            main_callback(true);
+        });
+    };
+    // all alias
+    async.all = async.every;
+
+    async.sortBy = function (arr, iterator, callback) {
+        async.map(arr, function (x, callback) {
+            iterator(x, function (err, criteria) {
+                if (err) {
+                    callback(err);
+                }
+                else {
+                    callback(null, {value: x, criteria: criteria});
+                }
+            });
+        }, function (err, results) {
+            if (err) {
+                return callback(err);
+            }
+            else {
+                var fn = function (left, right) {
+                    var a = left.criteria, b = right.criteria;
+                    return a < b ? -1 : a > b ? 1 : 0;
+                };
+                callback(null, _map(results.sort(fn), function (x) {
+                    return x.value;
+                }));
+            }
+        });
+    };
+
+    async.auto = function (tasks, callback) {
+        callback = callback || function () {};
+        var keys = _keys(tasks);
+        var remainingTasks = keys.length
+        if (!remainingTasks) {
+            return callback();
+        }
+
+        var results = {};
+
+        var listeners = [];
+        var addListener = function (fn) {
+            listeners.unshift(fn);
+        };
+        var removeListener = function (fn) {
+            for (var i = 0; i < listeners.length; i += 1) {
+                if (listeners[i] === fn) {
+                    listeners.splice(i, 1);
+                    return;
+                }
+            }
+        };
+        var taskComplete = function () {
+            remainingTasks--
+            _each(listeners.slice(0), function (fn) {
+                fn();
+            });
+        };
+
+        addListener(function () {
+            if (!remainingTasks) {
+                var theCallback = callback;
+                // prevent final callback from calling itself if it errors
+                callback = function () {};
+
+                theCallback(null, results);
+            }
+        });
+
+        _each(keys, function (k) {
+            var task = _isArray(tasks[k]) ? tasks[k]: [tasks[k]];
+            var taskCallback = function (err) {
+                var args = Array.prototype.slice.call(arguments, 1);
+                if (args.length <= 1) {
+                    args = args[0];
+                }
+                if (err) {
+                    var safeResults = {};
+                    _each(_keys(results), function(rkey) {
+                        safeResults[rkey] = results[rkey];
+                    });
+                    safeResults[k] = args;
+                    callback(err, safeResults);
+                    // stop subsequent errors hitting callback multiple times
+                    callback = function () {};
+                }
+                else {
+                    results[k] = args;
+                    async.setImmediate(taskComplete);
+                }
+            };
+            var requires = task.slice(0, Math.abs(task.length - 1)) || [];
+            var ready = function () {
+                return _reduce(requires, function (a, x) {
+                    return (a && results.hasOwnProperty(x));
+                }, true) && !results.hasOwnProperty(k);
+            };
+            if (ready()) {
+                task[task.length - 1](taskCallback, results);
+            }
+            else {
+                var listener = function () {
+                    if (ready()) {
+                        removeListener(listener);
+                        task[task.length - 1](taskCallback, results);
+                    }
+                };
+                addListener(listener);
+            }
+        });
+    };
+
+    async.retry = function(times, task, callback) {
+        var DEFAULT_TIMES = 5;
+        var attempts = [];
+        // Use defaults if times not passed
+        if (typeof times === 'function') {
+            callback = task;
+            task = times;
+            times = DEFAULT_TIMES;
+        }
+        // Make sure times is a number
+        times = parseInt(times, 10) || DEFAULT_TIMES;
+        var wrappedTask = function(wrappedCallback, wrappedResults) {
+            var retryAttempt = function(task, finalAttempt) {
+                return function(seriesCallback) {
+                    task(function(err, result){
+                        seriesCallback(!err || finalAttempt, {err: err, result: result});
+                    }, wrappedResults);
+                };
+            };
+            while (times) {
+                attempts.push(retryAttempt(task, !(times-=1)));
+            }
+            async.series(attempts, function(done, data){
+                data = data[data.length - 1];
+                (wrappedCallback || callback)(data.err, data.result);
+            });
+        }
+        // If a callback is passed, run this as a controll flow
+        return callback ? wrappedTask() : wrappedTask
+    };
+
+    async.waterfall = function (tasks, callback) {
+        callback = callback || function () {};
+        if (!_isArray(tasks)) {
+          var err = new Error('First argument to waterfall must be an array of functions');
+          return callback(err);
+        }
+        if (!tasks.length) {
+            return callback();
+        }
+        var wrapIterator = function (iterator) {
+            return function (err) {
+                if (err) {
+                    callback.apply(null, arguments);
+                    callback = function () {};
+                }
+                else {
+                    var args = Array.prototype.slice.call(arguments, 1);
+                    var next = iterator.next();
+                    if (next) {
+                        args.push(wrapIterator(next));
+                    }
+                    else {
+                        args.push(callback);
+                    }
+                    async.setImmediate(function () {
+                        iterator.apply(null, args);
+                    });
+                }
+            };
+        };
+        wrapIterator(async.iterator(tasks))();
+    };
+
+    var _parallel = function(eachfn, tasks, callback) {
+        callback = callback || function () {};
+        if (_isArray(tasks)) {
+            eachfn.map(tasks, function (fn, callback) {
+                if (fn) {
+                    fn(function (err) {
+                        var args = Array.prototype.slice.call(arguments, 1);
+                        if (args.length <= 1) {
+                            args = args[0];
+                        }
+                        callback.call(null, err, args);
+                    });
+                }
+            }, callback);
+        }
+        else {
+            var results = {};
+            eachfn.each(_keys(tasks), function (k, callback) {
+                tasks[k](function (err) {
+                    var args = Array.prototype.slice.call(arguments, 1);
+                    if (args.length <= 1) {
+                        args = args[0];
+                    }
+                    results[k] = args;
+                    callback(err);
+                });
+            }, function (err) {
+                callback(err, results);
+            });
+        }
+    };
+
+    async.parallel = function (tasks, callback) {
+        _parallel({ map: async.map, each: async.each }, tasks, callback);
+    };
+
+    async.parallelLimit = function(tasks, limit, callback) {
+        _parallel({ map: _mapLimit(limit), each: _eachLimit(limit) }, tasks, callback);
+    };
+
+    async.series = function (tasks, callback) {
+        callback = callback || function () {};
+        if (_isArray(tasks)) {
+            async.mapSeries(tasks, function (fn, callback) {
+                if (fn) {
+                    fn(function (err) {
+                        var args = Array.prototype.slice.call(arguments, 1);
+                        if (args.length <= 1) {
+                            args = args[0];
+                        }
+                        callback.call(null, err, args);
+                    });
+                }
+            }, callback);
+        }
+        else {
+            var results = {};
+            async.eachSeries(_keys(tasks), function (k, callback) {
+                tasks[k](function (err) {
+                    var args = Array.prototype.slice.call(arguments, 1);
+                    if (args.length <= 1) {
+                        args = args[0];
+                    }
+                    results[k] = args;
+                    callback(err);
+                });
+            }, function (err) {
+                callback(err, results);
+            });
+        }
+    };
+
+    async.iterator = function (tasks) {
+        var makeCallback = function (index) {
+            var fn = function () {
+                if (tasks.length) {
+                    tasks[index].apply(null, arguments);
+                }
+                return fn.next();
+            };
+            fn.next = function () {
+                return (index < tasks.length - 1) ? makeCallback(index + 1): null;
+            };
+            return fn;
+        };
+        return makeCallback(0);
+    };
+
+    async.apply = function (fn) {
+        var args = Array.prototype.slice.call(arguments, 1);
+        return function () {
+            return fn.apply(
+                null, args.concat(Array.prototype.slice.call(arguments))
+            );
+        };
+    };
+
+    var _concat = function (eachfn, arr, fn, callback) {
+        var r = [];
+        eachfn(arr, function (x, cb) {
+            fn(x, function (err, y) {
+                r = r.concat(y || []);
+                cb(err);
+            });
+        }, function (err) {
+            callback(err, r);
+        });
+    };
+    async.concat = doParallel(_concat);
+    async.concatSeries = doSeries(_concat);
+
+    async.whilst = function (test, iterator, callback) {
+        if (test()) {
+            iterator(function (err) {
+                if (err) {
+                    return callback(err);
+                }
+                async.whilst(test, iterator, callback);
+            });
+        }
+        else {
+            callback();
+        }
+    };
+
+    async.doWhilst = function (iterator, test, callback) {
+        iterator(function (err) {
+            if (err) {
+                return callback(err);
+            }
+            var args = Array.prototype.slice.call(arguments, 1);
+            if (test.apply(null, args)) {
+                async.doWhilst(iterator, test, callback);
+            }
+            else {
+                callback();
+            }
+        });
+    };
+
+    async.until = function (test, iterator, callback) {
+        if (!test()) {
+            iterator(function (err) {
+                if (err) {
+                    return callback(err);
+                }
+                async.until(test, iterator, callback);
+            });
+        }
+        else {
+            callback();
+        }
+    };
+
+    async.doUntil = function (iterator, test, callback) {
+        iterator(function (err) {
+            if (err) {
+                return callback(err);
+            }
+            var args = Array.prototype.slice.call(arguments, 1);
+            if (!test.apply(null, args)) {
+                async.doUntil(iterator, test, callback);
+            }
+            else {
+                callback();
+            }
+        });
+    };
+
+    async.queue = function (worker, concurrency) {
+        if (concurrency === undefined) {
+            concurrency = 1;
+        }
+        function _insert(q, data, pos, callback) {
+          if (!q.started){
+            q.started = true;
+          }
+          if (!_isArray(data)) {
+              data = [data];
+          }
+          if(data.length == 0) {
+             // call drain immediately if there are no tasks
+             return async.setImmediate(function() {
+                 if (q.drain) {
+                     q.drain();
+                 }
+             });
+          }
+          _each(data, function(task) {
+              var item = {
+                  data: task,
+                  callback: typeof callback === 'function' ? callback : null
+              };
+
+              if (pos) {
+                q.tasks.unshift(item);
+              } else {
+                q.tasks.push(item);
+              }
+
+              if (q.saturated && q.tasks.length === q.concurrency) {
+                  q.saturated();
+              }
+              async.setImmediate(q.process);
+          });
+        }
+
+        var workers = 0;
+        var q = {
+            tasks: [],
+            concurrency: concurrency,
+            saturated: null,
+            empty: null,
+            drain: null,
+            started: false,
+            paused: false,
+            push: function (data, callback) {
+              _insert(q, data, false, callback);
+            },
+            kill: function () {
+              q.drain = null;
+              q.tasks = [];
+            },
+            unshift: function (data, callback) {
+              _insert(q, data, true, callback);
+            },
+            process: function () {
+                if (!q.paused && workers < q.concurrency && q.tasks.length) {
+                    var task = q.tasks.shift();
+                    if (q.empty && q.tasks.length === 0) {
+                        q.empty();
+                    }
+                    workers += 1;
+                    var next = function () {
+                        workers -= 1;
+                        if (task.callback) {
+                            task.callback.apply(task, arguments);
+                        }
+                        if (q.drain && q.tasks.length + workers === 0) {
+                            q.drain();
+                        }
+                        q.process();
+                    };
+                    var cb = only_once(next);
+                    worker(task.data, cb);
+                }
+            },
+            length: function () {
+                return q.tasks.length;
+            },
+            running: function () {
+                return workers;
+            },
+            idle: function() {
+                return q.tasks.length + workers === 0;
+            },
+            pause: function () {
+                if (q.paused === true) { return; }
+                q.paused = true;
+                q.process();
+            },
+            resume: function () {
+                if (q.paused === false) { return; }
+                q.paused = false;
+                q.process();
+            }
+        };
+        return q;
+    };
+    
+    async.priorityQueue = function (worker, concurrency) {
+        
+        function _compareTasks(a, b){
+          return a.priority - b.priority;
+        };
+        
+        function _binarySearch(sequence, item, compare) {
+          var beg = -1,
+              end = sequence.length - 1;
+          while (beg < end) {
+            var mid = beg + ((end - beg + 1) >>> 1);
+            if (compare(item, sequence[mid]) >= 0) {
+              beg = mid;
+            } else {
+              end = mid - 1;
+            }
+          }
+          return beg;
+        }
+        
+        function _insert(q, data, priority, callback) {
+          if (!q.started){
+            q.started = true;
+          }
+          if (!_isArray(data)) {
+              data = [data];
+          }
+          if(data.length == 0) {
+             // call drain immediately if there are no tasks
+             return async.setImmediate(function() {
+                 if (q.drain) {
+                     q.drain();
+                 }
+             });
+          }
+          _each(data, function(task) {
+              var item = {
+                  data: task,
+                  priority: priority,
+                  callback: typeof callback === 'function' ? callback : null
+              };
+              
+              q.tasks.splice(_binarySearch(q.tasks, item, _compareTasks) + 1, 0, item);
+
+              if (q.saturated && q.tasks.length === q.concurrency) {
+                  q.saturated();
+              }
+              async.setImmediate(q.process);
+          });
+        }
+        
+        // Start with a normal queue
+        var q = async.queue(worker, concurrency);
+        
+        // Override push to accept second parameter representing priority
+        q.push = function (data, priority, callback) {
+          _insert(q, data, priority, callback);
+        };
+        
+        // Remove unshift function
+        delete q.unshift;
+
+        return q;
+    };
+
+    async.cargo = function (worker, payload) {
+        var working     = false,
+            tasks       = [];
+
+        var cargo = {
+            tasks: tasks,
+            payload: payload,
+            saturated: null,
+            empty: null,
+            drain: null,
+            drained: true,
+            push: function (data, callback) {
+                if (!_isArray(data)) {
+                    data = [data];
+                }
+                _each(data, function(task) {
+                    tasks.push({
+                        data: task,
+                        callback: typeof callback === 'function' ? callback : null
+                    });
+                    cargo.drained = false;
+                    if (cargo.saturated && tasks.length === payload) {
+                        cargo.saturated();
+                    }
+                });
+                async.setImmediate(cargo.process);
+            },
+            process: function process() {
+                if (working) return;
+                if (tasks.length === 0) {
+                    if(cargo.drain && !cargo.drained) cargo.drain();
+                    cargo.drained = true;
+                    return;
+                }
+
+                var ts = typeof payload === 'number'
+                            ? tasks.splice(0, payload)
+                            : tasks.splice(0, tasks.length);
+
+                var ds = _map(ts, function (task) {
+                    return task.data;
+                });
+
+                if(cargo.empty) cargo.empty();
+                working = true;
+                worker(ds, function () {
+                    working = false;
+
+                    var args = arguments;
+                    _each(ts, function (data) {
+                        if (data.callback) {
+                            data.callback.apply(null, args);
+                        }
+                    });
+
+                    process();
+                });
+            },
+            length: function () {
+                return tasks.length;
+            },
+            running: function () {
+                return working;
+            }
+        };
+        return cargo;
+    };
+
+    var _console_fn = function (name) {
+        return function (fn) {
+            var args = Array.prototype.slice.call(arguments, 1);
+            fn.apply(null, args.concat([function (err) {
+                var args = Array.prototype.slice.call(arguments, 1);
+                if (typeof console !== 'undefined') {
+                    if (err) {
+                        if (console.error) {
+                            console.error(err);
+                        }
+                    }
+                    else if (console[name]) {
+                        _each(args, function (x) {
+                            console[name](x);
+                        });
+                    }
+                }
+            }]));
+        };
+    };
+    async.log = _console_fn('log');
+    async.dir = _console_fn('dir');
+    /*async.info = _console_fn('info');
+    async.warn = _console_fn('warn');
+    async.error = _console_fn('error');*/
+
+    async.memoize = function (fn, hasher) {
+        var memo = {};
+        var queues = {};
+        hasher = hasher || function (x) {
+            return x;
+        };
+        var memoized = function () {
+            var args = Array.prototype.slice.call(arguments);
+            var callback = args.pop();
+            var key = hasher.apply(null, args);
+            if (key in memo) {
+                async.nextTick(function () {
+                    callback.apply(null, memo[key]);
+                });
+            }
+            else if (key in queues) {
+                queues[key].push(callback);
+            }
+            else {
+                queues[key] = [callback];
+                fn.apply(null, args.concat([function () {
+                    memo[key] = arguments;
+                    var q = queues[key];
+                    delete queues[key];
+                    for (var i = 0, l = q.length; i < l; i++) {
+                      q[i].apply(null, arguments);
+                    }
+                }]));
+            }
+        };
+        memoized.memo = memo;
+        memoized.unmemoized = fn;
+        return memoized;
+    };
+
+    async.unmemoize = function (fn) {
+      return function () {
+        return (fn.unmemoized || fn).apply(null, arguments);
+      };
+    };
+
+    async.times = function (count, iterator, callback) {
+        var counter = [];
+        for (var i = 0; i < count; i++) {
+            counter.push(i);
+        }
+        return async.map(counter, iterator, callback);
+    };
+
+    async.timesSeries = function (count, iterator, callback) {
+        var counter = [];
+        for (var i = 0; i < count; i++) {
+            counter.push(i);
+        }
+        return async.mapSeries(counter, iterator, callback);
+    };
+
+    async.seq = function (/* functions... */) {
+        var fns = arguments;
+        return function () {
+            var that = this;
+            var args = Array.prototype.slice.call(arguments);
+            var callback = args.pop();
+            async.reduce(fns, args, function (newargs, fn, cb) {
+                fn.apply(that, newargs.concat([function () {
+                    var err = arguments[0];
+                    var nextargs = Array.prototype.slice.call(arguments, 1);
+                    cb(err, nextargs);
+                }]))
+            },
+            function (err, results) {
+                callback.apply(that, [err].concat(results));
+            });
+        };
+    };
+
+    async.compose = function (/* functions... */) {
+      return async.seq.apply(null, Array.prototype.reverse.call(arguments));
+    };
+
+    var _applyEach = function (eachfn, fns /*args...*/) {
+        var go = function () {
+            var that = this;
+            var args = Array.prototype.slice.call(arguments);
+            var callback = args.pop();
+            return eachfn(fns, function (fn, cb) {
+                fn.apply(that, args.concat([cb]));
+            },
+            callback);
+        };
+        if (arguments.length > 2) {
+            var args = Array.prototype.slice.call(arguments, 2);
+            return go.apply(this, args);
+        }
+        else {
+            return go;
+        }
+    };
+    async.applyEach = doParallel(_applyEach);
+    async.applyEachSeries = doSeries(_applyEach);
+
+    async.forever = function (fn, callback) {
+        function next(err) {
+            if (err) {
+                if (callback) {
+                    return callback(err);
+                }
+                throw err;
+            }
+            fn(next);
+        }
+        next();
+    };
+
+    // Node.js
+    if (typeof module !== 'undefined' && module.exports) {
+        module.exports = async;
+    }
+    // AMD / RequireJS
+    else if (typeof define !== 'undefined' && define.amd) {
+        define([], function () {
+            return async;
+        });
+    }
+    // included directly via <script> tag
+    else {
+        root.async = async;
+    }
+
+}());
+
+}).call(this,require('_process'))
+},{"_process":108}],65:[function(require,module,exports){
 // i18next, v1.7.7
 // Copyright (c)2014 Jan Mühlemann (jamuhl).
 // Distributed under MIT license
@@ -19255,7 +19823,7 @@ module.exports = XMPP;
     i18n.options = o;
 
 })();
-},{"jquery":"jquery"}],63:[function(require,module,exports){
+},{"jquery":"jquery"}],66:[function(require,module,exports){
 // Top level file is just a mixin of submodules & constants
 'use strict';
 
@@ -19270,7 +19838,8 @@ var pako = {};
 assign(pako, deflate, inflate, constants);
 
 module.exports = pako;
-},{"./lib/deflate":64,"./lib/inflate":65,"./lib/utils/common":66,"./lib/zlib/constants":69}],64:[function(require,module,exports){
+
+},{"./lib/deflate":67,"./lib/inflate":68,"./lib/utils/common":69,"./lib/zlib/constants":72}],67:[function(require,module,exports){
 'use strict';
 
 
@@ -19280,6 +19849,7 @@ var strings = require('./utils/strings');
 var msg = require('./zlib/messages');
 var zstream = require('./zlib/zstream');
 
+var toString = Object.prototype.toString;
 
 /* Public constants ==========================================================*/
 /* ===========================================================================*/
@@ -19289,6 +19859,7 @@ var Z_FINISH        = 4;
 
 var Z_OK            = 0;
 var Z_STREAM_END    = 1;
+var Z_SYNC_FLUSH    = 2;
 
 var Z_DEFAULT_COMPRESSION = -1;
 
@@ -19318,7 +19889,9 @@ var Z_DEFLATED  = 8;
  *
  * Compressed result, generated by default [[Deflate#onData]]
  * and [[Deflate#onEnd]] handlers. Filled after you push last chunk
- * (call [[Deflate#push]] with `Z_FINISH` / `true` param).
+ * (call [[Deflate#push]] with `Z_FINISH` / `true` param)  or if you
+ * push a chunk with explicit flush (call [[Deflate#push]] with
+ * `Z_SYNC_FLUSH` param).
  **/
 
 /**
@@ -19435,15 +20008,16 @@ var Deflate = function(options) {
 
 /**
  * Deflate#push(data[, mode]) -> Boolean
- * - data (Uint8Array|Array|String): input data. Strings will be converted to
- *   utf8 byte sequence.
+ * - data (Uint8Array|Array|ArrayBuffer|String): input data. Strings will be
+ *   converted to utf8 byte sequence.
  * - mode (Number|Boolean): 0..6 for corresponding Z_NO_FLUSH..Z_TREE modes.
  *   See constants. Skipped or `false` means Z_NO_FLUSH, `true` meansh Z_FINISH.
  *
  * Sends input data to deflate pipe, generating [[Deflate#onData]] calls with
  * new compressed chunks. Returns `true` on success. The last data block must have
- * mode Z_FINISH (or `true`). That flush internal pending buffers and call
- * [[Deflate#onEnd]].
+ * mode Z_FINISH (or `true`). That will flush internal pending buffers and call
+ * [[Deflate#onEnd]]. For interim explicit flushes (without ending the stream) you
+ * can use mode Z_SYNC_FLUSH, keeping the compression context.
  *
  * On fail call [[Deflate#onEnd]] with error code and return false.
  *
@@ -19474,6 +20048,8 @@ Deflate.prototype.push = function(data, mode) {
   if (typeof data === 'string') {
     // If we need to compress text, change encoding to utf8.
     strm.input = strings.string2buf(data);
+  } else if (toString.call(data) === '[object ArrayBuffer]') {
+    strm.input = new Uint8Array(data);
   } else {
     strm.input = data;
   }
@@ -19494,7 +20070,7 @@ Deflate.prototype.push = function(data, mode) {
       this.ended = true;
       return false;
     }
-    if (strm.avail_out === 0 || (strm.avail_in === 0 && _mode === Z_FINISH)) {
+    if (strm.avail_out === 0 || (strm.avail_in === 0 && (_mode === Z_FINISH || _mode === Z_SYNC_FLUSH))) {
       if (this.options.to === 'string') {
         this.onData(strings.buf2binstring(utils.shrinkBuf(strm.output, strm.next_out)));
       } else {
@@ -19509,6 +20085,13 @@ Deflate.prototype.push = function(data, mode) {
     this.onEnd(status);
     this.ended = true;
     return status === Z_OK;
+  }
+
+  // callback interim results if Z_SYNC_FLUSH.
+  if (_mode === Z_SYNC_FLUSH) {
+    this.onEnd(Z_OK);
+    strm.avail_out = 0;
+    return true;
   }
 
   return true;
@@ -19534,8 +20117,9 @@ Deflate.prototype.onData = function(chunk) {
  * - status (Number): deflate status. 0 (Z_OK) on success,
  *   other if not.
  *
- * Called once after you tell deflate that input stream complete
- * or error happenned. By default - join collected chunks,
+ * Called once after you tell deflate that the input stream is
+ * complete (Z_FINISH) or should be flushed (Z_SYNC_FLUSH)
+ * or if an error happened. By default - join collected chunks,
  * free memory and fill `results` / `err` properties.
  **/
 Deflate.prototype.onEnd = function(status) {
@@ -19632,7 +20216,8 @@ exports.Deflate = Deflate;
 exports.deflate = deflate;
 exports.deflateRaw = deflateRaw;
 exports.gzip = gzip;
-},{"./utils/common":66,"./utils/strings":67,"./zlib/deflate.js":71,"./zlib/messages":76,"./zlib/zstream":78}],65:[function(require,module,exports){
+
+},{"./utils/common":69,"./utils/strings":70,"./zlib/deflate.js":74,"./zlib/messages":79,"./zlib/zstream":81}],68:[function(require,module,exports){
 'use strict';
 
 
@@ -19644,6 +20229,7 @@ var msg = require('./zlib/messages');
 var zstream = require('./zlib/zstream');
 var gzheader = require('./zlib/gzheader');
 
+var toString = Object.prototype.toString;
 
 /**
  * class Inflate
@@ -19664,7 +20250,9 @@ var gzheader = require('./zlib/gzheader');
  *
  * Uncompressed result, generated by default [[Inflate#onData]]
  * and [[Inflate#onEnd]] handlers. Filled after you push last chunk
- * (call [[Inflate#push]] with `Z_FINISH` / `true` param).
+ * (call [[Inflate#push]] with `Z_FINISH` / `true` param) or if you
+ * push a chunk with explicit flush (call [[Inflate#push]] with
+ * `Z_SYNC_FLUSH` param).
  **/
 
 /**
@@ -19778,14 +20366,15 @@ var Inflate = function(options) {
 
 /**
  * Inflate#push(data[, mode]) -> Boolean
- * - data (Uint8Array|Array|String): input data
+ * - data (Uint8Array|Array|ArrayBuffer|String): input data
  * - mode (Number|Boolean): 0..6 for corresponding Z_NO_FLUSH..Z_TREE modes.
  *   See constants. Skipped or `false` means Z_NO_FLUSH, `true` meansh Z_FINISH.
  *
  * Sends input data to inflate pipe, generating [[Inflate#onData]] calls with
  * new output chunks. Returns `true` on success. The last data block must have
- * mode Z_FINISH (or `true`). That flush internal pending buffers and call
- * [[Inflate#onEnd]].
+ * mode Z_FINISH (or `true`). That will flush internal pending buffers and call
+ * [[Inflate#onEnd]]. For interim explicit flushes (without ending the stream) you
+ * can use mode Z_SYNC_FLUSH, keeping the decompression context.
  *
  * On fail call [[Inflate#onEnd]] with error code and return false.
  *
@@ -19816,6 +20405,8 @@ Inflate.prototype.push = function(data, mode) {
   if (typeof data === 'string') {
     // Only binary strings can be decompressed on practice
     strm.input = strings.binstring2buf(data);
+  } else if (toString.call(data) === '[object ArrayBuffer]') {
+    strm.input = new Uint8Array(data);
   } else {
     strm.input = data;
   }
@@ -19839,7 +20430,7 @@ Inflate.prototype.push = function(data, mode) {
     }
 
     if (strm.next_out) {
-      if (strm.avail_out === 0 || status === c.Z_STREAM_END || (strm.avail_in === 0 && _mode === c.Z_FINISH)) {
+      if (strm.avail_out === 0 || status === c.Z_STREAM_END || (strm.avail_in === 0 && (_mode === c.Z_FINISH || _mode === c.Z_SYNC_FLUSH))) {
 
         if (this.options.to === 'string') {
 
@@ -19865,12 +20456,20 @@ Inflate.prototype.push = function(data, mode) {
   if (status === c.Z_STREAM_END) {
     _mode = c.Z_FINISH;
   }
+
   // Finalize on the last chunk.
   if (_mode === c.Z_FINISH) {
     status = zlib_inflate.inflateEnd(this.strm);
     this.onEnd(status);
     this.ended = true;
     return status === c.Z_OK;
+  }
+
+  // callback interim results if Z_SYNC_FLUSH.
+  if (_mode === c.Z_SYNC_FLUSH) {
+    this.onEnd(c.Z_OK);
+    strm.avail_out = 0;
+    return true;
   }
 
   return true;
@@ -19896,8 +20495,9 @@ Inflate.prototype.onData = function(chunk) {
  * - status (Number): inflate status. 0 (Z_OK) on success,
  *   other if not.
  *
- * Called once after you tell inflate that input stream complete
- * or error happenned. By default - join collected chunks,
+ * Called either after you tell inflate that the input stream is
+ * complete (Z_FINISH) or should be flushed (Z_SYNC_FLUSH)
+ * or if an error happened. By default - join collected chunks,
  * free memory and fill `results` / `err` properties.
  **/
 Inflate.prototype.onEnd = function(status) {
@@ -19998,7 +20598,7 @@ exports.inflate = inflate;
 exports.inflateRaw = inflateRaw;
 exports.ungzip  = inflate;
 
-},{"./utils/common":66,"./utils/strings":67,"./zlib/constants":69,"./zlib/gzheader":72,"./zlib/inflate.js":74,"./zlib/messages":76,"./zlib/zstream":78}],66:[function(require,module,exports){
+},{"./utils/common":69,"./utils/strings":70,"./zlib/constants":72,"./zlib/gzheader":75,"./zlib/inflate.js":77,"./zlib/messages":79,"./zlib/zstream":81}],69:[function(require,module,exports){
 'use strict';
 
 
@@ -20013,7 +20613,7 @@ exports.assign = function (obj /*from1, from2, from3, ...*/) {
     var source = sources.shift();
     if (!source) { continue; }
 
-    if (typeof(source) !== 'object') {
+    if (typeof source !== 'object') {
       throw new TypeError(source + 'must be non-object');
     }
 
@@ -20044,7 +20644,7 @@ var fnTyped = {
       return;
     }
     // Fallback to ordinary array
-    for(var i=0; i<len; i++) {
+    for (var i=0; i<len; i++) {
       dest[dest_offs + i] = src[src_offs + i];
     }
   },
@@ -20073,7 +20673,7 @@ var fnTyped = {
 
 var fnUntyped = {
   arraySet: function (dest, src, src_offs, len, dest_offs) {
-    for(var i=0; i<len; i++) {
+    for (var i=0; i<len; i++) {
       dest[dest_offs + i] = src[src_offs + i];
     }
   },
@@ -20101,7 +20701,8 @@ exports.setTyped = function (on) {
 };
 
 exports.setTyped(TYPED_OK);
-},{}],67:[function(require,module,exports){
+
+},{}],70:[function(require,module,exports){
 // String encode/decode helpers
 'use strict';
 
@@ -20125,8 +20726,8 @@ try { String.fromCharCode.apply(null, new Uint8Array(1)); } catch(__) { STR_APPL
 // Note, that 5 & 6-byte values and some 4-byte values can not be represented in JS,
 // because max possible codepoint is 0x10ffff
 var _utf8len = new utils.Buf8(256);
-for (var i=0; i<256; i++) {
-  _utf8len[i] = (i >= 252 ? 6 : i >= 248 ? 5 : i >= 240 ? 4 : i >= 224 ? 3 : i >= 192 ? 2 : 1);
+for (var q=0; q<256; q++) {
+  _utf8len[q] = (q >= 252 ? 6 : q >= 248 ? 5 : q >= 240 ? 4 : q >= 224 ? 3 : q >= 192 ? 2 : 1);
 }
 _utf8len[254]=_utf8len[254]=1; // Invalid sequence start
 
@@ -20195,7 +20796,7 @@ function buf2binstring(buf, len) {
   }
 
   var result = '';
-  for(var i=0; i < len; i++) {
+  for (var i=0; i < len; i++) {
     result += String.fromCharCode(buf[i]);
   }
   return result;
@@ -20211,7 +20812,7 @@ exports.buf2binstring = function(buf) {
 // Convert binary string (typed, when possible)
 exports.binstring2buf = function(str) {
   var buf = new utils.Buf8(str.length);
-  for(var i=0, len=buf.length; i < len; i++) {
+  for (var i=0, len=buf.length; i < len; i++) {
     buf[i] = str.charCodeAt(i);
   }
   return buf;
@@ -20288,7 +20889,7 @@ exports.utf8border = function(buf, max) {
   return (pos + _utf8len[buf[pos]] > max) ? pos : max;
 };
 
-},{"./common":66}],68:[function(require,module,exports){
+},{"./common":69}],71:[function(require,module,exports){
 'use strict';
 
 // Note: adler32 takes 12% for level 0 and 2% for level 6.
@@ -20296,9 +20897,9 @@ exports.utf8border = function(buf, max) {
 // Small size is preferable.
 
 function adler32(adler, buf, len, pos) {
-  var s1 = (adler & 0xffff) |0
-    , s2 = ((adler >>> 16) & 0xffff) |0
-    , n = 0;
+  var s1 = (adler & 0xffff) |0,
+      s2 = ((adler >>> 16) & 0xffff) |0,
+      n = 0;
 
   while (len !== 0) {
     // Set limit ~ twice less than 5552, to keep
@@ -20321,7 +20922,8 @@ function adler32(adler, buf, len, pos) {
 
 
 module.exports = adler32;
-},{}],69:[function(require,module,exports){
+
+},{}],72:[function(require,module,exports){
 module.exports = {
 
   /* Allowed flush values; see deflate() and inflate() below for details */
@@ -20369,7 +20971,8 @@ module.exports = {
   Z_DEFLATED:               8
   //Z_NULL:                 null // Use -1 or null inline, depending on var type
 };
-},{}],70:[function(require,module,exports){
+
+},{}],73:[function(require,module,exports){
 'use strict';
 
 // Note: we can't get significant speed boost here.
@@ -20381,9 +20984,9 @@ module.exports = {
 function makeTable() {
   var c, table = [];
 
-  for(var n =0; n < 256; n++){
+  for (var n =0; n < 256; n++) {
     c = n;
-    for(var k =0; k < 8; k++){
+    for (var k =0; k < 8; k++) {
       c = ((c&1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1));
     }
     table[n] = c;
@@ -20397,12 +21000,12 @@ var crcTable = makeTable();
 
 
 function crc32(crc, buf, len, pos) {
-  var t = crcTable
-    , end = pos + len;
+  var t = crcTable,
+      end = pos + len;
 
   crc = crc ^ (-1);
 
-  for (var i = pos; i < end; i++ ) {
+  for (var i = pos; i < end; i++) {
     crc = (crc >>> 8) ^ t[(crc ^ buf[i]) & 0xFF];
   }
 
@@ -20411,7 +21014,8 @@ function crc32(crc, buf, len, pos) {
 
 
 module.exports = crc32;
-},{}],71:[function(require,module,exports){
+
+},{}],74:[function(require,module,exports){
 'use strict';
 
 var utils   = require('../utils/common');
@@ -21948,7 +22552,7 @@ function deflate(strm, flush) {
         put_byte(s, val);
       } while (val !== 0);
 
-      if (s.gzhead.hcrc && s.pending > beg){
+      if (s.gzhead.hcrc && s.pending > beg) {
         strm.adler = crc32(strm.adler, s.pending_buf, s.pending - beg, beg);
       }
       if (val === 0) {
@@ -22177,7 +22781,8 @@ exports.deflatePending = deflatePending;
 exports.deflatePrime = deflatePrime;
 exports.deflateTune = deflateTune;
 */
-},{"../utils/common":66,"./adler32":68,"./crc32":70,"./messages":76,"./trees":77}],72:[function(require,module,exports){
+
+},{"../utils/common":69,"./adler32":71,"./crc32":73,"./messages":79,"./trees":80}],75:[function(require,module,exports){
 'use strict';
 
 
@@ -22197,7 +22802,7 @@ function GZheader() {
                        // but leave for few code modifications
 
   //
-  // Setup limits is not necessary because in js we should not preallocate memory 
+  // Setup limits is not necessary because in js we should not preallocate memory
   // for inflate use constant limit in 65536 bytes
   //
 
@@ -22218,7 +22823,8 @@ function GZheader() {
 }
 
 module.exports = GZheader;
-},{}],73:[function(require,module,exports){
+
+},{}],76:[function(require,module,exports){
 'use strict';
 
 // See state defs from inflate.js
@@ -22545,7 +23151,7 @@ module.exports = function inflate_fast(strm, start) {
   return;
 };
 
-},{}],74:[function(require,module,exports){
+},{}],77:[function(require,module,exports){
 'use strict';
 
 
@@ -24049,7 +24655,8 @@ exports.inflateSync = inflateSync;
 exports.inflateSyncPoint = inflateSyncPoint;
 exports.inflateUndermine = inflateUndermine;
 */
-},{"../utils/common":66,"./adler32":68,"./crc32":70,"./inffast":73,"./inftrees":75}],75:[function(require,module,exports){
+
+},{"../utils/common":69,"./adler32":71,"./crc32":73,"./inffast":76,"./inftrees":78}],78:[function(require,module,exports){
 'use strict';
 
 
@@ -24246,18 +24853,20 @@ module.exports = function inflate_table(type, lens, lens_index, codes, table, ta
   // poor man optimization - use if-else instead of switch,
   // to avoid deopts in old v8
   if (type === CODES) {
-      base = extra = work;    /* dummy value--not used */
-      end = 19;
+    base = extra = work;    /* dummy value--not used */
+    end = 19;
+
   } else if (type === LENS) {
-      base = lbase;
-      base_index -= 257;
-      extra = lext;
-      extra_index -= 257;
-      end = 256;
+    base = lbase;
+    base_index -= 257;
+    extra = lext;
+    extra_index -= 257;
+    end = 256;
+
   } else {                    /* DISTS */
-      base = dbase;
-      extra = dext;
-      end = -1;
+    base = dbase;
+    extra = dext;
+    end = -1;
   }
 
   /* initialize opts for loop */
@@ -24376,7 +24985,7 @@ module.exports = function inflate_table(type, lens, lens_index, codes, table, ta
   return 0;
 };
 
-},{"../utils/common":66}],76:[function(require,module,exports){
+},{"../utils/common":69}],79:[function(require,module,exports){
 'use strict';
 
 module.exports = {
@@ -24390,7 +24999,8 @@ module.exports = {
   '-5':   'buffer error',        /* Z_BUF_ERROR     (-5) */
   '-6':   'incompatible version' /* Z_VERSION_ERROR (-6) */
 };
-},{}],77:[function(require,module,exports){
+
+},{}],80:[function(require,module,exports){
 'use strict';
 
 
@@ -24824,7 +25434,7 @@ function tr_static_init() {
   }
   //Assert (dist == 256, "tr_static_init: dist != 256");
   dist >>= 7; /* from now on, all distances are divided by 128 */
-  for ( ; code < D_CODES; code++) {
+  for (; code < D_CODES; code++) {
     base_dist[code] = dist << 7;
     for (n = 0; n < (1<<(extra_dbits[code]-7)); n++) {
       _dist_code[256 + dist++] = code;
@@ -25590,7 +26200,8 @@ exports._tr_stored_block = _tr_stored_block;
 exports._tr_flush_block  = _tr_flush_block;
 exports._tr_tally = _tr_tally;
 exports._tr_align = _tr_align;
-},{"../utils/common":66}],78:[function(require,module,exports){
+
+},{"../utils/common":69}],81:[function(require,module,exports){
 'use strict';
 
 
@@ -25620,7 +26231,171 @@ function ZStream() {
 }
 
 module.exports = ZStream;
-},{}],79:[function(require,module,exports){
+
+},{}],82:[function(require,module,exports){
+module.exports = require('./lib/retry');
+},{"./lib/retry":83}],83:[function(require,module,exports){
+var RetryOperation = require('./retry_operation');
+
+exports.operation = function(options) {
+  var timeouts = exports.timeouts(options);
+  return new RetryOperation(timeouts);
+};
+
+exports.timeouts = function(options) {
+  if (options instanceof Array) {
+    return [].concat(options);
+  }
+
+  var opts = {
+    retries: 10,
+    factor: 2,
+    minTimeout: 1 * 1000,
+    maxTimeout: Infinity,
+    randomize: false
+  };
+  for (var key in options) {
+    opts[key] = options[key];
+  }
+
+  if (opts.minTimeout > opts.maxTimeout) {
+    throw new Error('minTimeout is greater than maxTimeout');
+  }
+
+  var timeouts = [];
+  for (var i = 0; i < opts.retries; i++) {
+    timeouts.push(this._createTimeout(i, opts));
+  }
+
+  // sort the array numerically ascending
+  timeouts.sort(function(a,b) {
+    return a - b;
+  });
+
+  return timeouts;
+};
+
+exports._createTimeout = function(attempt, opts) {
+  var random = (opts.randomize)
+    ? (Math.random() + 1)
+    : 1;
+
+  var timeout = Math.round(random * opts.minTimeout * Math.pow(opts.factor, attempt));
+  timeout = Math.min(timeout, opts.maxTimeout);
+
+  return timeout;
+};
+},{"./retry_operation":84}],84:[function(require,module,exports){
+function RetryOperation(timeouts) {
+  this._timeouts = timeouts;
+  this._fn = null;
+  this._errors = [];
+  this._attempts = 1;
+  this._operationTimeout = null;
+  this._operationTimeoutCb = null;
+  this._timeout = null;
+}
+module.exports = RetryOperation;
+
+RetryOperation.prototype.retry = function(err) {
+  if (this._timeout) {
+    clearTimeout(this._timeout);
+  }
+
+  if (!err) {
+    return false;
+  }
+
+  this._errors.push(err);
+
+  var timeout = this._timeouts.shift();
+  if (timeout === undefined) {
+    return false;
+  }
+
+  this._attempts++;
+
+  var self = this;
+  setTimeout(function() {
+    self._fn(self._attempts);
+
+    if (self._operationTimeoutCb) {
+      self._timeout = setTimeout(function() {
+        self._operationTimeoutCb(self._attempts);
+      }, self._operationTimeout);
+    }
+  }, timeout);
+
+  return true;
+};
+
+RetryOperation.prototype.attempt = function(fn, timeoutOps) {
+  this._fn = fn;
+
+  if (timeoutOps) {
+    if (timeoutOps.timeout) {
+      this._operationTimeout = timeoutOps.timeout;
+    }
+    if (timeoutOps.cb) {
+      this._operationTimeoutCb = timeoutOps.cb;
+    }
+  }
+
+  this._fn(this._attempts);
+
+  var self = this;
+  if (this._operationTimeoutCb) {
+    this._timeout = setTimeout(function() {
+      self._operationTimeoutCb();
+    }, self._operationTimeout);
+  }
+};
+
+RetryOperation.prototype.try = function(fn) {
+  console.log('Using RetryOperation.try() is deprecated');
+  this.attempt(fn);
+};
+
+RetryOperation.prototype.start = function(fn) {
+  console.log('Using RetryOperation.start() is deprecated');
+  this.attempt(fn);
+};
+
+RetryOperation.prototype.start = RetryOperation.prototype.try;
+
+RetryOperation.prototype.errors = function() {
+  return this._errors;
+};
+
+RetryOperation.prototype.attempts = function() {
+  return this._attempts;
+};
+
+RetryOperation.prototype.mainError = function() {
+  if (this._errors.length === 0) {
+    return null;
+  }
+
+  var counts = {};
+  var mainError = null;
+  var mainErrorCount = 0;
+
+  for (var i = 0; i < this._errors.length; i++) {
+    var error = this._errors[i];
+    var message = error.message;
+    var count = (counts[message] || 0) + 1;
+
+    counts[message] = count;
+
+    if (count >= mainErrorCount) {
+      mainError = error;
+      mainErrorCount = count;
+    }
+  }
+
+  return mainError;
+};
+},{}],85:[function(require,module,exports){
 module.exports = function arrayEquals(array) {
     // if the other array is a falsy value, return
     if (!array)
@@ -25646,27 +26421,32 @@ module.exports = function arrayEquals(array) {
 }
 
 
-},{}],80:[function(require,module,exports){
+},{}],86:[function(require,module,exports){
 exports.Interop = require('./interop');
 
-},{"./interop":81}],81:[function(require,module,exports){
+},{"./interop":87}],87:[function(require,module,exports){
+"use strict";
+
 var transform = require('./transform');
 var arrayEquals = require('./array-equals');
 
-function Interop() { }
+function Interop() {
+
+    /**
+     * This map holds the most recent Unified Plan offer/answer SDP that was
+     * converted to Plan B, with the SDP type ('offer' or 'answer') as keys and
+     * the SDP string as values.
+     *
+     * @type {{}}
+     */
+    this.cache = {};
+}
+
 module.exports = Interop;
 
-/**
- * This map holds the most recent Plan A offer/answer SDP that was converted
- * to Plan B, with the SDP type ('offer' or 'answer') as keys and the SDP
- * string as values.
- *
- * @type {{}}
- */
-var cache = {};
 
 /**
- * This method transforms a Plan A SDP to an equivalent Plan B SDP. A
+ * This method transforms a Unified Plan SDP to an equivalent Plan B SDP. A
  * PeerConnection wrapper transforms the SDP to Plan B before passing it to the
  * application.
  *
@@ -25693,110 +26473,122 @@ Interop.prototype.toPlanB = function(desc) {
         return desc;
     }
 
-    // Try some heuristics to "make sure" this is a Plan A SDP. Plan B SDP has
-    // a video, an audio and a data "channel" at most.
+    // Try some heuristics to "make sure" this is a Unified Plan SDP. Plan B
+    // SDP has a video, an audio and a data "channel" at most.
     if (session.media.length <= 3 && session.media.every(function(m) {
             return ['video', 'audio', 'data'].indexOf(m.mid) !== -1;
         })) {
-        console.warn('This description does not look like Plan A.');
+        console.warn('This description does not look like Unified Plan.');
         return desc;
     }
 
     //#endregion
 
-    // Plan A SDP is our "precious". Cache it for later use in the Plan B ->
-    // Plan A transformation.
-    cache[desc.type] = desc.sdp;
+    // Unified Plan SDP is our "precious". Cache it for later use in the Plan B
+    // -> Unified Plan transformation.
+    this.cache[desc.type] = desc.sdp;
 
-    //#region Convert from Plan A to Plan B.
+    //#region Convert from Unified Plan to Plan B.
 
     // We rebuild the session.media array.
     var media = session.media;
     session.media = [];
 
     // Associative array that maps channel types to channel objects for fast
-    // access to channel objects by their type, e.g. channels['audio']->channel
+    // access to channel objects by their type, e.g. type2bl['audio']->channel
     // obj.
-    var channels = {};
+    var type2bl = {};
 
     // Used to build the group:BUNDLE value after the channels construction
     // loop.
     var types = [];
 
-    // Implode the Plan A m-lines/tracks into Plan B "channels".
-    media.forEach(function(mLine) {
+    // Implode the Unified Plan m-lines/tracks into Plan B channels.
+    media.forEach(function(unifiedLine) {
 
         // rtcp-mux is required in the Plan B SDP.
-        if (typeof mLine.rtcpMux !== 'string' ||
-            mLine.rtcpMux !== 'rtcp-mux') {
+        if ((typeof unifiedLine.rtcpMux !== 'string' ||
+            unifiedLine.rtcpMux !== 'rtcp-mux') &&
+            unifiedLine.direction !== 'inactive') {
             throw new Error('Cannot convert to Plan B because m-lines ' +
                 'without the rtcp-mux attribute were found.');
         }
 
-        // If we don't have a channel for this mLine.type, then use this mLine
+        if (unifiedLine.type === 'application') {
+            session.media.push(unifiedLine);
+            types.push(unifiedLine.mid);
+            return;
+        }
+
+        // If we don't have a channel for this unifiedLine.type, then use this unifiedLine
         // as the channel basis.
-        if (typeof channels[mLine.type] === 'undefined') {
-            channels[mLine.type] = mLine;
+        if (typeof type2bl[unifiedLine.type] === 'undefined') {
+            type2bl[unifiedLine.type] = unifiedLine;
         }
 
         // Add sources to the channel and handle a=msid.
-        if (typeof mLine.sources === 'object') {
-            Object.keys(mLine.sources).forEach(function(ssrc) {
+        if (typeof unifiedLine.sources === 'object') {
+            Object.keys(unifiedLine.sources).forEach(function(ssrc) {
+                if (typeof type2bl[unifiedLine.type].sources !== 'object')
+                    type2bl[unifiedLine.type].sources = {};
+
                 // Assign the sources to the channel.
-                channels[mLine.type].sources[ssrc] = mLine.sources[ssrc];
+                type2bl[unifiedLine.type].sources[ssrc] = unifiedLine.sources[ssrc];
 
-                // In Plan B the msid is an SSRC attribute. Also, we don't care
-                // about the obsolete label and mslabel attributes.
-                channels[mLine.type].sources[ssrc].msid = mLine.msid;
-
+                if (typeof unifiedLine.msid !== 'undefined') {
+                    // In Plan B the msid is an SSRC attribute. Also, we don't
+                    // care about the obsolete label and mslabel attributes.
+                    //
+                    // Note that it is not guaranteed that the unifiedLine will have
+                    // an msid. recvonly channels in particular don't have one.
+                    type2bl[unifiedLine.type].sources[ssrc].msid = unifiedLine.msid;
+                }
                 // NOTE ssrcs in ssrc groups will share msids, as
                 // draft-uberti-rtcweb-plan-00 mandates.
             });
         }
 
         // Add ssrc groups to the channel.
-        if (typeof mLine.ssrcGroups !== 'undefined' &&
-                Array.isArray(mLine.ssrcGroups)) {
+        if (typeof unifiedLine.ssrcGroups !== 'undefined' &&
+                Array.isArray(unifiedLine.ssrcGroups)) {
 
             // Create the ssrcGroups array, if it's not defined.
-            if (typeof channel.ssrcGroups === 'undefined' ||
-                    !Array.isArray(channel.ssrcGroups)) {
-                channel.ssrcGroups = [];
+            if (typeof type2bl[unifiedLine.type].ssrcGroups === 'undefined' ||
+                    !Array.isArray(type2bl[unifiedLine.type].ssrcGroups)) {
+                type2bl[unifiedLine.type].ssrcGroups = [];
             }
 
-            channel.ssrcGroups = channel.ssrcGroups.concat(mLine.ssrcGroups);
+            type2bl[unifiedLine.type].ssrcGroups = type2bl[unifiedLine.type].ssrcGroups.concat(unifiedLine.ssrcGroups);
         }
 
-        if (channels[mLine.type] === mLine) {
+        if (type2bl[unifiedLine.type] === unifiedLine) {
             // Copy ICE related stuff from the principal media line.
-            mLine.candidates = media[0].candidates;
-            mLine.iceUfrag = media[0].iceUfrag;
-            mLine.icePwd = media[0].icePwd;
-            mLine.fingerprint = media[0].fingerprint;
+            unifiedLine.candidates = media[0].candidates;
+            unifiedLine.iceUfrag = media[0].iceUfrag;
+            unifiedLine.icePwd = media[0].icePwd;
+            unifiedLine.fingerprint = media[0].fingerprint;
 
             // Plan B mids are in ['audio', 'video', 'data']
-            mLine.mid = mLine.type;
+            unifiedLine.mid = unifiedLine.type;
 
             // Plan B doesn't support/need the bundle-only attribute.
-            delete mLine.bundleOnly;
+            delete unifiedLine.bundleOnly;
 
             // In Plan B the msid is an SSRC attribute.
-            delete mLine.msid;
+            delete unifiedLine.msid;
 
             // Used to build the group:BUNDLE value after this loop.
-            types.push(mLine.type);
+            types.push(unifiedLine.type);
 
             // Add the channel to the new media array.
-            session.media.push(mLine);
+            session.media.push(unifiedLine);
         }
     });
 
     // We regenerate the BUNDLE group with the new mids.
-    session.groups.every(function(group) {
+    session.groups.some(function(group) {
         if (group.type === 'BUNDLE') {
             group.mids = types.join(' ');
-            return false;
-        } else {
             return true;
         }
     });
@@ -25818,13 +26610,14 @@ Interop.prototype.toPlanB = function(desc) {
 };
 
 /**
- * This method transforms a Plan B SDP to an equivalent Plan A SDP. A
- * PeerConnection wrapper transforms the SDP to Plan A before passing it to FF.
+ * This method transforms a Plan B SDP to an equivalent Unified Plan SDP. A
+ * PeerConnection wrapper transforms the SDP to Unified Plan before passing it
+ * to FF.
  *
  * @param desc
  * @returns {*}
  */
-Interop.prototype.toPlanA = function(desc) {
+Interop.prototype.toUnifiedPlan = function(desc) {
 
     //#region Preliminary input validation.
 
@@ -25852,7 +26645,7 @@ Interop.prototype.toPlanA = function(desc) {
         return desc;
     }
 
-    // Make sure this Plan B SDP can be converted to a Plan A SDP.
+    // Make sure this Plan B SDP can be converted to a Unified Plan SDP.
     var mids = [];
     session.media.forEach(function(m) {
         mids.push(m.mid);
@@ -25868,73 +26661,79 @@ Interop.prototype.toPlanA = function(desc) {
     }
 
     if (!hasBundle) {
-        throw new Error("Cannot convert to Plan A because m-lines that are " +
-            "not bundled were found.");
+        throw new Error("Cannot convert to Unified Plan because m-lines that" +
+            " are not bundled were found.");
     }
 
     //#endregion
 
 
-    //#region Convert from Plan B to Plan A.
+    //#region Convert from Plan B to Unified Plan.
 
     // Unfortunately, a Plan B offer/answer doesn't have enough information to
-    // rebuild an equivalent Plan A offer/answer.
+    // rebuild an equivalent Unified Plan offer/answer.
     //
-    // For example, if this is a local answer (in Plan A style) that we convert
-    // to Plan B prior to handing it over to the application (the
+    // For example, if this is a local answer (in Unified Plan style) that we
+    // convert to Plan B prior to handing it over to the application (the
     // PeerConnection wrapper called us, for instance, after a successful
     // createAnswer), we want to remember the m-line at which we've seen the
     // (local) SSRC. That's because when the application wants to do call the
     // SLD method, forcing us to do the inverse transformation (from Plan B to
-    // Plan A), we need to know to which m-line to assign the (local) SSRC. We
-    // also need to know all the other m-lines that the original answer had and
-    // include them in the transformed answer as well.
+    // Unified Plan), we need to know to which m-line to assign the (local)
+    // SSRC. We also need to know all the other m-lines that the original
+    // answer had and include them in the transformed answer as well.
     //
     // Another example is if this is a remote offer that we convert to Plan B
     // prior to giving it to the application, we want to remember the mid at
     // which we've seen the (remote) SSRC.
     //
-    // In the iteration that follows, we use the cached Plan A (if it exists)
-    // to assign mids to ssrcs.
+    // In the iteration that follows, we use the cached Unified Plan (if it
+    // exists) to assign mids to ssrcs.
 
     var cached;
-    if (typeof cache[desc.type] !== 'undefined') {
-        cached = transform.parse(cache[desc.type]);
+    if (typeof this.cache[desc.type] !== 'undefined') {
+        cached = transform.parse(this.cache[desc.type]);
     }
 
     // A helper map that sends mids to m-line objects. We use it later to
-    // rebuild the Plan A style session.media array.
-    var media = {};
-    session.media.forEach(function(channel) {
-        if (typeof channel.rtcpMux !== 'string' ||
-            channel.rtcpMux !== 'rtcp-mux') {
-            throw new Error("Cannot convert to Plan A because m-lines " +
+    // rebuild the Unified Plan style session.media array.
+    var mid2ul = {};
+    session.media.forEach(function(bLine) {
+        if ((typeof bLine.rtcpMux !== 'string' ||
+            bLine.rtcpMux !== 'rtcp-mux') &&
+            bLine.direction !== 'inactive') {
+            throw new Error("Cannot convert to Unified Plan because m-lines " +
                 "without the rtcp-mux attribute were found.");
+        }
+
+        if (bLine.type === 'application') {
+            mid2ul[bLine.mid] = bLine;
+            return;
         }
 
         // With rtcp-mux and bundle all the channels should have the same ICE
         // stuff.
-        var sources = channel.sources;
-        var ssrcGroups = channel.ssrcGroups;
-        var candidates = channel.candidates;
-        var iceUfrag = channel.iceUfrag;
-        var icePwd = channel.icePwd;
-        var fingerprint = channel.fingerprint;
-        var port = channel.port;
+        var sources = bLine.sources;
+        var ssrcGroups = bLine.ssrcGroups;
+        var candidates = bLine.candidates;
+        var iceUfrag = bLine.iceUfrag;
+        var icePwd = bLine.icePwd;
+        var fingerprint = bLine.fingerprint;
+        var port = bLine.port;
 
-        // We'll use the "channel" object as a prototype for each new "mLine"
+        // We'll use the "bLine" object as a prototype for each new "mLine"
         // that we create, but first we need to clean it up a bit.
-        delete channel.sources;
-        delete channel.ssrcGroups;
-        delete channel.candidates;
-        delete channel.iceUfrag;
-        delete channel.icePwd;
-        delete channel.fingerprint;
-        delete channel.port;
-        delete channel.mid;
+        delete bLine.sources;
+        delete bLine.ssrcGroups;
+        delete bLine.candidates;
+        delete bLine.iceUfrag;
+        delete bLine.icePwd;
+        delete bLine.fingerprint;
+        delete bLine.port;
+        delete bLine.mid;
 
         // inverted ssrc group map
-        var invertedGroups = {};
+        var ssrc2group = {};
         if (typeof ssrcGroups !== 'undefined' && Array.isArray(ssrcGroups)) {
             ssrcGroups.forEach(function (ssrcGroup) {
 
@@ -25947,105 +26746,114 @@ Interop.prototype.toPlanA = function(desc) {
                 if (typeof ssrcGroup.ssrcs !== 'undefined' &&
                     Array.isArray(ssrcGroup.ssrcs)) {
                     ssrcGroup.ssrcs.forEach(function (ssrc) {
-                        if (typeof invertedGroups[ssrc] === 'undefined') {
-                            invertedGroups[ssrc] = [];
+                        if (typeof ssrc2group[ssrc] === 'undefined') {
+                            ssrc2group[ssrc] = [];
                         }
 
-                        invertedGroups[ssrc].push(ssrcGroup);
+                        ssrc2group[ssrc].push(ssrcGroup);
                     });
                 }
             });
         }
 
         // ssrc to m-line index.
-        var mLines = {};
+        var ssrc2ml = {};
 
         if (typeof sources === 'object') {
 
             // Explode the Plan B channel sources with one m-line per source.
             Object.keys(sources).forEach(function(ssrc) {
 
-                var mLine;
-                if (typeof invertedGroups[ssrc] !== 'undefined' &&
-                    Array.isArray(invertedGroups[ssrc])) {
-                    invertedGroups[ssrc].every(function (ssrcGroup) {
+                // The (unified) m-line for this SSRC. We either create it from
+                // scratch or, if it's a grouped SSRC, we re-use a related
+                // mline. In other words, if the source is grouped with another
+                // source, put the two together in the same m-line.
+                var unifiedLine;
+                if (typeof ssrc2group[ssrc] !== 'undefined' &&
+                    Array.isArray(ssrc2group[ssrc])) {
+                    ssrc2group[ssrc].some(function (ssrcGroup) {
                         // ssrcGroup.ssrcs *is* an Array, no need to check
                         // again here.
-                        return ssrcGroup.ssrcs.every(function (related) {
-                            if (typeof mLines[related] === 'object') {
-                                mLine = mLines[related];
-                                return false;
-                            } else {
+                        return ssrcGroup.ssrcs.some(function (related) {
+                            if (typeof ssrc2ml[related] === 'object') {
+                                unifiedLine = ssrc2ml[related];
                                 return true;
                             }
                         });
                     });
                 }
 
-                if (typeof mLine === 'object') {
+                if (typeof unifiedLine === 'object') {
                     // the m-line already exists. Just add the source.
-                    mLine.sources[ssrc] = sources[ssrc];
+                    unifiedLine.sources[ssrc] = sources[ssrc];
                     delete sources[ssrc].msid;
                 } else {
-                // Use the "channel" as a prototype for the "mLine".
-                mLine = Object.create(channel);
-                mLines[ssrc] = mLine;
+                    // Use the "bLine" as a prototype for the "unifiedLine".
+                    unifiedLine = Object.create(bLine);
+                    ssrc2ml[ssrc] = unifiedLine;
 
-                // Assign the msid of the source to the m-line.
-                mLine.msid = sources[ssrc].msid;
-                delete sources[ssrc].msid;
-
-                // We assign one SSRC per media line.
-                mLine.sources = {};
-                mLine.sources[ssrc] = sources[ssrc];
-                mLine.ssrcGroups = invertedGroups[ssrc];
-
-                // Use the cached Plan A SDP (if it exists) to assign SSRCs to
-                // mids.
-                if (typeof cached !== 'undefined' &&
-                    typeof cached.media !== 'undefined' &&
-                    Array.isArray(cached.media)) {
-
-                    cached.media.forEach(function(m) {
-                        if (typeof m.sources === 'object') {
-                            Object.keys(m.sources).forEach(function(s) {
-                                if (s === ssrc) {
-                                    mLine.mid = m.mid;
-                                }
-                            });
-                        }
-                    });
-                }
-
-                if (typeof mLine.mid === 'undefined') {
-
-                    // If this is an SSRC that we see for the first time assign
-                    // it a new mid. This is typically the case when this
-                    // method is called to transform a remote description for
-                    // the first time or when there is a new SSRC in the remote
-                    // description because a new peer has joined the
-                    // conference. Local SSRCs should have already been added
-                    // to the map in the toPlanB method.
-                    //
-                    // Because FF generates answers in Plan A style, we MUST
-                    // already have a cached answer with all the local SSRCs
-                    // mapped to some mLine/mid.
-
-                    if (desc.type === 'answer') {
-                        throw new Error("An unmapped SSRC was found.");
+                    if (typeof sources[ssrc].msid !== 'undefined') {
+                        // Assign the msid of the source to the m-line. Note
+                        // that it is not guaranteed that the source will have
+                        // msid. In particular "recvonly" sources don't have an
+                        // msid. Note that "recvonly" is a term only defined
+                        // for m-lines.
+                        unifiedLine.msid = sources[ssrc].msid;
+                        delete sources[ssrc].msid;
                     }
 
-                    mLine.mid = [channel.type, '-', ssrc].join('');
-                }
+                    // We assign one SSRC per media line.
+                    unifiedLine.sources = {};
+                    unifiedLine.sources[ssrc] = sources[ssrc];
+                    unifiedLine.ssrcGroups = ssrc2group[ssrc];
 
-                // Include the candidates in the 1st media line.
-                mLine.candidates = candidates;
-                mLine.iceUfrag = iceUfrag;
-                mLine.icePwd = icePwd;
-                mLine.fingerprint = fingerprint;
-                mLine.port = port;
+                    // Use the cached Unified Plan SDP (if it exists) to assign
+                    // SSRCs to mids.
+                    if (typeof cached !== 'undefined' &&
+                        typeof cached.media !== 'undefined' &&
+                        Array.isArray(cached.media)) {
 
-                media[mLine.mid] = mLine;
+                        cached.media.forEach(function (m) {
+                            if (typeof m.sources === 'object') {
+                                Object.keys(m.sources).forEach(function (s) {
+                                    if (s === ssrc) {
+                                        unifiedLine.mid = m.mid;
+                                    }
+                                });
+                            }
+                        });
+                    }
+
+                    if (typeof unifiedLine.mid === 'undefined') {
+
+                        // If this is an SSRC that we see for the first time
+                        // assign it a new mid. This is typically the case when
+                        // this method is called to transform a remote
+                        // description for the first time or when there is a
+                        // new SSRC in the remote description because a new
+                        // peer has joined the conference. Local SSRCs should
+                        // have already been added to the map in the toPlanB
+                        // method.
+                        //
+                        // Because FF generates answers in Unified Plan style,
+                        // we MUST already have a cached answer with all the
+                        // local SSRCs mapped to some m-line/mid.
+
+                        if (desc.type === 'answer') {
+                            throw new Error("An unmapped SSRC was found.");
+                        }
+
+                        unifiedLine.mid = [bLine.type, '-', ssrc].join('');
+                    }
+
+                    // Include the candidates in the 1st media line.
+                    unifiedLine.candidates = candidates;
+                    unifiedLine.iceUfrag = iceUfrag;
+                    unifiedLine.icePwd = icePwd;
+                    unifiedLine.fingerprint = fingerprint;
+                    unifiedLine.port = port;
+
+                    mid2ul[unifiedLine.mid] = unifiedLine;
                 }
             });
         }
@@ -26059,54 +26867,57 @@ Interop.prototype.toPlanA = function(desc) {
     if (desc.type === 'answer') {
 
         // The media lines in the answer must match the media lines in the
-        // offer. The order is important too. Here we use the cached offer to
-        // find the m-lines that are missing (from the converted answer), and
-        // use the cached answer to complete the converted answer.
+        // offer. The order is important too. Here we assume that Firefox is the
+        // answerer, so we merely have to use the reconstructed (unified) answer
+        // to update the cached (unified) answer accordingly.
+        //
+        // In the general case, one would have to use the cached (unified) offer
+        // to find the m-lines that are missing from the reconstructed answer,
+        // potentially grabbing them from the cached (unified) answer. One has
+        // to be carefull with this approach because inactive m-lines do not
+        // always have an mid, making it tricky (impossible?) to find where
+        // exactly and which m-lines are missing from the reconstructed answer.
 
-        if (typeof cache['offer'] === 'undefined') {
-            throw new Error("An answer is being processed but we couldn't " +
-                    "find a cached offer.");
-        }
+        for (var i = 0; i < cached.media.length; i++) {
+            var unifiedLine = cached.media[i];
 
-        var cachedOffer = transform.parse(cache['offer']);
+            if (typeof mid2ul[unifiedLine.mid] === 'undefined') {
 
-        if (typeof cachedOffer === 'undefined' ||
-            typeof cachedOffer.media === 'undefined' ||
-            !Array.isArray(cachedOffer.media)) {
-                // FIXME(gp) is this really a problem in the general case?
-                throw new Error("The cached offer has no media.");
-        }
+                // The mid isn't in the reconstructed (unified) answer.
+                // This is either a (unified) m-line containing a remote
+                // track only, or a (unified) m-line containing a remote
+                // track and a local track that has been removed.
+                // In either case, it MUST exist in the cached
+                // (unified) answer.
+                //
+                // In case this is a removed local track, clean-up
+                // the (unified) m-line and make sure it's 'recvonly' or
+                // 'inactive'.
 
-        cachedOffer.media.forEach(function(mo) {
-
-            var mLine;
-            if (typeof media[mo.mid] === 'undefined') {
-
-                // This is probably an m-line containing a remote track only.
-                // It MUST exist in the cached answer as a remote track only
-                // mLine.
-
-                cached.media.every(function(ma) {
-                    if (mo.mid == ma.mid) {
-                        mLine = ma;
-                        return false;
-                    } else {
-                        return true;
-                    }
-                });
+                delete unifiedLine.msid;
+                delete unifiedLine.sources;
+                delete unifiedLine.ssrcGroups;
+                if (!unifiedLine.direction
+                    || unifiedLine.direction === 'sendrecv')
+                    unifiedLine.direction = 'recvonly';
+                if (!unifiedLine.direction
+                    || unifiedLine.direction === 'sendonly')
+                    unifiedLine.direction = 'inactive';
             } else {
-                mLine = media[mo.mid];
+                // This is an (unified) m-line/channel that contains a local
+                // track (sendrecv or sendonly channel) or it's a unified
+                // recvonly m-line/channel. In either case, since we're
+                // going from PlanB -> Unified Plan this m-line MUST
+                // exist in the cached answer.
             }
 
-            if (typeof mLine === 'undefined') {
-                throw new Error("The cached offer contains an m-line that " +
-                        "doesn't exist neither in the cached answer nor in " +
-                        "the converted answer.");
-            }
+            session.media.push(unifiedLine);
 
-            session.media.push(mLine);
-            mids.push(mLine.mid);
-        });
+            if (typeof unifiedLine.mid === 'string') {
+                // inactive lines don't/may not have an mid.
+                mids.push(unifiedLine.mid);
+            }
+        }
     } else {
 
         // SDP offer/answer (and the JSEP spec) forbids removing an m-section
@@ -26120,35 +26931,57 @@ Interop.prototype.toPlanA = function(desc) {
         if (typeof cached !== 'undefined' &&
             typeof cached.media !== 'undefined' &&
             Array.isArray(cached.media)) {
-            cached.media.forEach(function(pm) {
-                mids.push(pm.mid);
-                if (typeof media[pm.mid] !== 'undefined') {
-                    session.media.push(media[pm.mid]);
+            cached.media.forEach(function(unifiedLine) {
+                mids.push(unifiedLine.mid);
+                if (typeof mid2ul[unifiedLine.mid] !== 'undefined') {
+                    session.media.push(mid2ul[unifiedLine.mid]);
                 } else {
-                    delete pm.msid;
-                    delete pm.sources;
-                    delete pm.ssrcGroups;
-                    pm.direction = 'recvonly';
-                    session.media.push(pm);
+                    delete unifiedLine.msid;
+                    delete unifiedLine.sources;
+                    delete unifiedLine.ssrcGroups;
+                    if (!unifiedLine.direction
+                        || unifiedLine.direction === 'sendrecv')
+                        unifiedLine.direction = 'recvonly';
+                    if (!unifiedLine.direction
+                        || unifiedLine.direction === 'sendonly')
+                        unifiedLine.direction = 'inactive';
+                    session.media.push(unifiedLine);
                 }
             });
         }
 
         // Add all the remaining (new) m-lines of the transformed SDP.
-        Object.keys(media).forEach(function(mid) {
+        Object.keys(mid2ul).forEach(function(mid) {
             if (mids.indexOf(mid) === -1) {
                 mids.push(mid);
-                session.media.push(media[mid]);
+                if (typeof mid2ul[mid].direction === 'recvonly') {
+                    // This is a remote recvonly channel. Add its SSRC to the
+                    // appropriate sendrecv or sendonly channel.
+                    // TODO(gp) what if we don't have sendrecv/sendonly channel?
+                    session.media.some(function (unifiedLine) {
+                        if ((unifiedLine.direction === 'sendrecv' ||
+                            unifiedLine.direction === 'sendonly') &&
+                            unifiedLine.type === mid2ul[mid].type) {
+
+                            // mid2ul[mid] shouldn't have any ssrc-groups
+                            Object.keys(mid2ul[mid].sources).forEach(function (ssrc) {
+                                unifiedLine.sources[ssrc] = mid2ul[mid].sources[ssrc];
+                            });
+
+                            return true;
+                        }
+                    });
+                } else {
+                    session.media.push(mid2ul[mid]);
+                }
             }
         });
     }
 
     // We regenerate the BUNDLE group (since we regenerated the mids)
-    session.groups.every(function(group) {
+    session.groups.some(function(group) {
         if (group.type === 'BUNDLE') {
             group.mids = mids.join(' ');
-            return false;
-        } else {
             return true;
         }
     });
@@ -26161,8 +26994,9 @@ Interop.prototype.toPlanA = function(desc) {
 
     var resStr = transform.write(session);
 
-    // Cache the transformed SDP (Plan A) for later re-use in this function.
-    cache[desc.type] = resStr;
+    // Cache the transformed SDP (Unified Plan) for later re-use in this
+    // function.
+    this.cache[desc.type] = resStr;
 
     return new RTCSessionDescription({
         type: desc.type,
@@ -26172,7 +27006,7 @@ Interop.prototype.toPlanA = function(desc) {
     //#endregion
 };
 
-},{"./array-equals":79,"./transform":82}],82:[function(require,module,exports){
+},{"./array-equals":85,"./transform":88}],88:[function(require,module,exports){
 var transform = require('sdp-transform');
 
 exports.write = function(session, opts) {
@@ -26271,7 +27105,460 @@ exports.parse = function(sdp) {
 };
 
 
-},{"sdp-transform":84}],83:[function(require,module,exports){
+},{"sdp-transform":92}],89:[function(require,module,exports){
+var transform = require('sdp-transform');
+var transformUtils = require('./transform-utils');
+var parseSsrcs = transformUtils.parseSsrcs;
+var writeSsrcs = transformUtils.writeSsrcs;
+
+//region Constants
+
+var DEFAULT_NUM_OF_LAYERS = 3;
+
+//endregion
+
+//region Ctor
+
+function Simulcast(options) {
+
+    this.options = options ? options : {};
+
+    if (!this.options.numOfLayers) {
+        this.options.numOfLayers = DEFAULT_NUM_OF_LAYERS;
+    }
+
+    this.layers = [];
+}
+
+//endregion
+
+//region Stateless private utility functions
+
+/**
+ * Returns a random integer between min (included) and max (excluded)
+ * Using Math.round() gives a non-uniform distribution!
+ * @returns {number}
+ */
+function generateSSRC() {
+    var min = 0, max = 0xffffffff;
+    return Math.floor(Math.random() * (max - min)) + min;
+};
+
+function processVideo(session, action) {
+    if (session == null || !Array.isArray(session.media)) {
+        return;
+    }
+
+    session.media.forEach(function (mLine) {
+        if (mLine.type === 'video') {
+            action(mLine);
+        }
+    });
+}
+
+function validateDescription(desc)
+{
+    return desc && desc != null
+        && desc.type && desc.type != ''
+        && desc.sdp && desc.sdp != '';
+}
+
+function explodeRemoteSimulcast(mLine) {
+
+    if (!mLine || !Array.isArray(mLine.ssrcGroups)) {
+        return;
+    }
+
+    var sources = parseSsrcs(mLine);
+    var order = [];
+
+    // Find the SIM group and explode its sources.
+    var j = mLine.ssrcGroups.length;
+    while (j--) {
+
+        if (mLine.ssrcGroups[j].semantics !== 'SIM') {
+            continue;
+        }
+
+        var simulcastSsrcs = mLine.ssrcGroups[j].ssrcs.split(' ');
+
+        for (var i = 0; i < simulcastSsrcs.length; i++) {
+
+            var ssrc = simulcastSsrcs[i];
+            order.push(ssrc);
+
+            var parts = sources[ssrc].msid.split(' ');
+            sources[ssrc].msid = [parts[0], '/', i, ' ', parts[1], '/', i].join('');
+            sources[ssrc].cname = [sources[ssrc].cname, '/', i].join('');
+
+            // Remove all the groups that this SSRC participates in.
+            mLine.ssrcGroups.forEach(function (relatedGroup) {
+                if (relatedGroup.semantics === 'SIM') {
+                    return;
+                }
+
+                var relatedSsrcs = relatedGroup.ssrcs.split(' ');
+                if (relatedSsrcs.indexOf(ssrc) === -1) {
+                    return;
+                }
+
+                // Nuke all the related SSRCs.
+                relatedSsrcs.forEach(function (relatedSSRC) {
+                    sources[relatedSSRC].msid = sources[ssrc].msid;
+                    sources[relatedSSRC].cname = sources[ssrc].cname;
+                    if (relatedSSRC !== ssrc) {
+                        order.push(relatedSSRC);
+                    }
+                });
+
+                // Schedule the related group for nuking.
+            })
+        }
+
+        mLine.ssrcs = writeSsrcs(sources, order);
+        mLine.ssrcGroups.splice(j, 1);
+    };
+}
+
+function squeezeRemoteSimulcast(mLine) {
+
+    if (!mLine || !Array.isArray(mLine.ssrcGroups)) {
+        return;
+    }
+
+    var sources = parseSsrcs(mLine);
+
+    // Find the SIM group and nuke it.
+    mLine.ssrcGroups.some(function (simulcastGroup) {
+        if (simulcastGroup.semantics !== 'SIM') {
+            return false;
+        }
+
+        // Schedule the SIM group for nuking.
+        simulcastGroup.nuke = true;
+
+        var simulcastSsrcs = simulcastGroup.ssrcs.split(' ');
+
+        // Nuke all the higher layer SSRCs.
+        for (var i = 1; i < simulcastSsrcs.length; i++) {
+
+            var ssrc = simulcastSsrcs[i];
+            delete sources[ssrc];
+
+            // Remove all the groups that this SSRC participates in.
+            mLine.ssrcGroups.forEach(function (relatedGroup) {
+                if (relatedGroup.semantics === 'SIM') {
+                    return;
+                }
+
+                var relatedSsrcs = relatedGroup.ssrcs.split(' ');
+                if (relatedSsrcs.indexOf(ssrc) === -1) {
+                    return;
+                }
+
+                // Nuke all the related SSRCs.
+                relatedSsrcs.forEach(function (relatedSSRC) {
+                    delete sources[relatedSSRC];
+                });
+
+                // Schedule the related group for nuking.
+                relatedGroup.nuke = true;
+            })
+        }
+
+        return true;
+    });
+
+    mLine.ssrcs = writeSsrcs(sources);
+
+    // Nuke all the scheduled groups.
+    var i = mLine.ssrcGroups.length;
+    while (i--) {
+        if (mLine.ssrcGroups[i].nuke) {
+            mLine.ssrcGroups.splice(i, 1);
+        }
+    }
+}
+
+function removeGoogConference(mLine) {
+    if (!mLine || !Array.isArray(mLine.invalid)) {
+        return;
+    }
+
+    var i = mLine.invalid.length;
+    while (i--) {
+        if (mLine.invalid[i].value == 'x-google-flag:conference') {
+            mLine.invalid.splice(i, 1);
+        }
+    }
+}
+
+function assertGoogConference(mLine) {
+    if (!mLine) {
+        return;
+    }
+
+    if (!Array.isArray(mLine.invalid)) {
+        mLine.invalid = [];
+    }
+
+    if (!mLine.invalid.some(
+            function (i) { return i.value === 'x-google-flag:conference' })) {
+        mLine.invalid.push({'value': 'x-google-flag:conference'});
+    }
+}
+
+//endregion
+
+//region "Private" functions
+
+/**
+ *
+ * @param mLine
+ * @private
+ */
+Simulcast.prototype._maybeInitializeLayers = function(mLine) {
+
+    if (!mLine || mLine.type !== 'video') {
+        return;
+    }
+
+    var sources = parseSsrcs(mLine);
+
+    if (Object.keys(sources).length === 0) {
+
+        // no sources, disable simulcast.
+        if (this.layers.length !== 0) {
+            this.layers = [];
+        }
+
+        return;
+    }
+
+    // find the base layer (we'll reuse its msid and cname).
+    var baseLayerSSRC = Object.keys(sources)[0];
+    var baseLayer = sources[baseLayerSSRC];
+
+    // todo(gp) handle screen sharing.
+
+    // check if base CNAME has changed and reinitialise layers.
+    if (this.layers.length > 0
+        && sources[baseLayerSSRC].cname !== this.layers[0].cname) {
+        this.layers = [];
+    }
+
+    // (re)initialise layers
+    if (this.layers.length < 1) {
+
+        // first push the base layer.
+        this.layers.push({
+            ssrc: baseLayerSSRC,
+            msid: baseLayer.msid,
+            cname: baseLayer.cname
+        });
+
+        var rtx = false; // RFC 4588
+        if (Array.isArray(mLine.rtp)) {
+            rtx = mLine.rtp.some(
+                function (rtpmap) { return rtpmap.codec === 'rtx'; });
+        }
+
+        if (rtx) {
+            this.layers[0].rtx = generateSSRC();
+        }
+
+        // now push additional layers.
+        for (var i = 1; i < Math.max(1, this.options.numOfLayers); i++) {
+
+            var layer = { ssrc: generateSSRC() };
+            if (rtx) {
+                layer.rtx = generateSSRC();
+            }
+
+            this.layers.push(layer);
+        }
+    }
+};
+
+/**
+ *
+ * @param mLine
+ * @private
+ */
+Simulcast.prototype._restoreSimulcastView = function(mLine) {
+    if (mLine && mLine.type === 'video' && this.layers.length !== 0) {
+
+        var sources = {};
+
+        var msid = this.layers[0].msid;
+        var cname = this.layers[0].cname;
+        var simulcastSsrcs = [];
+        var ssrcGroups = [];
+
+        for (var i = 0; i < this.layers.length; i++) {
+            var layer = this.layers[i];
+
+            sources[layer.ssrc] = { msid: msid, cname: cname };
+            simulcastSsrcs.push(layer.ssrc);
+
+            if (layer.rtx) {
+
+                sources[layer.rtx] = {
+                    msid: msid,
+                    cname: cname
+                }
+
+                ssrcGroups.push({
+                    semantics: 'FID',
+                    ssrcs: [layer.ssrc, layer.rtx].join(' ')
+                });
+            }
+        }
+
+        ssrcGroups.push({
+            semantics: 'SIM',
+            ssrcs: simulcastSsrcs.join(' ')
+        });
+
+        mLine.ssrcGroups = ssrcGroups;
+        mLine.ssrcs = writeSsrcs(sources);
+    }
+}
+
+//endregion
+
+//region "Public" functions
+
+Simulcast.prototype.isSupported = function () {
+    return window.chrome;
+
+    // TODO this needs improvements. For example I doubt that Chrome in Android
+    // has simulcast support. Also, only recent versions of Chromium have native
+    // simulcast support.
+}
+
+/**
+ *
+ * @param desc
+ * @returns {RTCSessionDescription}
+ */
+Simulcast.prototype.mungeRemoteDescription = function (desc) {
+
+    if (!validateDescription(desc)) {
+        return desc;
+    }
+
+    var session = transform.parse(desc.sdp);
+
+    var self = this;
+    processVideo(session, function (mLine) {
+
+        // Handle simulcast reception.
+        if (self.options.explodeRemoteSimulcast) {
+            explodeRemoteSimulcast(mLine);
+        } else {
+            squeezeRemoteSimulcast(mLine);
+        }
+
+        // If native simulcast is enabled, we must append the x-goog-conference
+        // attribute to the SDP.
+        if (self.layers.length < 1) {
+            removeGoogConference(mLine);
+        } else {
+            assertGoogConference(mLine);
+        }
+    });
+
+    return new RTCSessionDescription({
+        type: desc.type,
+        sdp: transform.write(session)
+    });
+};
+
+/**
+ *
+ * @param desc
+ * @returns {RTCSessionDescription}
+ */
+Simulcast.prototype.mungeLocalDescription = function (desc) {
+
+    if (!validateDescription(desc) || !this.isSupported()) {
+        return desc;
+    }
+
+    var session = transform.parse(desc.sdp);
+
+    var self = this;
+    processVideo(session, function (mLine) {
+        // Initialize native simulcast layers, if not already done.
+        self._maybeInitializeLayers(mLine);
+
+        // Update the SDP with the simulcast layers.
+        self._restoreSimulcastView(mLine);
+    });
+
+    return new RTCSessionDescription({
+        type: desc.type,
+        sdp: transform.write(session)
+    });
+};
+
+//endregion
+
+module.exports = Simulcast;
+
+},{"./transform-utils":90,"sdp-transform":92}],90:[function(require,module,exports){
+exports.writeSsrcs = function(sources, order) {
+  var ssrcs = [];
+
+  // expand sources to ssrcs
+  if (typeof sources !== 'undefined' &&
+      Object.keys(sources).length !== 0) {
+
+    if (Array.isArray(order)) {
+      for (var i = 0; i < order.length; i++) {
+        var ssrc = order[i];
+        var source = sources[ssrc];
+        Object.keys(source).forEach(function (attribute) {
+          ssrcs.push({
+            id: ssrc,
+            attribute: attribute,
+            value: source[attribute]
+          });
+        });
+      }
+    } else {
+      Object.keys(sources).forEach(function (ssrc) {
+        var source = sources[ssrc];
+        Object.keys(source).forEach(function (attribute) {
+          ssrcs.push({
+            id: ssrc,
+            attribute: attribute,
+            value: source[attribute]
+          });
+        });
+      });
+    }
+  }
+
+  return ssrcs;
+};
+
+exports.parseSsrcs = function (mLine) {
+  var sources = {};
+  // group sources attributes by ssrc.
+  if (typeof mLine.ssrcs !== 'undefined' && Array.isArray(mLine.ssrcs)) {
+    mLine.ssrcs.forEach(function (ssrc) {
+      if (!sources[ssrc.id])
+        sources[ssrc.id] = {};
+      sources[ssrc.id][ssrc.attribute] = ssrc.value;
+    });
+  }
+  return sources;
+};
+
+
+},{}],91:[function(require,module,exports){
 var grammar = module.exports = {
   v: [{
       name: 'version',
@@ -26496,6 +27783,10 @@ var grammar = module.exports = {
       name: 'rtcpMux',
       reg: /^(rtcp-mux)/
     },
+    { //a=rtcp-rsize
+      name: 'rtcpRsize',
+      reg: /^(rtcp-rsize)/
+    },
     { // any a= that we don't understand is kepts verbatim on media.invalid
       push: 'invalid',
       names: ["value"]
@@ -26516,7 +27807,7 @@ Object.keys(grammar).forEach(function (key) {
   });
 });
 
-},{}],84:[function(require,module,exports){
+},{}],92:[function(require,module,exports){
 var parser = require('./parser');
 var writer = require('./writer');
 
@@ -26526,7 +27817,7 @@ exports.parseFmtpConfig = parser.parseFmtpConfig;
 exports.parsePayloads = parser.parsePayloads;
 exports.parseRemoteCandidates = parser.parseRemoteCandidates;
 
-},{"./parser":85,"./writer":86}],85:[function(require,module,exports){
+},{"./parser":93,"./writer":94}],93:[function(require,module,exports){
 var toIntIfInt = function (v) {
   return String(Number(v)) === v ? Number(v) : v;
 };
@@ -26621,7 +27912,7 @@ exports.parseRemoteCandidates = function (str) {
   return candidates;
 };
 
-},{"./grammar":83}],86:[function(require,module,exports){
+},{"./grammar":91}],94:[function(require,module,exports){
 var grammar = require('./grammar');
 
 // customized util.format - discards excess arguments and can void middle ones
@@ -26737,14 +28028,14 @@ module.exports = function (session, opts) {
   return sdp.join('\r\n') + '\r\n';
 };
 
-},{"./grammar":83}],87:[function(require,module,exports){
+},{"./grammar":91}],95:[function(require,module,exports){
 var MediaStreamType = {
     VIDEO_TYPE: "Video",
 
     AUDIO_TYPE: "Audio"
 };
 module.exports = MediaStreamType;
-},{}],88:[function(require,module,exports){
+},{}],96:[function(require,module,exports){
 var RTCBrowserType = {
     RTC_BROWSER_CHROME: "rtc_browser.chrome",
 
@@ -26752,19 +28043,16 @@ var RTCBrowserType = {
 };
 
 module.exports = RTCBrowserType;
-},{}],89:[function(require,module,exports){
+},{}],97:[function(require,module,exports){
 var RTCEvents = {
     LASTN_CHANGED: "rtc.lastn_changed",
     DOMINANTSPEAKER_CHANGED: "rtc.dominantspeaker_changed",
     LASTN_ENDPOINT_CHANGED: "rtc.lastn_endpoint_changed",
-    SIMULCAST_LAYER_CHANGED: "rtc.simulcast_layer_changed",
-    SIMULCAST_LAYER_CHANGING: "rtc.simulcast_layer_changing",
-    SIMULCAST_START: "rtc.simlcast_start",
-    SIMULCAST_STOP: "rtc.simlcast_stop"
+    AVAILABLE_DEVICES_CHANGED: "rtc.available_devices_changed"
 };
 
 module.exports = RTCEvents;
-},{}],90:[function(require,module,exports){
+},{}],98:[function(require,module,exports){
 var Resolutions = {
     "1080": {
         width: 1920,
@@ -26818,7 +28106,7 @@ var Resolutions = {
     }
 };
 module.exports = Resolutions;
-},{}],91:[function(require,module,exports){
+},{}],99:[function(require,module,exports){
 var StreamEventTypes = {
     EVENT_TYPE_LOCAL_CREATED: "stream.local_created",
 
@@ -26834,14 +28122,14 @@ var StreamEventTypes = {
 };
 
 module.exports = StreamEventTypes;
-},{}],92:[function(require,module,exports){
+},{}],100:[function(require,module,exports){
 var UIEvents = {
     NICKNAME_CHANGED: "UI.nickname_changed",
     SELECTED_ENDPOINT: "UI.selected_endpoint",
     PINNED_ENDPOINT: "UI.pinned_endpoint"
 };
 module.exports = UIEvents;
-},{}],93:[function(require,module,exports){
+},{}],101:[function(require,module,exports){
 var AuthenticationEvents = {
     /**
      * Event callback arguments:
@@ -26855,7 +28143,7 @@ var AuthenticationEvents = {
 };
 module.exports = AuthenticationEvents;
 
-},{}],94:[function(require,module,exports){
+},{}],102:[function(require,module,exports){
 var CQEvents = {
     LOCALSTATS_UPDATED: "cq.localstats_updated",
     REMOTESTATS_UPDATED: "cq.remotestats_updated",
@@ -26863,7 +28151,7 @@ var CQEvents = {
 };
 
 module.exports = CQEvents;
-},{}],95:[function(require,module,exports){
+},{}],103:[function(require,module,exports){
 var DesktopSharingEventTypes = {
     INIT: "ds.init",
 
@@ -26873,7 +28161,14 @@ var DesktopSharingEventTypes = {
 };
 
 module.exports = DesktopSharingEventTypes;
-},{}],96:[function(require,module,exports){
+},{}],104:[function(require,module,exports){
+var Events = {
+    DTMF_SUPPORT_CHANGED: "members.dtmf_support_changed"
+};
+
+module.exports = Events;
+
+},{}],105:[function(require,module,exports){
 module.exports = {
     getLanguages : function () {
         var languages = [];
@@ -26887,27 +28182,32 @@ module.exports = {
     EN: "en",
     BG: "bg",
     DE: "de",
-    TR: "tr"
+    TR: "tr",
+    FR: "fr"
 }
-},{}],97:[function(require,module,exports){
+},{}],106:[function(require,module,exports){
 var XMPPEvents = {
-    CONFERENCE_CERATED: "xmpp.conferenceCreated.jingle",
+    CONNECTION_FAILED: "xmpp.connection.failed",
+    CONFERENCE_CREATED: "xmpp.conferenceCreated.jingle",
     CALL_TERMINATED: "xmpp.callterminated.jingle",
     CALL_INCOMING: "xmpp.callincoming.jingle",
-    DISPOSE_CONFERENCE: "xmpp.dispoce_confernce",
+    DISPOSE_CONFERENCE: "xmpp.dispose_conference",
     GRACEFUL_SHUTDOWN: "xmpp.graceful_shutdown",
     KICKED: "xmpp.kicked",
     BRIDGE_DOWN: "xmpp.bridge_down",
     USER_ID_CHANGED: "xmpp.user_id_changed",
-    CHANGED_STREAMS: "xmpp.changed_streams",
+    STREAMS_CHANGED: "xmpp.streams_changed",
+    // We joined the MUC
     MUC_JOINED: "xmpp.muc_joined",
-    MUC_ENTER: "xmpp.muc_enter",
+    // A member joined the MUC
+    MUC_MEMBER_JOINED: "xmpp.muc_member_joined",
+    // A member left the MUC
+    MUC_MEMBER_LEFT: "xmpp.muc_member_left",
     MUC_ROLE_CHANGED: "xmpp.muc_role_changed",
-    MUC_LEFT: "xmpp.muc_left",
     MUC_DESTROYED: "xmpp.muc_destroyed",
     DISPLAY_NAME_CHANGED: "xmpp.display_name_changed",
     REMOTE_STATS: "xmpp.remote_stats",
-    LOCALROLE_CHANGED: "xmpp.localrole_changed",
+    LOCAL_ROLE_CHANGED: "xmpp.localrole_changed",
     PRESENCE_STATUS: "xmpp.presence_status",
     RESERVATION_ERROR: "xmpp.room_reservation_error",
     SUBJECT_CHANGED: "xmpp.subject_changed",
@@ -26916,10 +28216,12 @@ var XMPPEvents = {
     PASSWORD_REQUIRED: "xmpp.password_required",
     AUTHENTICATION_REQUIRED: "xmpp.authentication_required",
     CHAT_ERROR_RECEIVED: "xmpp.chat_error_received",
-    ETHERPAD: "xmpp.etherpad"
+    ETHERPAD: "xmpp.etherpad",
+    DEVICE_AVAILABLE: "xmpp.device_available",
+    START_MUTED: "xmpp.start_muted"
 };
 module.exports = XMPPEvents;
-},{}],98:[function(require,module,exports){
+},{}],107:[function(require,module,exports){
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -27221,6 +28523,94 @@ function isObject(arg) {
 function isUndefined(arg) {
   return arg === void 0;
 }
+
+},{}],108:[function(require,module,exports){
+// shim for using process in browser
+
+var process = module.exports = {};
+
+process.nextTick = (function () {
+    var canSetImmediate = typeof window !== 'undefined'
+    && window.setImmediate;
+    var canMutationObserver = typeof window !== 'undefined'
+    && window.MutationObserver;
+    var canPost = typeof window !== 'undefined'
+    && window.postMessage && window.addEventListener
+    ;
+
+    if (canSetImmediate) {
+        return function (f) { return window.setImmediate(f) };
+    }
+
+    var queue = [];
+
+    if (canMutationObserver) {
+        var hiddenDiv = document.createElement("div");
+        var observer = new MutationObserver(function () {
+            var queueList = queue.slice();
+            queue.length = 0;
+            queueList.forEach(function (fn) {
+                fn();
+            });
+        });
+
+        observer.observe(hiddenDiv, { attributes: true });
+
+        return function nextTick(fn) {
+            if (!queue.length) {
+                hiddenDiv.setAttribute('yes', 'no');
+            }
+            queue.push(fn);
+        };
+    }
+
+    if (canPost) {
+        window.addEventListener('message', function (ev) {
+            var source = ev.source;
+            if ((source === window || source === null) && ev.data === 'process-tick') {
+                ev.stopPropagation();
+                if (queue.length > 0) {
+                    var fn = queue.shift();
+                    fn();
+                }
+            }
+        }, true);
+
+        return function nextTick(fn) {
+            queue.push(fn);
+            window.postMessage('process-tick', '*');
+        };
+    }
+
+    return function nextTick(fn) {
+        setTimeout(fn, 0);
+    };
+})();
+
+process.title = 'browser';
+process.browser = true;
+process.env = {};
+process.argv = [];
+
+function noop() {}
+
+process.on = noop;
+process.addListener = noop;
+process.once = noop;
+process.off = noop;
+process.removeListener = noop;
+process.removeAllListeners = noop;
+process.emit = noop;
+
+process.binding = function (name) {
+    throw new Error('process.binding is not supported');
+};
+
+// TODO(shtylman)
+process.cwd = function () { return '/' };
+process.chdir = function (dir) {
+    throw new Error('process.chdir is not supported');
+};
 
 },{}]},{},[1])(1)
 });

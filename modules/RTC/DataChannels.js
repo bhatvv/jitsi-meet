@@ -36,7 +36,7 @@ var DataChannels =
             // selections so that it can do adaptive simulcast,
             // we want the notification to trigger even if userJid is undefined,
             // or null.
-            var userJid = APP.UI.getLargeVideoState().userResourceJid;
+            var userJid = APP.UI.getLargeVideoJid();
             // we want the notification to trigger even if userJid is undefined,
             // or null.
             onSelectedEndpointChanged(userJid);
@@ -111,24 +111,6 @@ var DataChannels =
                         lastNEndpoints, endpointsEnteringLastN, obj);
                     eventEmitter.emit(RTCEvents.LASTN_ENDPOINT_CHANGED,
                         lastNEndpoints, endpointsEnteringLastN, obj);
-                }
-                else if ("SimulcastLayersChangedEvent" === colibriClass)
-                {
-                    eventEmitter.emit(RTCEvents.SIMULCAST_LAYER_CHANGED,
-                        obj.endpointSimulcastLayers);
-                }
-                else if ("SimulcastLayersChangingEvent" === colibriClass)
-                {
-                    eventEmitter.emit(RTCEvents.SIMULCAST_LAYER_CHANGING,
-                        obj.endpointSimulcastLayers);
-                }
-                else if ("StartSimulcastLayerEvent" === colibriClass)
-                {
-                    eventEmitter.emit(RTCEvents.SIMULCAST_START, obj.simulcastLayer);
-                }
-                else if ("StopSimulcastLayerEvent" === colibriClass)
-                {
-                    eventEmitter.emit(RTCEvents.SIMULCAST_STOP, obj.simulcastLayer);
                 }
                 else
                 {

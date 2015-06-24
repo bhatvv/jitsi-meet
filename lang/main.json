@@ -62,7 +62,8 @@
         "Settings": "Settings",
         "hangup": "Hang Up",
         "login": "Login",
-        "logout": "Logout"
+        "logout": "Logout",
+        "dialpad": "Show dialpad"
     },
     "bottomtoolbar": {
         "chat": "Open / close chat",
@@ -80,7 +81,9 @@
     {
         "title": "SETTINGS",
         "update": "Update",
-        "name": "Name"
+        "name": "Name",
+        "startAudioMuted": "start without audio",
+        "startVideoMuted": "start without video"
     },
     "videothumbnail":
     {
@@ -122,8 +125,9 @@
         "focus": "Conference focus",
         "focusFail": "__component__ not available - retry in __ms__ sec",
         "grantedTo": "Moderator rights granted to __to__!",
-        "grantedToUnknown": "Moderator rights granted to $t(somebody)!"
-
+        "grantedToUnknown": "Moderator rights granted to $t(somebody)!",
+        "muted": "You have started the conversation muted.",
+        "mutedTitle": "You're muted!"
     },
     "dialog": {
         "kickMessage": "Ouch! You have been kicked out of the meet!",
@@ -132,6 +136,7 @@
         "passwordError2": "This conversation isn't currently protected by a password. Only the owner of the conference could set a password.",
         "joinError": "Oops! We couldn't join the conference. There might be some problem with security configuration. Please contact service administrator.",
         "connectError": "Oops! Something went wrong and we couldn't connect to the conference.",
+        "connectErrorWithMsg": "Oops! Something went wrong and we couldn't connect to the conference: __msg__",
         "connecting": "Connecting",
         "error": "Error",
         "detectext": "Error when trying to detect desktopsharing extension.",
@@ -156,9 +161,9 @@
         "sharePreziTitle": "Share a Prezi",
         "sharePreziMsg": "Another participant is already sharing a Prezi.This conference allows only one Prezi at a time.",
         "Remove": "Remove",
-        "Stop": "Stop",
-        "AuthMsg": "Authentication is required to create room:<br/><b>__room__ </b></br> You can either authenticate to create the room or just wait for someone else to do so.",
-        "Authenticate": "Authenticate",
+        "WaitingForHost": "Waiting for the host ...",
+        "WaitForHostMsg": "The conference <b>__room__ </b> has not yet started. If you are the host then please authenticate. Otherwise, please wait for the host to arrive.",
+        "IamHost": "I am the host",
         "Cancel": "Cancel",
         "retry": "Retry",
         "logoutTitle" : "Logout",

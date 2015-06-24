@@ -135,15 +135,15 @@ function processMessage(event)
 }
 
 function setupListeners() {
-    APP.xmpp.addListener(XMPPEvents.MUC_ENTER, function (from) {
+    APP.xmpp.addListener(XMPPEvents.MUC_MEMBER_JOINED, function (from) {
         API.triggerEvent("participantJoined", {jid: from});
     });
-    APP.xmpp.addListener(XMPPEvents.MESSAGE_RECEIVED, function (from, nick, txt, myjid) {
+    APP.xmpp.addListener(XMPPEvents.MESSAGE_RECEIVED, function (from, nick, txt, myjid, stamp) {
         if (from != myjid)
             API.triggerEvent("incomingMessage",
-                {"from": from, "nick": nick, "message": txt});
+                {"from": from, "nick": nick, "message": txt, "stamp": stamp});
     });
-    APP.xmpp.addListener(XMPPEvents.MUC_LEFT, function (jid) {
+    APP.xmpp.addListener(XMPPEvents.MUC_MEMBER_LEFT, function (jid) {
         API.triggerEvent("participantLeft", {jid: jid});
     });
     APP.xmpp.addListener(XMPPEvents.DISPLAY_NAME_CHANGED, function (jid, newDisplayName) {

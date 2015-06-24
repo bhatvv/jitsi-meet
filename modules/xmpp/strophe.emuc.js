@@ -28,6 +28,15 @@ module.exports = function(XMPP, eventEmitter) {
         initPresenceMap: function (myroomjid) {
             this.presMap['to'] = myroomjid;
             this.presMap['xns'] = 'http://jabber.org/protocol/muc';
+            if(APP.RTC.localAudio.isMuted())
+            {
+                this.addAudioInfoToPresence(true);
+            }
+
+            if(APP.RTC.localVideo.isMuted())
+            {
+                this.addVideoInfoToPresence(true);
+            }
         },
         doJoin: function (jid, password) {
             this.myroomjid = jid;
@@ -103,7 +112,7 @@ module.exports = function(XMPP, eventEmitter) {
             // Parse etherpad tag.
             var etherpad = $(pres).find('>etherpad');
             if (etherpad.length) {
-                if (config.etherpad_base && !Moderator.isModerator()) {
+                if (config.etherpad_base) {
                     eventEmitter.emit(XMPPEvents.ETHERPAD, etherpad.text());
                 }
             }
@@ -141,6 +150,32 @@ module.exports = function(XMPP, eventEmitter) {
             var videoMuted = $(pres).find('>videomuted');
             if (videoMuted.length) {
                 $(document).trigger('videomuted.muc', [from, videoMuted.text()]);
+            }
+
+            var startMuted = $(pres).find('>startmuted');
+            if (startMuted.length)
+            {
+                eventEmitter.emit(XMPPEvents.START_MUTED,
+                    startMuted.attr("audio") === "true", startMuted.attr("video") === "true");
+            }
+
+            var devices = $(pres).find('>devices');
+            if(devices.length)
+            {
+                var audio = devices.find('>audio');
+                var video = devices.find('>video');
+                var devicesValues = {audio: false, video: false};
+                if(audio.length && audio.text() === "true")
+                {
+                    devicesValues.audio = true;
+                }
+
+                if(video.length && video.text() === "true")
+                {
+                    devicesValues.video = true;
+                }
+                eventEmitter.emit(XMPPEvents.DEVICE_AVAILABLE,
+                    Strophe.getResourceFromJid(from), devicesValues);
             }
 
             var stats = $(pres).find('>stats');
@@ -182,7 +217,7 @@ module.exports = function(XMPP, eventEmitter) {
                 if (this.role !== member.role) {
                     this.role = member.role;
 
-                    eventEmitter.emit(XMPPEvents.LOCALROLE_CHANGED,
+                    eventEmitter.emit(XMPPEvents.LOCAL_ROLE_CHANGED,
                         from, member, pres, Moderator.isModerator());
                 }
                 if (!this.joined) {
@@ -200,12 +235,12 @@ module.exports = function(XMPP, eventEmitter) {
                     console.info("Ignore focus: " + from + ", real JID: " + member.jid);
                 }
                 else {
-                    var id = $(pres).find('>userID').text();
+                    var id = $(pres).find('>userId').text();
                     var email = $(pres).find('>email');
                     if (email.length > 0) {
                         id = email.text();
                     }
-                    eventEmitter.emit(XMPPEvents.MUC_ENTER, from, id, member.displayName);
+                    eventEmitter.emit(XMPPEvents.MUC_MEMBER_JOINED, from, id, member.displayName);
                 }
             } else {
                 // Presence update for existing participant
@@ -243,6 +278,15 @@ module.exports = function(XMPP, eventEmitter) {
                 eventEmitter.emit(XMPPEvents.MUC_DESTROYED, reason);
                 return true;
             }
+
+            var self = this;
+            // Remove old ssrcs coming from the jid
+            Object.keys(this.ssrc2jid).forEach(function (ssrc) {
+                if (self.ssrc2jid[ssrc] == from) {
+                    delete self.ssrc2jid[ssrc];
+                }
+            });
+
             // Status code 110 indicates that this notification is "self-presence".
             if (!$(pres).find('>x[xmlns="http://jabber.org/protocol/muc#user"]>status[code="110"]').length) {
                 delete this.members[from];
@@ -341,11 +385,24 @@ module.exports = function(XMPP, eventEmitter) {
                 }
             }
 
+            // xep-0203 delay
+            var stamp = $(msg).find('>delay').attr('stamp');
+
+            if (!stamp) {
+                // or xep-0091 delay, UTC timestamp
+                stamp = $(msg).find('>[xmlns="jabber:x:delay"]').attr('stamp');
+
+                if (stamp) {
+                    // the format is CCYYMMDDThh:mm:ss
+                    var dateParts = stamp.match(/(\d{4})(\d{2})(\d{2}T\d{2}:\d{2}:\d{2})/);
+                    stamp = dateParts[1] + "-" + dateParts[2] + "-" + dateParts[3] + "Z";
+                }
+            }
 
             if (txt) {
                 console.log('chat', nick, txt);
                 eventEmitter.emit(XMPPEvents.MESSAGE_RECEIVED,
-                    from, nick, txt, this.myroomjid);
+                    from, nick, txt, this.myroomjid, stamp);
             }
             return true;
         },
@@ -386,6 +443,10 @@ module.exports = function(XMPP, eventEmitter) {
                 });
         },
         sendPresence: function () {
+            if (!this.presMap['to']) {
+                // Too early to send presence - not initialized
+                return;
+            }
             var pres = $pres({to: this.presMap['to'] });
             pres.c('x', {xmlns: this.presMap['xns']});
 
@@ -422,6 +483,11 @@ module.exports = function(XMPP, eventEmitter) {
                     .t(this.presMap['displayName']).up();
             }
 
+            if(this.presMap["devices"])
+            {
+                pres.c('devices').c('audio').t(this.presMap['devices'].audio).up()
+                    .c('video').t(this.presMap['devices'].video).up().up();
+            }
             if (this.presMap['audions']) {
                 pres.c('audiomuted', {xmlns: this.presMap['audions']})
                     .t(this.presMap['audiomuted']).up();
@@ -447,11 +513,6 @@ module.exports = function(XMPP, eventEmitter) {
                     .c('current').t(this.presMap['prezicurrent']).up().up();
             }
 
-            if (this.presMap['etherpadns']) {
-                pres.c('etherpad', {xmlns: this.presMap['etherpadns']})
-                    .t(this.presMap['etherpadname']).up();
-            }
-
             if (this.presMap['medians']) {
                 pres.c('media', {xmlns: this.presMap['medians']});
                 var sourceNumber = 0;
@@ -469,6 +530,15 @@ module.exports = function(XMPP, eventEmitter) {
                                     || 'sendrecv' }
                         ).up();
                     }
+                pres.up();
+            }
+
+            if(this.presMap["startMuted"] !== undefined)
+            {
+                pres.c("startmuted", {audio: this.presMap["startMuted"].audio,
+                    video: this.presMap["startMuted"].video,
+                    xmlns: "http://jitsi.org/jitmeet/start-muted"});
+                delete this.presMap["startMuted"];
             }
 
             pres.up();
@@ -484,6 +554,9 @@ module.exports = function(XMPP, eventEmitter) {
             this.presMap['source' + sourceNumber + '_type'] = mtype;
             this.presMap['source' + sourceNumber + '_ssrc'] = ssrcs;
             this.presMap['source' + sourceNumber + '_direction'] = direction;
+        },
+        addDevicesToPresence: function (devices) {
+            this.presMap['devices'] = devices;
         },
         clearPresenceMedia: function () {
             var self = this;
@@ -508,10 +581,6 @@ module.exports = function(XMPP, eventEmitter) {
         },
         getPrezi: function (roomjid) {
             return this.preziMap[roomjid];
-        },
-        addEtherpadToPresence: function (etherpadName) {
-            this.presMap['etherpadns'] = 'http://jitsi.org/jitmeet/etherpad';
-            this.presMap['etherpadname'] = etherpadName;
         },
         addAudioInfoToPresence: function (isMuted) {
             this.presMap['audions'] = 'http://jitsi.org/jitmeet/audio';
@@ -546,6 +615,9 @@ module.exports = function(XMPP, eventEmitter) {
         addUserIdToPresence: function (userId) {
             this.presMap['userId'] = userId;
         },
+        addStartMutedToPresence: function (audio, video) {
+            this.presMap["startMuted"] = {audio: audio, video: video};
+        },
         isModerator: function () {
             return this.role === 'moderator';
         },
@@ -557,7 +629,7 @@ module.exports = function(XMPP, eventEmitter) {
         },
         onParticipantLeft: function (jid) {
 
-            eventEmitter.emit(XMPPEvents.MUC_LEFT, jid);
+            eventEmitter.emit(XMPPEvents.MUC_MEMBER_LEFT, jid);
 
             this.connection.jingle.terminateByJid(jid);
 
@@ -566,7 +638,7 @@ module.exports = function(XMPP, eventEmitter) {
                     [jid, this.getPrezi(jid)]);
             }
 
-            Moderator.onMucLeft(jid);
+            Moderator.onMucMemberLeft(jid);
         },
         parsePresence: function (from, memeber, pres) {
             if($(pres).find(">bridgeIsDown").length > 0 && !bridgeIsDown) {
@@ -590,8 +662,6 @@ module.exports = function(XMPP, eventEmitter) {
                 //console.log(jid, 'assoc ssrc', ssrc.getAttribute('type'), ssrc.getAttribute('ssrc'));
                 var ssrcV = ssrc.getAttribute('ssrc');
                 self.ssrc2jid[ssrcV] = from;
-                JingleSession.notReceivedSSRCs.push(ssrcV);
-
 
                 var type = ssrc.getAttribute('type');
 
@@ -601,7 +671,7 @@ module.exports = function(XMPP, eventEmitter) {
 
             });
 
-            eventEmitter.emit(XMPPEvents.CHANGED_STREAMS, from, changedStreams);
+            eventEmitter.emit(XMPPEvents.STREAMS_CHANGED, from, changedStreams);
 
             var displayName = !config.displayJids
                 ? memeber.displayName : Strophe.getResourceFromJid(from);

@@ -260,7 +260,7 @@ StatsCollector.prototype.start = function ()
         );
     }
 
-    if(!config.disableStats) {
+    if(!config.disableStats && !navigator.mozGetUserMedia) {
         this.statsIntervalId = setInterval(
             function () {
                 // Interval updates
@@ -294,7 +294,7 @@ StatsCollector.prototype.start = function ()
         );
     }
 
-    if (config.logStats) {
+    if (config.logStats && !navigator.mozGetUserMedia) {
         this.gatherStatsIntervalId = setInterval(
             function () {
                 self.peerconnection.getStats(
@@ -696,9 +696,10 @@ StatsCollector.prototype.processAudioLevelReport = function ()
 
         var ssrc = getStatValue(now, 'ssrc');
         var jid = APP.xmpp.getJidFromSSRC(ssrc);
-        if (!jid && (Date.now() - now.timestamp) < 3000)
+        if (!jid)
         {
-            console.warn("No jid for ssrc: " + ssrc);
+            if((Date.now() - now.timestamp) < 3000)
+                console.warn("No jid for ssrc: " + ssrc);
             continue;
         }
 
