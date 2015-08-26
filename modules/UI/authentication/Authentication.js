@@ -22,13 +22,13 @@ var Authentication = {
         var room = roomName.substr(0, roomName.indexOf('@'));
 
         var title
-            = APP.translation.generateTranslatonHTML("dialog.WaitingForHost");
+            = APP.translation.generateTranslationHTML("dialog.WaitingForHost");
         var msg
-            = APP.translation.generateTranslatonHTML(
+            = APP.translation.generateTranslationHTML(
                     "dialog.WaitForHostMsg", {room: room});
 
         var buttonTxt
-            = APP.translation.generateTranslatonHTML("dialog.IamHost");
+            = APP.translation.generateTranslationHTML("dialog.IamHost");
         var buttons = [];
         buttons.push({title: buttonTxt, value: "authNow"});
 
@@ -79,7 +79,7 @@ var Authentication = {
                     Moderator.allocateConferenceFocus(roomName, function () {
                         // If it's not "on the fly" authentication now join
                         // the conference room
-                        if (!APP.xmpp.getMUCJoined()) {
+                        if (!APP.xmpp.isMUCJoined()) {
                             APP.UI.checkForNicknameAndJoin();
                         }
                     });

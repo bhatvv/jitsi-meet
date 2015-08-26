@@ -1,3 +1,4 @@
+/* global $ */
 var JitsiPopover = (function () {
     /**
      * Constructs new JitsiPopover and attaches it to the element
@@ -45,23 +46,24 @@ var JitsiPopover = (function () {
      * Shows the popover
      */
     JitsiPopover.prototype.show = function () {
+        if(!JitsiPopover.enabled)
+            return;
         this.createPopover();
         this.popoverShown = true;
-
     };
 
     /**
      * Hides the popover
      */
     JitsiPopover.prototype.hide = function () {
-        if(!this.elementIsHovered && !this.popoverIsHovered && this.popoverShown)
-        {
+        if(!this.elementIsHovered && !this.popoverIsHovered &&
+            this.popoverShown) {
             this.forceHide();
         }
     };
 
     /**
-     * Hides the popover
+     * Hides the popover.
      */
     JitsiPopover.prototype.forceHide = function () {
         $(".jitsipopover").remove();
@@ -69,7 +71,7 @@ var JitsiPopover = (function () {
     };
 
     /**
-     * Creates the popover html
+     * Creates the popover html.
      */
     JitsiPopover.prototype.createPopover = function () {
         $("body").append(this.template);
@@ -86,7 +88,7 @@ var JitsiPopover = (function () {
     };
 
     /**
-     * Refreshes the position of the popover
+     * Refreshes the position of the popover.
      */
     JitsiPopover.prototype.refreshPosition = function () {
         $(".jitsipopover").position({
@@ -95,10 +97,13 @@ var JitsiPopover = (function () {
             collision: "fit",
             of: this.element,
             using: function (position, elements) {
-                var calcLeft = elements.target.left - elements.element.left + elements.target.width/2;
-                $(".jitsipopover").css({top: position.top, left: position.left, display: "table"});
+                var calcLeft = elements.target.left - elements.element.left +
+                    elements.target.width/2;
+                $(".jitsipopover").css(
+                    {top: position.top, left: position.left, display: "table"});
                 $(".jitsipopover > .arrow").css({left: calcLeft});
-                $(".jitsipopover > .jitsiPopupmenuPadding").css({left: calcLeft - 50});
+                $(".jitsipopover > .jitsiPopupmenuPadding").css(
+                    {left: calcLeft - 50});
             }
         });
     };
@@ -115,9 +120,9 @@ var JitsiPopover = (function () {
         this.createPopover();
     };
 
+    JitsiPopover.enabled = true;
+
     return JitsiPopover;
-
-
 })();
 
 module.exports = JitsiPopover;

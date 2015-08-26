@@ -4,9 +4,6 @@
  */
 var XMPPEvents = require("../../service/xmpp/XMPPEvents");
 var Moderator = require("./moderator");
-var JingleSession = require("./JingleSession");
-
-var bridgeIsDown = false;
 
 module.exports = function(XMPP, eventEmitter) {
     Strophe.addConnectionPlugin('emuc', {
@@ -21,20 +18,17 @@ module.exports = function(XMPP, eventEmitter) {
         isOwner: false,
         role: null,
         focusMucJid: null,
-        ssrc2jid: {},
+        bridgeIsDown: false,
         init: function (conn) {
             this.connection = conn;
         },
         initPresenceMap: function (myroomjid) {
             this.presMap['to'] = myroomjid;
             this.presMap['xns'] = 'http://jabber.org/protocol/muc';
-            if(APP.RTC.localAudio.isMuted())
-            {
+            if (APP.RTC.localAudio && APP.RTC.localAudio.isMuted()) {
                 this.addAudioInfoToPresence(true);
             }
-
-            if(APP.RTC.localVideo.isMuted())
-            {
+            if (APP.RTC.localVideo && APP.RTC.localVideo.isMuted()) {
                 this.addVideoInfoToPresence(true);
             }
         },
@@ -117,10 +111,11 @@ module.exports = function(XMPP, eventEmitter) {
                 }
             }
 
+            var url;
             // Parse prezi tag.
             var presentation = $(pres).find('>prezi');
             if (presentation.length) {
-                var url = presentation.attr('url');
+                url = presentation.attr('url');
                 var current = presentation.find('>current').text();
 
                 console.log('presentation info received from', from, url);
@@ -135,7 +130,7 @@ module.exports = function(XMPP, eventEmitter) {
                 }
             }
             else if (this.preziMap[from] != null) {
-                var url = this.preziMap[from];
+                url = this.preziMap[from];
                 delete this.preziMap[from];
                 $(document).trigger('presentationremoved.muc', [from, url]);
             }
@@ -143,20 +138,22 @@ module.exports = function(XMPP, eventEmitter) {
             // Parse audio info tag.
             var audioMuted = $(pres).find('>audiomuted');
             if (audioMuted.length) {
-                $(document).trigger('audiomuted.muc', [from, audioMuted.text()]);
+                eventEmitter.emit(XMPPEvents.PARTICIPANT_AUDIO_MUTED,
+                    from, (audioMuted.text() === "true"));
             }
 
             // Parse video info tag.
             var videoMuted = $(pres).find('>videomuted');
             if (videoMuted.length) {
-                $(document).trigger('videomuted.muc', [from, videoMuted.text()]);
+                eventEmitter.emit(XMPPEvents.PARTICIPANT_VIDEO_MUTED,
+                    from, (videoMuted.text() === "true"));
             }
 
             var startMuted = $(pres).find('>startmuted');
-            if (startMuted.length)
-            {
-                eventEmitter.emit(XMPPEvents.START_MUTED,
-                    startMuted.attr("audio") === "true", startMuted.attr("video") === "true");
+            if (startMuted.length && Moderator.isPeerModerator(from)) {
+                eventEmitter.emit(XMPPEvents.START_MUTED_SETTING_CHANGED,
+                    startMuted.attr("audio") === "true",
+                    startMuted.attr("video") === "true");
             }
 
             var devices = $(pres).find('>devices');
@@ -176,6 +173,16 @@ module.exports = function(XMPP, eventEmitter) {
                 }
                 eventEmitter.emit(XMPPEvents.DEVICE_AVAILABLE,
                     Strophe.getResourceFromJid(from), devicesValues);
+            }
+
+            var videoType = $(pres).find('>videoType');
+            if (videoType.length)
+            {
+                if (videoType.text().length)
+                {
+                    eventEmitter.emit(XMPPEvents.PARTICIPANT_VIDEO_TYPE_CHANGED,
+                        Strophe.getResourceFromJid(from), videoType.text());
+                }
             }
 
             var stats = $(pres).find('>stats');
@@ -210,7 +217,7 @@ module.exports = function(XMPP, eventEmitter) {
             }
 
             var nicktag = $(pres).find('>nick[xmlns="http://jabber.org/protocol/nick"]');
-            member.displayName = (nicktag.length > 0 ? nicktag.html() : null);
+            member.displayName = (nicktag.length > 0 ? nicktag.text() : null);
 
             if (from == this.myroomjid) {
                 if (member.affiliation == 'owner') this.isOwner = true;
@@ -279,14 +286,6 @@ module.exports = function(XMPP, eventEmitter) {
                 return true;
             }
 
-            var self = this;
-            // Remove old ssrcs coming from the jid
-            Object.keys(this.ssrc2jid).forEach(function (ssrc) {
-                if (self.ssrc2jid[ssrc] == from) {
-                    delete self.ssrc2jid[ssrc];
-                }
-            });
-
             // Status code 110 indicates that this notification is "self-presence".
             if (!$(pres).find('>x[xmlns="http://jabber.org/protocol/muc#user"]>status[code="110"]').length) {
                 delete this.members[from];
@@ -329,19 +328,15 @@ module.exports = function(XMPP, eventEmitter) {
                     // We're either missing Jicofo/Prosody config for anonymous
                     // domains or something is wrong.
 //                    XMPP.promptLogin();
-                    APP.UI.messageHandler.openReportDialog(null,
-                        "dialog.joinError", pres);
+                    eventEmitter.emit(XMPPEvents.ROOM_JOIN_ERROR, pres);
+
                 } else {
                     console.warn('onPresError ', pres);
-                    APP.UI.messageHandler.openReportDialog(null,
-                        "dialog.connectError",
-                        pres);
+                    eventEmitter.emit(XMPPEvents.ROOM_CONNECT_ERROR, pres);
                 }
             } else {
                 console.warn('onPresError ', pres);
-                APP.UI.messageHandler.openReportDialog(null,
-                    "dialog.connectError",
-                    pres);
+                eventEmitter.emit(XMPPEvents.ROOM_CONNECT_ERROR, pres);
             }
             return true;
         },
@@ -498,6 +493,11 @@ module.exports = function(XMPP, eventEmitter) {
                     .t(this.presMap['videomuted']).up();
             }
 
+            if (this.presMap['videoTypeNs']) {
+                pres.c('videoType', { xmlns: this.presMap['videoTypeNs'] })
+                    .t(this.presMap['videoType']).up();
+            }
+
             if (this.presMap['statsns']) {
                 var stats = pres.c('stats', {xmlns: this.presMap['statsns']});
                 for (var stat in this.presMap["stats"])
@@ -511,26 +511,6 @@ module.exports = function(XMPP, eventEmitter) {
                     {xmlns: this.presMap['prezins'],
                         'url': this.presMap['preziurl']})
                     .c('current').t(this.presMap['prezicurrent']).up().up();
-            }
-
-            if (this.presMap['medians']) {
-                pres.c('media', {xmlns: this.presMap['medians']});
-                var sourceNumber = 0;
-                Object.keys(this.presMap).forEach(function (key) {
-                    if (key.indexOf('source') >= 0) {
-                        sourceNumber++;
-                    }
-                });
-                if (sourceNumber > 0)
-                    for (var i = 1; i <= sourceNumber / 3; i++) {
-                        pres.c('source',
-                            {type: this.presMap['source' + i + '_type'],
-                                ssrc: this.presMap['source' + i + '_ssrc'],
-                                direction: this.presMap['source' + i + '_direction']
-                                    || 'sendrecv' }
-                        ).up();
-                    }
-                pres.up();
             }
 
             if(this.presMap["startMuted"] !== undefined)
@@ -547,24 +527,16 @@ module.exports = function(XMPP, eventEmitter) {
         addDisplayNameToPresence: function (displayName) {
             this.presMap['displayName'] = displayName;
         },
-        addMediaToPresence: function (sourceNumber, mtype, ssrcs, direction) {
-            if (!this.presMap['medians'])
-                this.presMap['medians'] = 'http://estos.de/ns/mjs';
-
-            this.presMap['source' + sourceNumber + '_type'] = mtype;
-            this.presMap['source' + sourceNumber + '_ssrc'] = ssrcs;
-            this.presMap['source' + sourceNumber + '_direction'] = direction;
-        },
         addDevicesToPresence: function (devices) {
             this.presMap['devices'] = devices;
         },
-        clearPresenceMedia: function () {
-            var self = this;
-            Object.keys(this.presMap).forEach(function (key) {
-                if (key.indexOf('source') != -1) {
-                    delete self.presMap[key];
-                }
-            });
+        /**
+         * Adds the info about the type of our video stream.
+         * @param videoType 'camera' or 'screen'
+         */
+        addVideoTypeToPresence: function (videoType) {
+            this.presMap['videoTypeNs'] = 'http://jitsi.org/jitmeet/video';
+            this.presMap['videoType'] = videoType;
         },
         addPreziToPresence: function (url, currentSlide) {
             this.presMap['prezins'] = 'http://jitsi.org/jitmeet/prezi';
@@ -640,51 +612,25 @@ module.exports = function(XMPP, eventEmitter) {
 
             Moderator.onMucMemberLeft(jid);
         },
-        parsePresence: function (from, memeber, pres) {
-            if($(pres).find(">bridgeIsDown").length > 0 && !bridgeIsDown) {
-                bridgeIsDown = true;
+        parsePresence: function (from, member, pres) {
+            if($(pres).find(">bridgeIsDown").length > 0 && !this.bridgeIsDown) {
+                this.bridgeIsDown = true;
                 eventEmitter.emit(XMPPEvents.BRIDGE_DOWN);
             }
 
-            if(memeber.isFocus)
+            if(member.isFocus)
                 return;
 
-            var self = this;
-            // Remove old ssrcs coming from the jid
-            Object.keys(this.ssrc2jid).forEach(function (ssrc) {
-                if (self.ssrc2jid[ssrc] == from) {
-                    delete self.ssrc2jid[ssrc];
-                }
-            });
-
-            var changedStreams = [];
-            $(pres).find('>media[xmlns="http://estos.de/ns/mjs"]>source').each(function (idx, ssrc) {
-                //console.log(jid, 'assoc ssrc', ssrc.getAttribute('type'), ssrc.getAttribute('ssrc'));
-                var ssrcV = ssrc.getAttribute('ssrc');
-                self.ssrc2jid[ssrcV] = from;
-
-                var type = ssrc.getAttribute('type');
-
-                var direction = ssrc.getAttribute('direction');
-
-                changedStreams.push({type: type, direction: direction});
-
-            });
-
-            eventEmitter.emit(XMPPEvents.STREAMS_CHANGED, from, changedStreams);
-
             var displayName = !config.displayJids
-                ? memeber.displayName : Strophe.getResourceFromJid(from);
+                ? member.displayName : Strophe.getResourceFromJid(from);
 
-            if (displayName && displayName.length > 0)
-            {
+            if (displayName && displayName.length > 0) {
                 eventEmitter.emit(XMPPEvents.DISPLAY_NAME_CHANGED, from, displayName);
             }
 
-
             var id = $(pres).find('>userID').text();
             var email = $(pres).find('>email');
-            if(email.length > 0) {
+            if (email.length > 0) {
                 id = email.text();
             }
 

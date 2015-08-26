@@ -1,3 +1,5 @@
+/* global $, APP, Strophe */
+var Avatar = require('../../avatar/Avatar');
 
 var numberOfContacts = 0;
 var notificationInterval;
@@ -9,26 +11,28 @@ var notificationInterval;
  * left(-1)
  */
 function updateNumberOfParticipants(delta) {
-    //when the user is alone we don't show the number of participants
-    if(numberOfContacts === 0) {
+    numberOfContacts += delta;
+    if (numberOfContacts === 1) {
+        // when the user is alone we don't show the number of participants
         $("#numberOfParticipants").text('');
-        numberOfContacts += delta;
-    } else if(numberOfContacts !== 0 && !ContactList.isVisible()) {
-        ContactList.setVisualNotification(true);
-        numberOfContacts += delta;
+        ContactList.setVisualNotification(false);
+    } else if (numberOfContacts > 1) {
+        ContactList.setVisualNotification(!ContactList.isVisible());
         $("#numberOfParticipants").text(numberOfContacts);
+    } else {
+        console.error("Invalid number of participants: " + numberOfContacts);
     }
 }
 
 /**
  * Creates the avatar element.
  *
- * @return the newly created avatar element
+ * @return {object} the newly created avatar element
  */
-function createAvatar(id) {
+function createAvatar(jid) {
     var avatar = document.createElement('img');
     avatar.className = "icon-avatar avatar";
-    avatar.src = "https://www.gravatar.com/avatar/" + id + "?d=wavatar&size=30";
+    avatar.src = Avatar.getContactListUrl(jid);
 
     return avatar;
 }
@@ -42,8 +46,7 @@ function createDisplayNameParagraph(key, displayName) {
     var p = document.createElement('p');
     if(displayName)
         p.innerText = displayName;
-    else if(key)
-    {
+    else if(key) {
         p.setAttribute("data-i18n",key);
         p.innerText = APP.translation.translateString(key);
     }
@@ -60,7 +63,6 @@ function stopGlowing(glower) {
         glower.removeClass('active');
     }
 }
-
 
 /**
  * Contact list.
@@ -80,24 +82,22 @@ var ContactList = {
      * Adds a contact for the given peerJid if such doesn't yet exist.
      *
      * @param peerJid the peerJid corresponding to the contact
-     * @param id the user's email or userId used to get the user's avatar
      */
-    ensureAddContact: function (peerJid, id) {
+    ensureAddContact: function (peerJid) {
         var resourceJid = Strophe.getResourceFromJid(peerJid);
 
         var contact = $('#contacts>li[id="' + resourceJid + '"]');
 
         if (!contact || contact.length <= 0)
-            ContactList.addContact(peerJid, id);
+            ContactList.addContact(peerJid);
     },
 
     /**
      * Adds a contact for the given peer jid.
      *
      * @param peerJid the jid of the contact to add
-     * @param id the email or userId of the user
      */
-    addContact: function (peerJid, id) {
+    addContact: function (peerJid) {
         var resourceJid = Strophe.getResourceFromJid(peerJid);
 
         var contactlist = $('#contacts');
@@ -111,7 +111,7 @@ var ContactList = {
             }
         };
 
-        newContact.appendChild(createAvatar(id));
+        newContact.appendChild(createAvatar(peerJid));
         newContact.appendChild(createDisplayNameParagraph("participant"));
 
         if (resourceJid === APP.xmpp.myResource()) {
@@ -179,6 +179,15 @@ var ContactList = {
 
         if (contactName && displayName && displayName.length > 0)
             contactName.html(displayName);
+    },
+
+    userAvatarChanged: function (resourceJid, contactListUrl) {
+        // set the avatar in the contact list
+        var contact = $('#' + resourceJid + '>img');
+        if (contact && contact.length > 0) {
+            contact.get(0).src = contactListUrl;
+        }
+
     }
 };
 

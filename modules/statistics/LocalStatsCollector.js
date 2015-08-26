@@ -1,23 +1,25 @@
+/* global config */
 /**
  * Provides statistics for the local stream.
  */
 
+var RTCBrowserType = require('../RTC/RTCBrowserType');
 
 /**
- * Size of the webaudio analizer buffer.
+ * Size of the webaudio analyzer buffer.
  * @type {number}
  */
-var WEBAUDIO_ANALIZER_FFT_SIZE = 2048;
+var WEBAUDIO_ANALYZER_FFT_SIZE = 2048;
 
 /**
- * Value of the webaudio analizer smoothing time parameter.
+ * Value of the webaudio analyzer smoothing time parameter.
  * @type {number}
  */
-var WEBAUDIO_ANALIZER_SMOOTING_TIME = 0.8;
+var WEBAUDIO_ANALYZER_SMOOTING_TIME = 0.8;
 
 /**
  * Converts time domain data array to audio level.
- * @param array the time domain data array.
+ * @param samples the time domain data array.
  * @returns {number} the audio level
  */
 function timeDomainDataToAudioLevel(samples) {
@@ -32,7 +34,7 @@ function timeDomainDataToAudioLevel(samples) {
     }
 
     return parseFloat(((maxVolume - 127) / 128).toFixed(3));
-};
+}
 
 /**
  * Animates audio level change
@@ -40,20 +42,16 @@ function timeDomainDataToAudioLevel(samples) {
  * @param lastLevel the last audio level
  * @returns {Number} the audio level to be set
  */
-function animateLevel(newLevel, lastLevel)
-{
+function animateLevel(newLevel, lastLevel) {
     var value = 0;
     var diff = lastLevel - newLevel;
-    if(diff > 0.2)
-    {
+    if(diff > 0.2) {
         value = lastLevel - 0.2;
     }
-    else if(diff < -0.4)
-    {
+    else if(diff < -0.4) {
         value = lastLevel + 0.4;
     }
-    else
-    {
+    else {
         value = newLevel;
     }
 
@@ -66,8 +64,6 @@ function animateLevel(newLevel, lastLevel)
  *
  * @param stream the local stream
  * @param interval stats refresh interval given in ms.
- * @param {function(LocalStatsCollector)} updateCallback the callback called on stats
- *                                   update.
  * @constructor
  */
 function LocalStatsCollector(stream, interval, statisticsService, eventEmitter) {
@@ -84,13 +80,14 @@ function LocalStatsCollector(stream, interval, statisticsService, eventEmitter) 
  * Starts the collecting the statistics.
  */
 LocalStatsCollector.prototype.start = function () {
-    if (config.disableAudioLevels || !window.AudioContext)
+    if (config.disableAudioLevels || !window.AudioContext ||
+        RTCBrowserType.isTemasysPluginUsed())
         return;
 
     var context = new AudioContext();
     var analyser = context.createAnalyser();
-    analyser.smoothingTimeConstant = WEBAUDIO_ANALIZER_SMOOTING_TIME;
-    analyser.fftSize = WEBAUDIO_ANALIZER_FFT_SIZE;
+    analyser.smoothingTimeConstant = WEBAUDIO_ANALYZER_SMOOTING_TIME;
+    analyser.fftSize = WEBAUDIO_ANALYZER_FFT_SIZE;
 
 
     var source = context.createMediaStreamSource(this.stream);
@@ -104,7 +101,7 @@ LocalStatsCollector.prototype.start = function () {
             var array = new Uint8Array(analyser.frequencyBinCount);
             analyser.getByteTimeDomainData(array);
             var audioLevel = timeDomainDataToAudioLevel(array);
-            if(audioLevel != self.audioLevel) {
+            if (audioLevel != self.audioLevel) {
                 self.audioLevel = animateLevel(audioLevel, self.audioLevel);
                 self.eventEmitter.emit(
                     "statistics.audioLevel",
@@ -114,7 +111,6 @@ LocalStatsCollector.prototype.start = function () {
         },
         this.intervalMilis
     );
-
 };
 
 /**

@@ -7,7 +7,6 @@ var Settings = require("../settings/Settings");
 var Pako = require("pako");
 var StreamEventTypes = require("../../service/RTC/StreamEventTypes");
 var RTCEvents = require("../../service/RTC/RTCEvents");
-var UIEvents = require("../../service/UI/UIEvents");
 var XMPPEvents = require("../../service/xmpp/XMPPEvents");
 var retry = require('retry');
 
@@ -27,9 +26,6 @@ function connect(jid, password) {
         connection = XMPP.createConnection();
         Moderator.setConnection(connection);
 
-        if (connection.disco) {
-            // for chrome, add multistream cap
-        }
         connection.jingle.pc_constraints = APP.RTC.getPCConstraints();
         if (config.useIPv6) {
             // https://code.google.com/p/webrtc/issues/detail?id=2828
@@ -91,6 +87,8 @@ function connect(jid, password) {
 
                 console.info("My Jabber ID: " + connection.jid);
 
+                connection.ping.startInterval(config.hosts.domain);
+
                 if (password)
                     authenticatedUser = true;
                 maybeDoJoin();
@@ -102,6 +100,8 @@ function connect(jid, password) {
                 }
                 lastErrorMsg = msg;
             } else if (status === Strophe.Status.DISCONNECTED) {
+                // Stop ping interval
+                connection.ping.stopInterval();
                 if (anonymousConnectionFailed) {
                     // prompt user for username and password
                     XMPP.promptLogin();
@@ -132,8 +132,8 @@ function connect(jid, password) {
                     // if we get disconnected from the XMPP server permanently.
 
                     // If the connection failed, retry.
-                    if (connectionFailed
-                        && faultTolerantConnect.retry("connection-failed")) {
+                    if (connectionFailed &&
+                        faultTolerantConnect.retry("connection-failed")) {
                         return;
                     }
 
@@ -152,41 +152,54 @@ function connect(jid, password) {
 }
 
 
-
 function maybeDoJoin() {
     if (connection && connection.connected &&
-        Strophe.getResourceFromJid(connection.jid)
-        && (APP.RTC.localAudio || APP.RTC.localVideo)) {
+        Strophe.getResourceFromJid(connection.jid) &&
+        (APP.RTC.localAudio || APP.RTC.localVideo)) {
         // .connected is true while connecting?
         doJoin();
     }
 }
 
 function doJoin() {
-    var roomName = APP.UI.generateRoomName();
-
-    Moderator.allocateConferenceFocus(
-        roomName, APP.UI.checkForNicknameAndJoin);
+    eventEmitter.emit(XMPPEvents.READY_TO_JOIN);
 }
 
 function initStrophePlugins()
 {
     require("./strophe.emuc")(XMPP, eventEmitter);
     require("./strophe.jingle")(XMPP, eventEmitter);
-    require("./strophe.moderate")(XMPP);
+    require("./strophe.moderate")(XMPP, eventEmitter);
     require("./strophe.util")();
+    require("./strophe.ping")(XMPP, eventEmitter);
     require("./strophe.rayo")();
     require("./strophe.logger")();
 }
 
+/**
+ * If given <tt>localStream</tt> is video one this method will advertise it's
+ * video type in MUC presence.
+ * @param localStream new or modified <tt>LocalStream</tt>.
+ */
+function broadcastLocalVideoType(localStream) {
+    if (localStream.videoType)
+        XMPP.addToPresence('videoType', localStream.videoType);
+}
+
 function registerListeners() {
-    APP.RTC.addStreamListener(maybeDoJoin,
-        StreamEventTypes.EVENT_TYPE_LOCAL_CREATED);
+    APP.RTC.addStreamListener(
+        function (localStream) {
+            maybeDoJoin();
+            broadcastLocalVideoType(localStream);
+        },
+        StreamEventTypes.EVENT_TYPE_LOCAL_CREATED
+    );
+    APP.RTC.addStreamListener(
+        broadcastLocalVideoType,
+        StreamEventTypes.EVENT_TYPE_LOCAL_CHANGED
+    );
     APP.RTC.addListener(RTCEvents.AVAILABLE_DEVICES_CHANGED, function (devices) {
         XMPP.addToPresence("devices", devices);
-    })
-    APP.UI.addListener(UIEvents.NICKNAME_CHANGED, function (nickname) {
-        XMPP.addToPresence("displayName", nickname);
     });
 }
 
@@ -205,7 +218,8 @@ var unload = (function () {
                 async: false,
                 cache: false,
                 contentType: 'application/xml',
-                data: "<body rid='" + (connection.rid || connection._proto.rid) +
+                data: "<body rid='" +
+                    (connection.rid || connection._proto.rid) +
                     "' xmlns='http://jabber.org/protocol/httpbind' sid='" +
                     (connection.sid || connection._proto.sid)  +
                     "' type='terminate'>" +
@@ -231,7 +245,7 @@ function setupEvents() {
     // (change URL). If this participant doesn't unload properly, then it
     // becomes a ghost for the rest of the participants that stay in the
     // conference. Thankfully handling the 'unload' event in addition to the
-    // 'beforeunload' event seems to garante the execution of the 'unload'
+    // 'beforeunload' event seems to guarantee the execution of the 'unload'
     // method at least once.
     //
     // The 'unload' method can safely be run multiple times, it will actually do
@@ -261,6 +275,7 @@ var XMPP = {
         initStrophePlugins();
         registerListeners();
         Moderator.init(this, eventEmitter);
+        Recording.init();
         var configDomain = config.hosts.anonymousdomain || config.hosts.domain;
         // Force authenticated domain if room is appended with '?login=true'
         if (config.hosts.anonymousdomain &&
@@ -279,13 +294,10 @@ var XMPP = {
         return Strophe.getStatusString(status);
     },
     promptLogin: function () {
-        // FIXME: re-use LoginDialog which supports retries
-        APP.UI.showLoginPopup(connect);
+        eventEmitter.emit(XMPPEvents.PROMPT_FOR_LOGIN);
     },
-    joinRoom: function(roomName, useNicks, nick)
-    {
-        var roomjid;
-        roomjid = roomName;
+    joinRoom: function(roomName, useNicks, nick) {
+        var roomjid = roomName;
 
         if (useNicks) {
             if (nick) {
@@ -294,7 +306,6 @@ var XMPP = {
                 roomjid += '/' + Strophe.getNodeFromJid(connection.jid);
             }
         } else {
-
             var tmpJid = Strophe.getNodeFromJid(connection.jid);
 
             if(!authenticatedUser)
@@ -315,7 +326,6 @@ var XMPP = {
         return Strophe.getResourceFromJid(connection.emuc.myroomjid);
     },
     disposeConference: function (onUnload) {
-        eventEmitter.emit(XMPPEvents.DISPOSE_CONFERENCE, onUnload);
         var handler = connection.jingle.activecall;
         if (handler && handler.peerconnection) {
             // FIXME: probably removing streams is not required and close() should
@@ -330,15 +340,14 @@ var XMPP = {
             }
             handler.peerconnection.close();
         }
+        eventEmitter.emit(XMPPEvents.DISPOSE_CONFERENCE, onUnload);
         connection.jingle.activecall = null;
-        if(!onUnload)
-        {
+        if (!onUnload) {
             this.sessionTerminated = true;
             connection.emuc.doLeave();
         }
     },
-    addListener: function(type, listener)
-    {
+    addListener: function(type, listener) {
         eventEmitter.on(type, listener);
     },
     removeListener: function (type, listener) {
@@ -362,8 +371,12 @@ var XMPP = {
     isExternalAuthEnabled: function () {
         return Moderator.isExternalAuthEnabled();
     },
+    isConferenceInProgress: function () {
+        return connection && connection.jingle.activecall &&
+            connection.jingle.activecall.peerconnection;
+    },
     switchStreams: function (stream, oldStream, callback, isAudio) {
-        if (connection && connection.jingle.activecall) {
+        if (this.isConferenceInProgress()) {
             // FIXME: will block switchInProgress on true value in case of exception
             connection.jingle.activecall.switchStreams(stream, oldStream, callback, isAudio);
         } else {
@@ -402,7 +415,6 @@ var XMPP = {
             return false;
         }
 
-
         if (this.forceMuted && !mute) {
             console.info("Asking focus for unmute");
             connection.moderate.setMute(connection.emuc.myroomjid, mute);
@@ -415,16 +427,11 @@ var XMPP = {
             return true;
         }
 
-        // It is not clear what is the right way to handle multiple tracks.
-        // So at least make sure that they are all muted or all unmuted and
-        // that we send presence just once.
-        APP.RTC.localAudio.setMute(!mute);
-        // isMuted is the opposite of audioEnabled
+        APP.RTC.localAudio.setMute(mute);
         this.sendAudioInfoPresence(mute, callback);
         return true;
     },
-    sendAudioInfoPresence: function(mute, callback)
-    {
+    sendAudioInfoPresence: function(mute, callback) {
         if(connection) {
             connection.emuc.addAudioInfoToPresence(mute);
             connection.emuc.sendPresence();
@@ -432,56 +439,13 @@ var XMPP = {
         callback();
         return true;
     },
-    // Really mute video, i.e. dont even send black frames
-    muteVideo: function (pc, unmute) {
-        // FIXME: this probably needs another of those lovely state safeguards...
-        // which checks for iceconn == connected and sigstate == stable
-        pc.setRemoteDescription(pc.remoteDescription,
-            function () {
-                pc.createAnswer(
-                    function (answer) {
-                        var sdp = new SDP(answer.sdp);
-                        if (sdp.media.length > 1) {
-                            if (unmute)
-                                sdp.media[1] = sdp.media[1].replace('a=recvonly', 'a=sendrecv');
-                            else
-                                sdp.media[1] = sdp.media[1].replace('a=sendrecv', 'a=recvonly');
-                            sdp.raw = sdp.session + sdp.media.join('');
-                            answer.sdp = sdp.raw;
-                        }
-                        pc.setLocalDescription(answer,
-                            function () {
-                                console.log('mute SLD ok');
-                            },
-                            function (error) {
-                                console.log('mute SLD error');
-                                APP.UI.messageHandler.showError("dialog.error",
-                                    "dialog.SLDFailure");
-                            }
-                        );
-                    },
-                    function (error) {
-                        console.log(error);
-                        APP.UI.messageHandler.showError();
-                    }
-                );
-            },
-            function (error) {
-                console.log('muteVideo SRD error');
-                APP.UI.messageHandler.showError("dialog.error",
-                    "dialog.SRDFailure");
-
-            }
-        );
-    },
     toggleRecording: function (tokenEmptyCallback,
-                               startingCallback, startedCallback) {
+                               recordingStateChangeCallback) {
         Recording.toggleRecording(tokenEmptyCallback,
-            startingCallback, startedCallback, connection);
+            recordingStateChangeCallback, connection);
     },
     addToPresence: function (name, value, dontSend) {
-        switch (name)
-        {
+        switch (name) {
             case "displayName":
                 connection.emuc.addDisplayNameToPresence(value);
                 break;
@@ -499,6 +463,9 @@ var XMPP = {
                 break;
             case "devices":
                 connection.emuc.addDevicesToPresence(value);
+                break;
+            case "videoType":
+                connection.emuc.addVideoTypeToPresence(value);
                 break;
             case "startMuted":
                 if(!Moderator.isModerator())
@@ -543,17 +510,13 @@ var XMPP = {
         connection.send(message);
         return true;
     },
-    populateData: function () {
-        var data = {};
-        if (connection.jingle) {
-            data = connection.jingle.populateData();
-        }
-        return data;
+    // Gets the logs from strophe.jingle.
+    getJingleLog: function () {
+        return connection.jingle ? connection.jingle.getLog() : {};
     },
-    getLogger: function () {
-        if(connection.logger)
-            return connection.logger.log;
-        return null;
+    // Gets the logs from strophe.
+    getXmppLog: function () {
+        return connection.logger ? connection.logger.log : null;
     },
     getPrezi: function () {
         return connection.emuc.getPrezi(this.myJid());
@@ -590,19 +553,19 @@ var XMPP = {
         return connection.emuc.members;
     },
     getJidFromSSRC: function (ssrc) {
-        if(!connection)
+        if (!this.isConferenceInProgress())
             return null;
-        return connection.emuc.ssrc2jid[ssrc];
+        return connection.jingle.activecall.getSsrcOwner(ssrc);
     },
-    getMUCJoined: function () {
+    // Returns true iff we have joined the MUC.
+    isMUCJoined: function () {
         return connection.emuc.joined;
     },
     getSessions: function () {
         return connection.jingle.sessions;
     },
     removeStream: function (stream) {
-        if(!connection || !connection.jingle.activecall ||
-            !connection.jingle.activecall.peerconnection)
+        if (!this.isConferenceInProgress())
             return;
         connection.jingle.activecall.peerconnection.removeStream(stream);
     }

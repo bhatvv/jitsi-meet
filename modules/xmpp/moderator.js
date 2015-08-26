@@ -1,4 +1,4 @@
-/* global $, $iq, APP, config, connection, UI, messageHandler,
+/* global $, $iq, APP, config, messageHandler,
  roomName, sessionTerminated, Strophe, Util */
 var XMPPEvents = require("../../service/xmpp/XMPPEvents");
 var Settings = require("../settings/Settings");
@@ -35,7 +35,7 @@ var externalAuthEnabled = false;
 // Sip gateway can be enabled by configuring Jigasi host in config.js or
 // it will be enabled automatically if focus detects the component through
 // service discovery.
-var sipGatewayEnabled = config.hosts.call_control !== undefined;
+var sipGatewayEnabled;
 
 var eventEmitter = null;
 
@@ -65,12 +65,15 @@ var Moderator = {
         this.xmppService = xmpp;
         eventEmitter = emitter;
 
+        sipGatewayEnabled =
+            config.hosts && config.hosts.call_control !== undefined;
+
         // Message listener that talks to POPUP window
         function listener(event) {
             if (event.data && event.data.sessionId) {
                 if (event.origin !== window.location.origin) {
-                    console.warn(
-                        "Ignoring sessionId from different origin: " + event.origin);
+                    console.warn("Ignoring sessionId from different origin: " +
+                        event.origin);
                     return;
                 }
                 localStorage.setItem('sessionId', event.data.sessionId);
@@ -219,8 +222,7 @@ var Moderator = {
 
         console.info("Authentication enabled: " + authenticationEnabled);
 
-        externalAuthEnabled
-            = $(resultIq).find(
+        externalAuthEnabled = $(resultIq).find(
                 '>conference>property' +
                 '[name=\'externalAuth\'][value=\'true\']').length > 0;
 
@@ -333,10 +335,8 @@ var Moderator = {
                 // Do not show in case of session invalid
                 // which means just a retry
                 if (!invalidSession) {
-                    APP.UI.messageHandler.notify(
-                        null, "notify.focus",
-                        'disconnected', "notify.focusFail",
-                        {component: focusComponent, ms: retrySec});
+                    eventEmitter.emit(XMPPEvents.FOCUS_DISCONNECTED,
+                        focusComponent, retrySec);
                 }
                 // Reset response timeout
                 getNextTimeout(true);

@@ -1,8 +1,18 @@
+/* global $, APP, require */
+var Avatar = require("../avatar/Avatar");
 var UIUtil = require("../util/UIUtil");
 var LargeVideo = require("./LargeVideo");
+var RTCBrowserType = require("../../RTC/RTCBrowserType");
 
-function SmallVideo(){
+function SmallVideo() {
     this.isMuted = false;
+    this.hasAvatar = false;
+}
+
+function setVisibility(selector, show) {
+    if (selector && selector.length > 0) {
+        selector.css("visibility", show ? "visible" : "hidden");
+    }
 }
 
 SmallVideo.prototype.showDisplayName = function(isShow) {
@@ -21,33 +31,48 @@ SmallVideo.prototype.setDeviceAvailabilityIcons = function (devices) {
     if(!this.container)
         return;
 
-    $("#" + this.videoSpanId + " > .noMic").remove();
-    $("#" + this.videoSpanId + " > .noVideo").remove();
-    if(!devices.audio)
-    {
+    var noMic = $("#" + this.videoSpanId + " > .noMic");
+    var noVideo =  $("#" + this.videoSpanId + " > .noVideo");
+
+    noMic.remove();
+    noVideo.remove();
+    if (!devices.audio) {
         this.container.appendChild(
-            document.createElement("div")).setAttribute("class","noMic");
+            document.createElement("div")).setAttribute("class", "noMic");
     }
 
-    if(!devices.video)
-    {
+    if (!devices.video) {
         this.container.appendChild(
-            document.createElement("div")).setAttribute("class","noVideo");
+            document.createElement("div")).setAttribute("class", "noVideo");
     }
 
-    if(!devices.audio && !devices.video)
-    {
-        $("#" + this.videoSpanId + " > .noMic").css("background-position", "75%");
-        $("#" + this.videoSpanId + " > .noVideo").css("background-position", "25%");
-        $("#" + this.videoSpanId + " > .noVideo").css("background-color", "transparent");
+    if (!devices.audio && !devices.video) {
+        noMic.css("background-position", "75%");
+        noVideo.css("background-position", "25%");
+        noVideo.css("background-color", "transparent");
     }
-}
+};
+
+/**
+ * Sets the type of the video displayed by this instance.
+ * @param videoType 'camera' or 'screen'
+ */
+SmallVideo.prototype.setVideoType = function (videoType) {
+    this.videoType = videoType;
+};
+
+/**
+ * Returns the type of the video displayed by this instance.
+ * @returns {String} 'camera', 'screen' or undefined.
+ */
+SmallVideo.prototype.getVideoType = function () {
+    return this.videoType;
+};
 
 /**
  * Shows the presence status message for the given video.
  */
 SmallVideo.prototype.setPresenceStatus = function (statusMsg) {
-
     if (!this.container) {
         // No container
         return;
@@ -78,21 +103,41 @@ SmallVideo.prototype.setPresenceStatus = function (statusMsg) {
 /**
  * Creates an audio or video stream element.
  */
-
 SmallVideo.createStreamElement = function (sid, stream) {
     var isVideo = stream.getVideoTracks().length > 0;
 
-    var element = isVideo
-        ? document.createElement('video')
+    var element = isVideo ? document.createElement('video')
         : document.createElement('audio');
-    var id = (isVideo ? 'remoteVideo_' : 'remoteAudio_')
-        + sid + '_' + APP.RTC.getStreamID(stream);
+    var id = (isVideo ? 'remoteVideo_' : 'remoteAudio_') + sid + '_' +
+        APP.RTC.getStreamID(stream);
 
     element.id = id;
-    element.autoplay = true;
+    if (!RTCBrowserType.isIExplorer()) {
+        element.autoplay = true;
+    }
     element.oncontextmenu = function () { return false; };
 
     return element;
+};
+
+/**
+ * Configures hoverIn/hoverOut handlers.
+ */
+SmallVideo.prototype.bindHoverHandler = function () {
+    // Add hover handler
+    var self = this;
+    $(this.container).hover(
+        function () {
+            self.showDisplayName(true);
+        },
+        function () {
+            // If the video has been "pinned" by the user we want to
+            // keep the display name on place.
+            if (!LargeVideo.isLargeVideoVisible() ||
+                !LargeVideo.isCurrentlyOnLarge(self.getResourceJid()))
+                self.showDisplayName(false);
+        }
+    );
 };
 
 /**
@@ -104,12 +149,12 @@ SmallVideo.createStreamElement = function (sid, stream) {
 SmallVideo.prototype.updateStatsIndicator = function (percent, object) {
     if(this.connectionIndicator)
         this.connectionIndicator.updateConnectionQuality(percent, object);
-}
+};
 
 SmallVideo.prototype.hideIndicator = function () {
     if(this.connectionIndicator)
         this.connectionIndicator.hideIndicator();
-}
+};
 
 
 /**
@@ -119,7 +164,7 @@ SmallVideo.prototype.hideIndicator = function () {
 SmallVideo.prototype.showAudioIndicator = function(isMuted) {
     var audioMutedSpan = $('#' + this.videoSpanId + '>span.audioMuted');
 
-    if (isMuted === 'false') {
+    if (!isMuted) {
         if (audioMutedSpan.length > 0) {
             audioMutedSpan.popover('hide');
             audioMutedSpan.remove();
@@ -149,6 +194,8 @@ SmallVideo.prototype.showAudioIndicator = function(isMuted) {
  * Shows video muted indicator over small videos.
  */
 SmallVideo.prototype.showVideoIndicator = function(isMuted) {
+    this.showAvatar(isMuted);
+
     var videoMutedSpan = $('#' + this.videoSpanId + '>span.videoMuted');
 
     if (isMuted === false) {
@@ -178,16 +225,16 @@ SmallVideo.prototype.showVideoIndicator = function(isMuted) {
     }
 };
 
-SmallVideo.prototype.enableDominantSpeaker = function (isEnable)
-{
-    var displayName = this.resourceJid;
+SmallVideo.prototype.enableDominantSpeaker = function (isEnable) {
+    var resourceJid = this.getResourceJid();
+    var displayName = resourceJid;
     var nameSpan = $('#' + this.videoSpanId + '>span.displayname');
     if (nameSpan.length > 0)
         displayName = nameSpan.html();
 
     console.log("UI enable dominant speaker",
         displayName,
-        this.resourceJid,
+        resourceJid,
         isEnable);
 
 
@@ -195,40 +242,35 @@ SmallVideo.prototype.enableDominantSpeaker = function (isEnable)
         return;
     }
 
-    var video = $('#' + this.videoSpanId + '>video');
+    if (isEnable) {
+        this.showDisplayName(LargeVideo.getState() === "video");
 
-    if (video && video.length > 0) {
-        if (isEnable) {
-            this.showDisplayName(LargeVideo.isLargeVideoOnTop());
-
-            if (!this.container.classList.contains("dominantspeaker"))
-                this.container.classList.add("dominantspeaker");
-        }
-        else {
-            this.showDisplayName(false);
-
-            if (this.container.classList.contains("dominantspeaker"))
-                this.container.classList.remove("dominantspeaker");
-        }
+        if (!this.container.classList.contains("dominantspeaker"))
+            this.container.classList.add("dominantspeaker");
     }
+    else {
+        this.showDisplayName(false);
+
+        if (this.container.classList.contains("dominantspeaker"))
+            this.container.classList.remove("dominantspeaker");
+    }
+
+    this.showAvatar();
 };
 
 SmallVideo.prototype.updateIconPositions = function () {
     var audioMutedSpan = $('#' + this.videoSpanId + '>span.audioMuted');
     var connectionIndicator = $('#' + this.videoSpanId + '>div.connectionindicator');
     var videoMutedSpan = $('#' + this.videoSpanId + '>span.videoMuted');
-    if(connectionIndicator.length > 0
-        && connectionIndicator[0].style.display != "none") {
+    if(connectionIndicator.length > 0 &&
+        connectionIndicator[0].style.display != "none") {
         audioMutedSpan.css({right: "23px"});
         videoMutedSpan.css({right: ((audioMutedSpan.length > 0? 23 : 0) + 30) + "px"});
-    }
-    else
-    {
+    } else {
         audioMutedSpan.css({right: "0px"});
         videoMutedSpan.css({right: (audioMutedSpan.length > 0? 30 : 0) + "px"});
     }
-}
-
+};
 
 /**
  * Creates the element indicating the moderator(owner) of the conference.
@@ -260,26 +302,97 @@ SmallVideo.prototype.createModeratorIndicatorElement = function () {
 
     //translates text in focus indicators
     APP.translation.translateElement($('#' + this.videoSpanId + ' .focusindicator'));
-}
+};
 
+SmallVideo.prototype.selectVideoElement = function () {
+    var videoElem = APP.RTC.getVideoElementName();
+    if (!RTCBrowserType.isTemasysPluginUsed()) {
+        return $('#' + this.videoSpanId).find(videoElem);
+    } else {
+        return $('#' + this.videoSpanId +
+               (this.isLocal ? '>>' : '>') +
+               videoElem + '>param[value="video"]').parent();
+    }
+};
 
 SmallVideo.prototype.getSrc = function () {
-    return APP.RTC.getVideoSrc($('#' + this.videoSpanId).find("video").get(0));
-}
+    var videoElement = this.selectVideoElement().get(0);
+    return APP.RTC.getVideoSrc(videoElement);
+};
 
-SmallVideo.prototype.focus = function(isFocused)
-{
+SmallVideo.prototype.focus = function(isFocused) {
     if(!isFocused) {
         this.container.classList.remove("videoContainerFocused");
-    }
-    else
-    {
+    } else {
         this.container.classList.add("videoContainerFocused");
     }
-}
+};
 
 SmallVideo.prototype.hasVideo = function () {
-    return $("#" + this.videoSpanId).find("video").length !== 0;
-}
+    return this.selectVideoElement().length !== 0;
+};
+
+/**
+ * Hides or shows the user's avatar
+ * @param show whether we should show the avatar or not
+ * video because there is no dominant speaker and no focused speaker
+ */
+SmallVideo.prototype.showAvatar = function (show) {
+    if (!this.hasAvatar) {
+        if (this.peerJid) {
+            // Init avatar
+            this.avatarChanged(Avatar.getThumbUrl(this.peerJid));
+        } else {
+            console.error("Unable to init avatar - no peerjid", this);
+            return;
+        }
+    }
+
+    var resourceJid = this.getResourceJid();
+    var video = this.selectVideoElement();
+
+    var avatar = $('#avatar_' + resourceJid);
+
+    if (show === undefined || show === null) {
+        if (!this.isLocal &&
+            !this.VideoLayout.isInLastN(resourceJid)) {
+            show = true;
+        } else {
+            // We want to show the avatar when the video is muted or not exists
+            // that is when 'true' or 'null' is returned
+            show = APP.RTC.isVideoMuted(this.peerJid) !== false;
+        }
+    }
+
+    if (LargeVideo.showAvatar(resourceJid, show)) {
+        setVisibility(avatar, false);
+        setVisibility(video, false);
+    } else {
+        if (video && video.length > 0) {
+            setVisibility(video, !show);
+        }
+        setVisibility(avatar, show);
+    }
+};
+
+SmallVideo.prototype.avatarChanged = function (thumbUrl) {
+    var thumbnail = $('#' + this.videoSpanId);
+    var resourceJid = this.getResourceJid();
+    var avatar = $('#avatar_' + resourceJid);
+    this.hasAvatar = true;
+
+    // set the avatar in the thumbnail
+    if (avatar && avatar.length > 0) {
+        avatar[0].src = thumbUrl;
+    } else {
+        if (thumbnail && thumbnail.length > 0) {
+            avatar = document.createElement('img');
+            avatar.id = 'avatar_' + resourceJid;
+            avatar.className = 'userAvatar';
+            avatar.src = thumbUrl;
+            thumbnail.append(avatar);
+        }
+    }
+};
 
 module.exports = SmallVideo;

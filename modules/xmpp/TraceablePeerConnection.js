@@ -1,7 +1,19 @@
-function TraceablePeerConnection(ice_config, constraints) {
+var RTC = require('../RTC/RTC');
+var RTCBrowserType = require("../RTC/RTCBrowserType.js");
+var XMPPEvents = require("../../service/xmpp/XMPPEvents");
+var SSRCReplacement = require("./LocalSSRCReplacement");
+
+function TraceablePeerConnection(ice_config, constraints, session) {
     var self = this;
-    var RTCPeerconnection = navigator.mozGetUserMedia ? mozRTCPeerConnection : webkitRTCPeerConnection;
-    this.peerconnection = new RTCPeerconnection(ice_config, constraints);
+    var RTCPeerConnectionType = null;
+    if (RTCBrowserType.isFirefox()) {
+        RTCPeerConnectionType = mozRTCPeerConnection;
+    } else if (RTCBrowserType.isTemasysPluginUsed()) {
+        RTCPeerConnectionType = RTCPeerConnection;
+    } else {
+        RTCPeerConnectionType = webkitRTCPeerConnection;
+    }
+    this.peerconnection = new RTCPeerConnectionType(ice_config, constraints);
     this.updateLog = [];
     this.stats = {};
     this.statsinterval = null;
@@ -13,7 +25,15 @@ function TraceablePeerConnection(ice_config, constraints) {
 
     // override as desired
     this.trace = function (what, info) {
-        //console.warn('WTRACE', what, info);
+        /*console.warn('WTRACE', what, info);
+        if (info && RTCBrowserType.isIExplorer()) {
+            if (info.length > 1024) {
+                console.warn('WTRACE', what, info.substr(1024));
+            }
+            if (info.length > 2048) {
+                console.warn('WTRACE', what, info.substr(2048));
+            }
+        }*/
         self.updateLog.push({
             time: new Date(),
             type: what,
@@ -22,7 +42,9 @@ function TraceablePeerConnection(ice_config, constraints) {
     };
     this.onicecandidate = null;
     this.peerconnection.onicecandidate = function (event) {
-        self.trace('onicecandidate', JSON.stringify(event.candidate, null, ' '));
+        // FIXME: this causes stack overflow with Temasys Plugin
+        if (!RTCBrowserType.isTemasysPluginUsed())
+            self.trace('onicecandidate', JSON.stringify(event.candidate, null, ' '));
         if (self.onicecandidate !== null) {
             self.onicecandidate(event);
         }
@@ -69,13 +91,13 @@ function TraceablePeerConnection(ice_config, constraints) {
             self.ondatachannel(event);
         }
     };
-    if (!navigator.mozGetUserMedia && this.maxstats) {
+    // XXX: do all non-firefox browsers which we support also support this?
+    if (!RTCBrowserType.isFirefox() && this.maxstats) {
         this.statsinterval = window.setInterval(function() {
             self.peerconnection.getStats(function(stats) {
                 var results = stats.result();
+                var now = new Date();
                 for (var i = 0; i < results.length; ++i) {
-                    //console.log(results[i].type, results[i].id, results[i].names())
-                    var now = new Date();
                     results[i].names().forEach(function (name) {
                         var id = results[i].id + '-' + name;
                         if (!self.stats[id]) {
@@ -99,9 +121,12 @@ function TraceablePeerConnection(ice_config, constraints) {
 
         }, 1000);
     }
-};
+}
 
-dumpSDP = function(description) {
+/**
+ * Returns a string representation of a SessionDescription object.
+ */
+var dumpSDP = function(description) {
     if (typeof description === 'undefined' || description == null) {
         return '';
     }
@@ -109,31 +134,109 @@ dumpSDP = function(description) {
     return 'type: ' + description.type + '\r\n' + description.sdp;
 };
 
+/**
+ * Takes a SessionDescription object and returns a "normalized" version.
+ * Currently it only takes care of ordering the a=ssrc lines.
+ */
+var normalizePlanB = function(desc) {
+    if (typeof desc !== 'object' || desc === null ||
+        typeof desc.sdp !== 'string') {
+        console.warn('An empty description was passed as an argument.');
+        return desc;
+    }
+
+    var transform = require('sdp-transform');
+    var session = transform.parse(desc.sdp);
+
+    if (typeof session !== 'undefined' && typeof session.media !== 'undefined' &&
+        Array.isArray(session.media)) {
+        session.media.forEach(function (mLine) {
+
+            // Chrome appears to be picky about the order in which a=ssrc lines
+            // are listed in an m-line when rtx is enabled (and thus there are
+            // a=ssrc-group lines with FID semantics). Specifically if we have
+            // "a=ssrc-group:FID S1 S2" and the "a=ssrc:S2" lines appear before
+            // the "a=ssrc:S1" lines, SRD fails.
+            // So, put SSRC which appear as the first SSRC in an FID ssrc-group
+            // first.
+            var firstSsrcs = [];
+            var newSsrcLines = [];
+
+            if (typeof mLine.ssrcGroups !== 'undefined' && Array.isArray(mLine.ssrcGroups)) {
+                mLine.ssrcGroups.forEach(function (group) {
+                    if (typeof group.semantics !== 'undefined' &&
+                        group.semantics === 'FID') {
+                        if (typeof group.ssrcs !== 'undefined') {
+                            firstSsrcs.push(Number(group.ssrcs.split(' ')[0]));
+                        }
+                    }
+                });
+            }
+
+            if (typeof mLine.ssrcs !== 'undefined' && Array.isArray(mLine.ssrcs)) {
+                for (var i = 0; i<mLine.ssrcs.length; i++){
+                    if (typeof mLine.ssrcs[i] === 'object'
+                        && typeof mLine.ssrcs[i].id !== 'undefined'
+                        && $.inArray(mLine.ssrcs[i].id, firstSsrcs) == 0) {
+                        newSsrcLines.push(mLine.ssrcs[i]);
+                        delete mLine.ssrcs[i];
+                    }
+                }
+
+                for (var i = 0; i<mLine.ssrcs.length; i++){
+                    if (typeof mLine.ssrcs[i] !== 'undefined') {
+                        newSsrcLines.push(mLine.ssrcs[i]);
+                    }
+                }
+
+                mLine.ssrcs = newSsrcLines;
+            }
+        });
+    }
+
+    var resStr = transform.write(session);
+    return new RTCSessionDescription({
+        type: desc.type,
+        sdp: resStr
+    });
+};
+
 if (TraceablePeerConnection.prototype.__defineGetter__ !== undefined) {
-    TraceablePeerConnection.prototype.__defineGetter__('signalingState', function() { return this.peerconnection.signalingState; });
-    TraceablePeerConnection.prototype.__defineGetter__('iceConnectionState', function() { return this.peerconnection.iceConnectionState; });
-    TraceablePeerConnection.prototype.__defineGetter__('localDescription', function() {
-        var desc = this.peerconnection.localDescription;
-        this.trace('getLocalDescription::preTransform', dumpSDP(desc));
+    TraceablePeerConnection.prototype.__defineGetter__(
+        'signalingState',
+        function() { return this.peerconnection.signalingState; });
+    TraceablePeerConnection.prototype.__defineGetter__(
+        'iceConnectionState',
+        function() { return this.peerconnection.iceConnectionState; });
+    TraceablePeerConnection.prototype.__defineGetter__(
+        'localDescription',
+        function() {
+            var desc = this.peerconnection.localDescription;
 
-        // if we're running on FF, transform to Plan B first.
-        if (navigator.mozGetUserMedia) {
-            desc = this.interop.toPlanB(desc);
-            this.trace('getLocalDescription::postTransform (Plan B)', dumpSDP(desc));
-        }
-        return desc;
-    });
-    TraceablePeerConnection.prototype.__defineGetter__('remoteDescription', function() {
-        var desc = this.peerconnection.remoteDescription;
-        this.trace('getRemoteDescription::preTransform', dumpSDP(desc));
+            desc = SSRCReplacement.mungeLocalVideoSSRC(desc);
+            
+            this.trace('getLocalDescription::preTransform', dumpSDP(desc));
 
-        // if we're running on FF, transform to Plan B first.
-        if (navigator.mozGetUserMedia) {
-            desc = this.interop.toPlanB(desc);
-            this.trace('getRemoteDescription::postTransform (Plan B)', dumpSDP(desc));
-        }
-        return desc;
-    });
+            // if we're running on FF, transform to Plan B first.
+            if (RTCBrowserType.usesUnifiedPlan()) {
+                desc = this.interop.toPlanB(desc);
+                this.trace('getLocalDescription::postTransform (Plan B)', dumpSDP(desc));
+            }
+            return desc;
+        });
+    TraceablePeerConnection.prototype.__defineGetter__(
+        'remoteDescription',
+        function() {
+            var desc = this.peerconnection.remoteDescription;
+            this.trace('getRemoteDescription::preTransform', dumpSDP(desc));
+
+            // if we're running on FF, transform to Plan B first.
+            if (RTCBrowserType.usesUnifiedPlan()) {
+                desc = this.interop.toPlanB(desc);
+                this.trace('getRemoteDescription::postTransform (Plan B)', dumpSDP(desc));
+            }
+            return desc;
+        });
 }
 
 TraceablePeerConnection.prototype.addStream = function (stream) {
@@ -145,7 +248,6 @@ TraceablePeerConnection.prototype.addStream = function (stream) {
     catch (e)
     {
         console.error(e);
-        return;
     }
 };
 
@@ -153,16 +255,26 @@ TraceablePeerConnection.prototype.removeStream = function (stream, stopStreams) 
     this.trace('removeStream', stream.id);
     if(stopStreams) {
         stream.getAudioTracks().forEach(function (track) {
-            track.stop();
+            // stop() not supported with IE
+            if (track.stop) {
+                track.stop();
+            }
         });
         stream.getVideoTracks().forEach(function (track) {
-            track.stop();
+            // stop() not supported with IE
+            if (track.stop) {
+                track.stop();
+            }
         });
+        if (stream.stop) {
+            stream.stop();
+        }
     }
 
     try {
         // FF doesn't support this yet.
-        this.peerconnection.removeStream(stream);
+        if (this.peerconnection.removeStream)
+            this.peerconnection.removeStream(stream);
     } catch (e) {
         console.error(e);
     }
@@ -173,10 +285,11 @@ TraceablePeerConnection.prototype.createDataChannel = function (label, opts) {
     return this.peerconnection.createDataChannel(label, opts);
 };
 
-TraceablePeerConnection.prototype.setLocalDescription = function (description, successCallback, failureCallback) {
+TraceablePeerConnection.prototype.setLocalDescription
+        = function (description, successCallback, failureCallback) {
     this.trace('setLocalDescription::preTransform', dumpSDP(description));
     // if we're running on FF, transform to Plan A first.
-    if (navigator.mozGetUserMedia) {
+    if (RTCBrowserType.usesUnifiedPlan()) {
         description = this.interop.toUnifiedPlan(description);
         this.trace('setLocalDescription::postTransform (Plan A)', dumpSDP(description));
     }
@@ -199,17 +312,23 @@ TraceablePeerConnection.prototype.setLocalDescription = function (description, s
      */
 };
 
-TraceablePeerConnection.prototype.setRemoteDescription = function (description, successCallback, failureCallback) {
+TraceablePeerConnection.prototype.setRemoteDescription
+        = function (description, successCallback, failureCallback) {
     this.trace('setRemoteDescription::preTransform', dumpSDP(description));
     // TODO the focus should squeze or explode the remote simulcast
     description = this.simulcast.mungeRemoteDescription(description);
     this.trace('setRemoteDescription::postTransform (simulcast)', dumpSDP(description));
 
     // if we're running on FF, transform to Plan A first.
-    if (navigator.mozGetUserMedia) {
+    if (RTCBrowserType.usesUnifiedPlan()) {
         description = this.interop.toUnifiedPlan(description);
         this.trace('setRemoteDescription::postTransform (Plan A)', dumpSDP(description));
     }
+
+    if (RTCBrowserType.usesPlanB()) {
+        description = normalizePlanB(description);
+    }
+
     var self = this;
     this.peerconnection.setRemoteDescription(description,
         function () {
@@ -237,19 +356,23 @@ TraceablePeerConnection.prototype.close = function () {
     this.peerconnection.close();
 };
 
-TraceablePeerConnection.prototype.createOffer = function (successCallback, failureCallback, constraints) {
+TraceablePeerConnection.prototype.createOffer
+        = function (successCallback, failureCallback, constraints) {
     var self = this;
     this.trace('createOffer', JSON.stringify(constraints, null, ' '));
     this.peerconnection.createOffer(
         function (offer) {
             self.trace('createOfferOnSuccess::preTransform', dumpSDP(offer));
-            // if we're running on FF, transform to Plan B first.
             // NOTE this is not tested because in meet the focus generates the
             // offer.
-            if (navigator.mozGetUserMedia) {
+
+            // if we're running on FF, transform to Plan B first.
+            if (RTCBrowserType.usesUnifiedPlan()) {
                 offer = self.interop.toPlanB(offer);
                 self.trace('createOfferOnSuccess::postTransform (Plan B)', dumpSDP(offer));
             }
+
+            offer = SSRCReplacement.mungeLocalVideoSSRC(offer);
 
             if (config.enableSimulcast && self.simulcast.isSupported()) {
                 offer = self.simulcast.mungeLocalDescription(offer);
@@ -265,20 +388,25 @@ TraceablePeerConnection.prototype.createOffer = function (successCallback, failu
     );
 };
 
-TraceablePeerConnection.prototype.createAnswer = function (successCallback, failureCallback, constraints) {
+TraceablePeerConnection.prototype.createAnswer
+        = function (successCallback, failureCallback, constraints) {
     var self = this;
     this.trace('createAnswer', JSON.stringify(constraints, null, ' '));
     this.peerconnection.createAnswer(
         function (answer) {
-            self.trace('createAnswerOnSuccess::preTransfom', dumpSDP(answer));
+            self.trace('createAnswerOnSuccess::preTransform', dumpSDP(answer));
             // if we're running on FF, transform to Plan A first.
-            if (navigator.mozGetUserMedia) {
+            if (RTCBrowserType.usesUnifiedPlan()) {
                 answer = self.interop.toPlanB(answer);
-                self.trace('createAnswerOnSuccess::postTransfom (Plan B)', dumpSDP(answer));
+                self.trace('createAnswerOnSuccess::postTransform (Plan B)', dumpSDP(answer));
             }
+
+            // munge local video SSRC
+            answer = SSRCReplacement.mungeLocalVideoSSRC(answer);
+
             if (config.enableSimulcast && self.simulcast.isSupported()) {
                 answer = self.simulcast.mungeLocalDescription(answer);
-                self.trace('createAnswerOnSuccess::postTransfom (simulcast)', dumpSDP(answer));
+                self.trace('createAnswerOnSuccess::postTransform (simulcast)', dumpSDP(answer));
             }
             successCallback(answer);
         },
@@ -290,8 +418,9 @@ TraceablePeerConnection.prototype.createAnswer = function (successCallback, fail
     );
 };
 
-TraceablePeerConnection.prototype.addIceCandidate = function (candidate, successCallback, failureCallback) {
-    var self = this;
+TraceablePeerConnection.prototype.addIceCandidate
+        = function (candidate, successCallback, failureCallback) {
+    //var self = this;
     this.trace('addIceCandidate', JSON.stringify(candidate, null, ' '));
     this.peerconnection.addIceCandidate(candidate);
     /* maybe later
@@ -309,13 +438,12 @@ TraceablePeerConnection.prototype.addIceCandidate = function (candidate, success
 };
 
 TraceablePeerConnection.prototype.getStats = function(callback, errback) {
-    if (navigator.mozGetUserMedia) {
+    // TODO: Is this the correct way to handle Opera, Temasys?
+    if (RTCBrowserType.isFirefox()) {
         // ignore for now...
         if(!errback)
-            errback = function () {
-
-            }
-        this.peerconnection.getStats(null,callback,errback);
+            errback = function () {};
+        this.peerconnection.getStats(null, callback, errback);
     } else {
         this.peerconnection.getStats(callback);
     }

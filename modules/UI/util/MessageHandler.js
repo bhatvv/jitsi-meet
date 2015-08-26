@@ -1,36 +1,42 @@
 /* global $, APP, jQuery, toastr */
+
+/**
+ * Flag for enable/disable of the notifications.
+ * @type {boolean}
+ */
+var notificationsEnabled = true;
+
 var messageHandler = (function(my) {
 
     /**
      * Shows a message to the user.
      *
-     * @param titleString the title of the message
-     * @param messageString the text of the message
+     * @param titleKey the title of the message
+     * @param messageKey the text of the message
      */
     my.openMessageDialog = function(titleKey, messageKey) {
         var title = null;
-        if(titleKey)
-        {
-            title = APP.translation.generateTranslatonHTML(titleKey);
+        if(titleKey) {
+            title = APP.translation.generateTranslationHTML(titleKey);
         }
-        var message = APP.translation.generateTranslatonHTML(messageKey);
+        var message = APP.translation.generateTranslationHTML(messageKey);
         $.prompt(message,
-            {
-                title: title,
-                persistent: false
-            }
+            {title: title, persistent: false}
         );
     };
 
     /**
-     * Shows a message to the user with two buttons: first is given as a parameter and the second is Cancel.
+     * Shows a message to the user with two buttons: first is given as a
+     * parameter and the second is Cancel.
      *
      * @param titleString the title of the message
      * @param msgString the text of the message
-     * @param persistent boolean value which determines whether the message is persistent or not
+     * @param persistent boolean value which determines whether the message is
+     *        persistent or not
      * @param leftButton the fist button's text
      * @param submitFunction function to be called on submit
-     * @param loadedFunction function to be called after the prompt is fully loaded
+     * @param loadedFunction function to be called after the prompt is fully
+     *        loaded
      * @param closeFunction function to be called after the prompt is closed
      * @param focus optional focus selector or button index to be focused after
      *        the dialog is opened
@@ -39,24 +45,22 @@ var messageHandler = (function(my) {
      */
     my.openTwoButtonDialog = function(titleKey, titleString, msgKey, msgString,
         persistent, leftButtonKey, submitFunction, loadedFunction,
-        closeFunction, focus, defaultButton)
-    {
+        closeFunction, focus, defaultButton) {
         var buttons = [];
 
-        var leftButton = APP.translation.generateTranslatonHTML(leftButtonKey);
+        var leftButton = APP.translation.generateTranslationHTML(leftButtonKey);
         buttons.push({ title: leftButton, value: true});
 
         var cancelButton
-            = APP.translation.generateTranslatonHTML("dialog.Cancel");
+            = APP.translation.generateTranslationHTML("dialog.Cancel");
         buttons.push({title: cancelButton, value: false});
 
         var message = msgString, title = titleString;
-        if (titleKey)
-        {
-            title = APP.translation.generateTranslatonHTML(titleKey);
+        if (titleKey) {
+            title = APP.translation.generateTranslationHTML(titleKey);
         }
         if (msgKey) {
-            message = APP.translation.generateTranslatonHTML(msgKey);
+            message = APP.translation.generateTranslationHTML(msgKey);
         }
         $.prompt(message, {
             title: title,
@@ -75,11 +79,14 @@ var messageHandler = (function(my) {
      *
      * @param titleString the title of the message
      * @param msgString the text of the message
-     * @param persistent boolean value which determines whether the message is persistent or not
-     * @param buttons object with the buttons. The keys must be the name of the button and value is the value
-     * that will be passed to submitFunction
+     * @param persistent boolean value which determines whether the message is
+     *        persistent or not
+     * @param buttons object with the buttons. The keys must be the name of the
+     *        button and value is the value that will be passed to
+     *        submitFunction
      * @param submitFunction function to be called on submit
-     * @param loadedFunction function to be called after the prompt is fully loaded
+     * @param loadedFunction function to be called after the prompt is fully
+     *        loaded
      */
     my.openDialog = function (titleString, msgString, persistent, buttons,
                               submitFunction, loadedFunction) {
@@ -107,10 +114,9 @@ var messageHandler = (function(my) {
     /**
      * Shows a dialog with different states to the user.
      *
-     * @param statesObject object containing all the states of the dialog
+     * @param statesObject object containing all the states of the dialog.
      */
     my.openDialogWithStates = function (statesObject, options) {
-
         return new Impromptu(statesObject, options);
     };
 
@@ -124,7 +130,7 @@ var messageHandler = (function(my) {
      * @param onPopupClosed optional callback function called when popup window
      *        has been closed.
      *
-     * @returns popup window object if opened successfully or undefined
+     * @returns {object} popup window object if opened successfully or undefined
      *          in case we failed to open it(popup blocked)
      */
     my.openCenteredPopup = function (url, w, h, onPopupClosed) {
@@ -147,8 +153,8 @@ var messageHandler = (function(my) {
     /**
      * Shows a dialog prompting the user to send an error report.
      *
-     * @param titleString the title of the message
-     * @param msgString the text of the message
+     * @param titleKey the title of the message
+     * @param msgKey the text of the message
      * @param error the error that is being reported
      */
     my.openReportDialog = function(titleKey, msgKey, error) {
@@ -159,35 +165,42 @@ var messageHandler = (function(my) {
 
     /**
      *  Shows an error dialog to the user.
-     * @param title the title of the message
-     * @param message the text of the messafe
+     * @param titleKey the title of the message.
+     * @param msgKey the text of the message.
      */
     my.showError = function(titleKey, msgKey) {
 
-        if(!titleKey) {
+        if (!titleKey) {
             titleKey = "dialog.oops";
         }
-        if(!msgKey)
-        {
+        if (!msgKey) {
             msgKey = "dialog.defaultError";
         }
         messageHandler.openMessageDialog(titleKey, msgKey);
     };
 
+    /**
+     * Displayes notification.
+     * @param displayName display name of the participant that is associated with the notification.
+     * @param displayNameKey the key from the language file for the display name.
+     * @param cls css class for the notification
+     * @param messageKey the key from the language file for the text of the message.
+     * @param messageArguments object with the arguments for the message.
+     * @param options object with language options.
+     */
     my.notify = function(displayName, displayNameKey,
                          cls, messageKey, messageArguments, options) {
+        if(!notificationsEnabled)
+            return;
         var displayNameSpan = '<span class="nickname" ';
-        if(displayName)
-        {
+        if (displayName) {
             displayNameSpan += ">" + displayName;
-        }
-        else
-        {
+        } else {
             displayNameSpan += "data-i18n='" + displayNameKey +
                 "'>" + APP.translation.translateString(displayNameKey);
         }
         displayNameSpan += "</span>";
-        toastr.info(
+        return toastr.info(
             displayNameSpan + '<br>' +
             '<span class=' + cls + ' data-i18n="' + messageKey + '"' +
                 (messageArguments?
@@ -196,6 +209,28 @@ var messageHandler = (function(my) {
             APP.translation.translateString(messageKey,
                 messageArguments) +
             '</span>', null, options);
+    };
+
+    /**
+     * Removes the toaster.
+     * @param toasterElement
+     */
+    my.remove = function(toasterElement) {
+        toasterElement.remove();
+    };
+
+    /**
+     * Disables notifications.
+     */
+    my.disableNotifications = function () {
+        notificationsEnabled = false;
+    };
+
+    /**
+     * Enables notifications.
+     */
+    my.enableNotifications = function () {
+        notificationsEnabled = true;
     };
 
     return my;

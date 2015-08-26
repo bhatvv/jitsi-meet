@@ -1,4 +1,367 @@
-!function(e){if("object"==typeof exports&&"undefined"!=typeof module)module.exports=e();else if("function"==typeof define&&define.amd)define([],e);else{var f;"undefined"!=typeof window?f=window:"undefined"!=typeof global?f=global:"undefined"!=typeof self&&(f=self),f.APP=e()}}(function(){var define,module,exports;return (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);var f=new Error("Cannot find module '"+o+"'");throw f.code="MODULE_NOT_FOUND",f}var l=n[o]={exports:{}};t[o][0].call(l.exports,function(e){var n=t[o][1][e];return s(n?n:e)},l,l.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
+(function(f){if(typeof exports==="object"&&typeof module!=="undefined"){module.exports=f()}else if(typeof define==="function"&&define.amd){define([],f)}else{var g;if(typeof window!=="undefined"){g=window}else if(typeof global!=="undefined"){g=global}else if(typeof self!=="undefined"){g=self}else{g=this}g.APP = f()}})(function(){var define,module,exports;return (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);var f=new Error("Cannot find module '"+o+"'");throw f.code="MODULE_NOT_FOUND",f}var l=n[o]={exports:{}};t[o][0].call(l.exports,function(e){var n=t[o][1][e];return s(n?n:e)},l,l.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
+// Copyright Joyent, Inc. and other Node contributors.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a
+// copy of this software and associated documentation files (the
+// "Software"), to deal in the Software without restriction, including
+// without limitation the rights to use, copy, modify, merge, publish,
+// distribute, sublicense, and/or sell copies of the Software, and to permit
+// persons to whom the Software is furnished to do so, subject to the
+// following conditions:
+//
+// The above copyright notice and this permission notice shall be included
+// in all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+// OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+// NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+// DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+// OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+// USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+function EventEmitter() {
+  this._events = this._events || {};
+  this._maxListeners = this._maxListeners || undefined;
+}
+module.exports = EventEmitter;
+
+// Backwards-compat with node 0.10.x
+EventEmitter.EventEmitter = EventEmitter;
+
+EventEmitter.prototype._events = undefined;
+EventEmitter.prototype._maxListeners = undefined;
+
+// By default EventEmitters will print a warning if more than 10 listeners are
+// added to it. This is a useful default which helps finding memory leaks.
+EventEmitter.defaultMaxListeners = 10;
+
+// Obviously not all Emitters should be limited to 10. This function allows
+// that to be increased. Set to zero for unlimited.
+EventEmitter.prototype.setMaxListeners = function(n) {
+  if (!isNumber(n) || n < 0 || isNaN(n))
+    throw TypeError('n must be a positive number');
+  this._maxListeners = n;
+  return this;
+};
+
+EventEmitter.prototype.emit = function(type) {
+  var er, handler, len, args, i, listeners;
+
+  if (!this._events)
+    this._events = {};
+
+  // If there is no 'error' event listener then throw.
+  if (type === 'error') {
+    if (!this._events.error ||
+        (isObject(this._events.error) && !this._events.error.length)) {
+      er = arguments[1];
+      if (er instanceof Error) {
+        throw er; // Unhandled 'error' event
+      }
+      throw TypeError('Uncaught, unspecified "error" event.');
+    }
+  }
+
+  handler = this._events[type];
+
+  if (isUndefined(handler))
+    return false;
+
+  if (isFunction(handler)) {
+    switch (arguments.length) {
+      // fast cases
+      case 1:
+        handler.call(this);
+        break;
+      case 2:
+        handler.call(this, arguments[1]);
+        break;
+      case 3:
+        handler.call(this, arguments[1], arguments[2]);
+        break;
+      // slower
+      default:
+        len = arguments.length;
+        args = new Array(len - 1);
+        for (i = 1; i < len; i++)
+          args[i - 1] = arguments[i];
+        handler.apply(this, args);
+    }
+  } else if (isObject(handler)) {
+    len = arguments.length;
+    args = new Array(len - 1);
+    for (i = 1; i < len; i++)
+      args[i - 1] = arguments[i];
+
+    listeners = handler.slice();
+    len = listeners.length;
+    for (i = 0; i < len; i++)
+      listeners[i].apply(this, args);
+  }
+
+  return true;
+};
+
+EventEmitter.prototype.addListener = function(type, listener) {
+  var m;
+
+  if (!isFunction(listener))
+    throw TypeError('listener must be a function');
+
+  if (!this._events)
+    this._events = {};
+
+  // To avoid recursion in the case that type === "newListener"! Before
+  // adding it to the listeners, first emit "newListener".
+  if (this._events.newListener)
+    this.emit('newListener', type,
+              isFunction(listener.listener) ?
+              listener.listener : listener);
+
+  if (!this._events[type])
+    // Optimize the case of one listener. Don't need the extra array object.
+    this._events[type] = listener;
+  else if (isObject(this._events[type]))
+    // If we've already got an array, just append.
+    this._events[type].push(listener);
+  else
+    // Adding the second element, need to change to array.
+    this._events[type] = [this._events[type], listener];
+
+  // Check for listener leak
+  if (isObject(this._events[type]) && !this._events[type].warned) {
+    var m;
+    if (!isUndefined(this._maxListeners)) {
+      m = this._maxListeners;
+    } else {
+      m = EventEmitter.defaultMaxListeners;
+    }
+
+    if (m && m > 0 && this._events[type].length > m) {
+      this._events[type].warned = true;
+      console.error('(node) warning: possible EventEmitter memory ' +
+                    'leak detected. %d listeners added. ' +
+                    'Use emitter.setMaxListeners() to increase limit.',
+                    this._events[type].length);
+      if (typeof console.trace === 'function') {
+        // not supported in IE 10
+        console.trace();
+      }
+    }
+  }
+
+  return this;
+};
+
+EventEmitter.prototype.on = EventEmitter.prototype.addListener;
+
+EventEmitter.prototype.once = function(type, listener) {
+  if (!isFunction(listener))
+    throw TypeError('listener must be a function');
+
+  var fired = false;
+
+  function g() {
+    this.removeListener(type, g);
+
+    if (!fired) {
+      fired = true;
+      listener.apply(this, arguments);
+    }
+  }
+
+  g.listener = listener;
+  this.on(type, g);
+
+  return this;
+};
+
+// emits a 'removeListener' event iff the listener was removed
+EventEmitter.prototype.removeListener = function(type, listener) {
+  var list, position, length, i;
+
+  if (!isFunction(listener))
+    throw TypeError('listener must be a function');
+
+  if (!this._events || !this._events[type])
+    return this;
+
+  list = this._events[type];
+  length = list.length;
+  position = -1;
+
+  if (list === listener ||
+      (isFunction(list.listener) && list.listener === listener)) {
+    delete this._events[type];
+    if (this._events.removeListener)
+      this.emit('removeListener', type, listener);
+
+  } else if (isObject(list)) {
+    for (i = length; i-- > 0;) {
+      if (list[i] === listener ||
+          (list[i].listener && list[i].listener === listener)) {
+        position = i;
+        break;
+      }
+    }
+
+    if (position < 0)
+      return this;
+
+    if (list.length === 1) {
+      list.length = 0;
+      delete this._events[type];
+    } else {
+      list.splice(position, 1);
+    }
+
+    if (this._events.removeListener)
+      this.emit('removeListener', type, listener);
+  }
+
+  return this;
+};
+
+EventEmitter.prototype.removeAllListeners = function(type) {
+  var key, listeners;
+
+  if (!this._events)
+    return this;
+
+  // not listening for removeListener, no need to emit
+  if (!this._events.removeListener) {
+    if (arguments.length === 0)
+      this._events = {};
+    else if (this._events[type])
+      delete this._events[type];
+    return this;
+  }
+
+  // emit removeListener for all listeners on all events
+  if (arguments.length === 0) {
+    for (key in this._events) {
+      if (key === 'removeListener') continue;
+      this.removeAllListeners(key);
+    }
+    this.removeAllListeners('removeListener');
+    this._events = {};
+    return this;
+  }
+
+  listeners = this._events[type];
+
+  if (isFunction(listeners)) {
+    this.removeListener(type, listeners);
+  } else {
+    // LIFO order
+    while (listeners.length)
+      this.removeListener(type, listeners[listeners.length - 1]);
+  }
+  delete this._events[type];
+
+  return this;
+};
+
+EventEmitter.prototype.listeners = function(type) {
+  var ret;
+  if (!this._events || !this._events[type])
+    ret = [];
+  else if (isFunction(this._events[type]))
+    ret = [this._events[type]];
+  else
+    ret = this._events[type].slice();
+  return ret;
+};
+
+EventEmitter.listenerCount = function(emitter, type) {
+  var ret;
+  if (!emitter._events || !emitter._events[type])
+    ret = 0;
+  else if (isFunction(emitter._events[type]))
+    ret = 1;
+  else
+    ret = emitter._events[type].length;
+  return ret;
+};
+
+function isFunction(arg) {
+  return typeof arg === 'function';
+}
+
+function isNumber(arg) {
+  return typeof arg === 'number';
+}
+
+function isObject(arg) {
+  return typeof arg === 'object' && arg !== null;
+}
+
+function isUndefined(arg) {
+  return arg === void 0;
+}
+
+},{}],2:[function(require,module,exports){
+// shim for using process in browser
+
+var process = module.exports = {};
+var queue = [];
+var draining = false;
+
+function drainQueue() {
+    if (draining) {
+        return;
+    }
+    draining = true;
+    var currentQueue;
+    var len = queue.length;
+    while(len) {
+        currentQueue = queue;
+        queue = [];
+        var i = -1;
+        while (++i < len) {
+            currentQueue[i]();
+        }
+        len = queue.length;
+    }
+    draining = false;
+}
+process.nextTick = function (fun) {
+    queue.push(fun);
+    if (!draining) {
+        setTimeout(drainQueue, 0);
+    }
+};
+
+process.title = 'browser';
+process.browser = true;
+process.env = {};
+process.argv = [];
+process.version = ''; // empty string to avoid regexp issues
+process.versions = {};
+
+function noop() {}
+
+process.on = noop;
+process.addListener = noop;
+process.once = noop;
+process.off = noop;
+process.removeListener = noop;
+process.removeAllListeners = noop;
+process.emit = noop;
+
+process.binding = function (name) {
+    throw new Error('process.binding is not supported');
+};
+
+// TODO(shtylman)
+process.cwd = function () { return '/' };
+process.chdir = function (dir) {
+    throw new Error('process.chdir is not supported');
+};
+process.umask = function() { return 0; };
+
+},{}],3:[function(require,module,exports){
 /* jshint -W117 */
 /* application specific logic */
 
@@ -17,28 +380,54 @@ var APP =
         this.settings = require("./modules/settings/Settings");
         this.DTMF = require("./modules/DTMF/DTMF");
         this.members = require("./modules/members/MemberList");
+        this.configFetch = require("./modules/config/HttpConfigFetch");
     }
 };
 
 function init() {
 
+    APP.desktopsharing.init();
     APP.RTC.start();
     APP.xmpp.start();
     APP.statistics.start();
     APP.connectionquality.init();
-
-    // Set default desktop sharing method
-    APP.desktopsharing.init();
-
     APP.keyboardshortcut.init();
     APP.members.start();
+}
+
+/**
+ * If we have HTTP endpoint for getting confgi.json configured we're going to
+ * read it and override properties from config.js and interfaceConfig.js.
+ * If there is no endpoint we'll just continue with initialization.
+ * Keep in mind that if the endpoint has been configured and we fail to obtain
+ * the config for any reason then the conference won't start and error message
+ * will be displayed to the user.
+ */
+function obtainConfigAndInit() {
+    if (config.configLocation) {
+        APP.configFetch.obtainConfig(
+            config.configLocation, APP.UI.getRoomNode(),
+            // Get config result callback
+            function(success, error) {
+                if (success) {
+                    init();
+                } else {
+                    // Show obtain config error,
+                    // pass the error object for report
+                    APP.UI.messageHandler.openReportDialog(
+                        null, "dialog.connectError", error);
+                }
+            });
+    } else {
+        init();
+    }
 }
 
 
 $(document).ready(function () {
 
-    var URLPRocessor = require("./modules/URLProcessor/URLProcessor");
-    URLPRocessor.setConfigParametersFromUrl();
+    var URLProcessor = require("./modules/config/URLProcessor");
+    URLProcessor.setConfigParametersFromUrl();
     APP.init();
 
     APP.translation.init();
@@ -46,7 +435,7 @@ $(document).ready(function () {
     if(APP.API.isEnabled())
         APP.API.init();
 
-    APP.UI.start(init);
+    APP.UI.start(obtainConfigAndInit);
 
 });
 
@@ -58,7 +447,8 @@ $(window).bind('beforeunload', function () {
 module.exports = APP;
 
 
-},{"./modules/API/API":2,"./modules/DTMF/DTMF":3,"./modules/RTC/RTC":7,"./modules/UI/UI":9,"./modules/URLProcessor/URLProcessor":40,"./modules/connectionquality/connectionquality":41,"./modules/desktopsharing/desktopsharing":42,"./modules/keyboardshortcut/keyboardshortcut":43,"./modules/members/MemberList":44,"./modules/settings/Settings":45,"./modules/statistics/statistics":48,"./modules/translation/translation":49,"./modules/xmpp/xmpp":63}],2:[function(require,module,exports){
+},{"./modules/API/API":4,"./modules/DTMF/DTMF":5,"./modules/RTC/RTC":9,"./modules/UI/UI":13,"./modules/config/HttpConfigFetch":44,"./modules/config/URLProcessor":45,"./modules/connectionquality/connectionquality":47,"./modules/desktopsharing/desktopsharing":48,"./modules/keyboardshortcut/keyboardshortcut":49,"./modules/members/MemberList":50,"./modules/settings/Settings":51,"./modules/statistics/statistics":55,"./modules/translation/translation":56,"./modules/xmpp/xmpp":73}],4:[function(require,module,exports){
+/* global APP */
 /**
  * Implements API class that communicates with external api class
  * and provides interface to access Jitsi Meet features by external
@@ -71,20 +461,25 @@ var XMPPEvents = require("../../service/xmpp/XMPPEvents");
  * List of the available commands.
  * @type {{
  *              displayName: inputDisplayNameHandler,
- *              muteAudio: toggleAudio,
- *              muteVideo: toggleVideo,
- *              filmStrip: toggleFilmStrip
+ *              toggleAudio: toggleAudio,
+ *              toggleVideo: toggleVideo,
+ *              toggleFilmStrip: toggleFilmStrip,
+ *              toggleChat: toggleChat,
+ *              toggleContactList: toggleContactList
  *          }}
  */
-var commands =
-{
-    displayName: APP.UI.inputDisplayNameHandler,
-    muteAudio: APP.UI.toggleAudio,
-    muteVideo: APP.UI.toggleVideo,
-    toggleFilmStrip: APP.UI.toggleFilmStrip,
-    toggleChat: APP.UI.toggleChat,
-    toggleContactList: APP.UI.toggleContactList
-};
+var commands = {};
+
+function initCommands() {
+    commands = {
+        displayName: APP.UI.inputDisplayNameHandler,
+        toggleAudio: APP.UI.toggleAudio,
+        toggleVideo: APP.UI.toggleVideo,
+        toggleFilmStrip: APP.UI.toggleFilmStrip,
+        toggleChat: APP.UI.toggleChat,
+        toggleContactList: APP.UI.toggleContactList
+    };
+}
 
 
 /**
@@ -98,8 +493,7 @@ var commands =
  *              participantLeft: boolean
  *      }}
  */
-var events =
-{
+var events = {
     incomingMessage: false,
     outgoingMessage:false,
     displayNameChange: false,
@@ -110,18 +504,15 @@ var events =
 var displayName = {};
 
 /**
- * Processes commands from external applicaiton.
+ * Processes commands from external application.
  * @param message the object with the command
  */
-function processCommand(message)
-{
-    if(message.action != "execute")
-    {
+function processCommand(message) {
+    if (message.action != "execute") {
         console.error("Unknown action of the message");
         return;
     }
-    for(var key in message)
-    {
+    for (var key in message) {
         if(commands[key])
             commands[key].apply(null, message[key]);
     }
@@ -132,31 +523,26 @@ function processCommand(message)
  * @param event the event
  */
 function processEvent(event) {
-    if(!event.action)
-    {
+    if (!event.action) {
         console.error("Event with no action is received.");
         return;
     }
 
     var i = 0;
-    switch(event.action)
-    {
+    switch(event.action) {
         case "add":
-            for(; i < event.events.length; i++)
-            {
+            for (; i < event.events.length; i++) {
                 events[event.events[i]] = true;
             }
             break;
         case "remove":
-            for(; i < event.events.length; i++)
-            {
+            for (; i < event.events.length; i++) {
                 events[event.events[i]] = false;
             }
             break;
         default:
             console.error("Unknown action for event.");
     }
-
 }
 
 /**
@@ -171,8 +557,7 @@ function sendMessage(object) {
  * Processes a message event from the external application
  * @param event the message event
  */
-function processMessage(event)
-{
+function processMessage(event) {
     var message;
     try {
         message = JSON.parse(event.data);
@@ -180,8 +565,7 @@ function processMessage(event)
 
     if(!message.type)
         return;
-    switch (message.type)
-    {
+    switch (message.type) {
         case "command":
             processCommand(message);
             break;
@@ -192,7 +576,6 @@ function processMessage(event)
             console.error("Unknown type of the message");
             return;
     }
-
 }
 
 function setupListeners() {
@@ -208,7 +591,7 @@ function setupListeners() {
         API.triggerEvent("participantLeft", {jid: jid});
     });
     APP.xmpp.addListener(XMPPEvents.DISPLAY_NAME_CHANGED, function (jid, newDisplayName) {
-        name = displayName[jid];
+        var name = displayName[jid];
         if(!name || name != newDisplayName) {
             API.triggerEvent("displayNameChange", {jid: jid, displayname: newDisplayName});
             displayName[jid] = newDisplayName;
@@ -226,7 +609,7 @@ var API = {
      */
     isEnabled: function () {
         var hash = location.hash;
-        if(hash && hash.indexOf("external") > -1 && window.postMessage)
+        if (hash && hash.indexOf("external") > -1 && window.postMessage)
             return true;
         return false;
     },
@@ -237,13 +620,12 @@ var API = {
      * is initialized.
      */
     init: function () {
-        if (window.addEventListener)
-        {
+        initCommands();
+        if (window.addEventListener) {
             window.addEventListener('message',
                 processMessage, false);
         }
-        else
-        {
+        else {
             window.attachEvent('onmessage', processMessage);
         }
         sendMessage({type: "system", loaded: true});
@@ -274,23 +656,18 @@ var API = {
      * Removes the listeners.
      */
     dispose: function () {
-        if(window.removeEventListener)
-        {
+        if(window.removeEventListener) {
             window.removeEventListener("message",
                 processMessage, false);
         }
-        else
-        {
+        else {
             window.detachEvent('onmessage', processMessage);
         }
-
     }
-
-
 };
 
 module.exports = API;
-},{"../../service/xmpp/XMPPEvents":106}],3:[function(require,module,exports){
+},{"../../service/xmpp/XMPPEvents":177}],5:[function(require,module,exports){
 /* global APP */
 
 /**
@@ -339,8 +716,8 @@ var DTMF = {
 module.exports = DTMF;
 
 
-},{}],4:[function(require,module,exports){
-/* global Strophe, focusedVideoSrc*/
+},{}],6:[function(require,module,exports){
+/* global config, APP, Strophe */
 
 // cache datachannels to avoid garbage collection
 // https://code.google.com/p/chromium/issues/detail?id=405545
@@ -350,19 +727,13 @@ var _dataChannels = [];
 var eventEmitter = null;
 
 
-
-
-var DataChannels =
-{
-
+var DataChannels = {
     /**
      * Callback triggered by PeerConnection when new data channel is opened
      * on the bridge.
      * @param event the event info object.
      */
-
-    onDataChannel: function (event)
-    {
+    onDataChannel: function (event) {
         var dataChannel = event.channel;
 
         dataChannel.onopen = function () {
@@ -374,14 +745,7 @@ var DataChannels =
             // Sends 12 bytes binary message to the bridge
             //dataChannel.send(new ArrayBuffer(12));
 
-            // when the data channel becomes available, tell the bridge about video
-            // selections so that it can do adaptive simulcast,
-            // we want the notification to trigger even if userJid is undefined,
-            // or null.
-            var userJid = APP.UI.getLargeVideoJid();
-            // we want the notification to trigger even if userJid is undefined,
-            // or null.
-            onSelectedEndpointChanged(userJid);
+            eventEmitter.emit(RTCEvents.DATA_CHANNEL_OPEN);
         };
 
         dataChannel.onerror = function (error) {
@@ -414,8 +778,7 @@ var DataChannels =
                         dominantSpeakerEndpoint);
                     eventEmitter.emit(RTCEvents.DOMINANTSPEAKER_CHANGED, dominantSpeakerEndpoint);
                 }
-                else if ("InLastNChangeEvent" === colibriClass)
-                {
+                else if ("InLastNChangeEvent" === colibriClass) {
                     var oldValue = obj.oldValue;
                     var newValue = obj.newValue;
                     // Make sure that oldValue and newValue are of type boolean.
@@ -438,15 +801,13 @@ var DataChannels =
 
                     eventEmitter.emit(RTCEvents.LASTN_CHANGED, oldValue, newValue);
                 }
-                else if ("LastNEndpointsChangeEvent" === colibriClass)
-                {
+                else if ("LastNEndpointsChangeEvent" === colibriClass) {
                     // The new/latest list of last-n endpoint IDs.
                     var lastNEndpoints = obj.lastNEndpoints;
                     // The list of endpoint IDs which are entering the list of
                     // last-n at this time i.e. were not in the old list of last-n
                     // endpoint IDs.
                     var endpointsEnteringLastN = obj.endpointsEnteringLastN;
-                    var stream = obj.stream;
 
                     console.log(
                         "Data channel new last-n event: ",
@@ -454,15 +815,13 @@ var DataChannels =
                     eventEmitter.emit(RTCEvents.LASTN_ENDPOINT_CHANGED,
                         lastNEndpoints, endpointsEnteringLastN, obj);
                 }
-                else
-                {
+                else {
                     console.debug("Data channel JSON-formatted message: ", obj);
                 }
             }
         };
 
-        dataChannel.onclose = function ()
-        {
+        dataChannel.onclose = function () {
             console.info("The Data Channel closed", dataChannel);
             var idx = _dataChannels.indexOf(dataChannel);
             if (idx > -1)
@@ -507,19 +866,15 @@ var DataChannels =
     },
     handleSelectedEndpointEvent: onSelectedEndpointChanged,
     handlePinnedEndpointEvent: onPinnedEndpointChanged
-
 };
 
-function onSelectedEndpointChanged(userResource)
-{
+function onSelectedEndpointChanged(userResource) {
     console.log('selected endpoint changed: ', userResource);
-    if (_dataChannels && _dataChannels.length != 0)
-    {
+    if (_dataChannels && _dataChannels.length != 0) {
         _dataChannels.some(function (dataChannel) {
-            if (dataChannel.readyState == 'open')
-            {
-                console.log('sending selected endpoint changed ' 
-                    + 'notification to the bridge: ', userResource);
+            if (dataChannel.readyState == 'open') {
+                console.log('sending selected endpoint changed ' +
+                    'notification to the bridge: ', userResource);
                 dataChannel.send(JSON.stringify({
                     'colibriClass': 'SelectedEndpointChangedEvent',
                     'selectedEndpoint':
@@ -533,14 +888,11 @@ function onSelectedEndpointChanged(userResource)
     }
 }
 
-function onPinnedEndpointChanged(userResource)
-{
+function onPinnedEndpointChanged(userResource) {
     console.log('pinned endpoint changed: ', userResource);
-    if (_dataChannels && _dataChannels.length != 0)
-    {
+    if (_dataChannels && _dataChannels.length != 0) {
         _dataChannels.some(function (dataChannel) {
-            if (dataChannel.readyState == 'open')
-            {
+            if (dataChannel.readyState == 'open') {
                 dataChannel.send(JSON.stringify({
                     'colibriClass': 'PinnedEndpointChangedEvent',
                     'pinnedEndpoint':
@@ -557,12 +909,30 @@ function onPinnedEndpointChanged(userResource)
 module.exports = DataChannels;
 
 
-},{"../../service/RTC/RTCEvents":97}],5:[function(require,module,exports){
+},{"../../service/RTC/RTCEvents":168}],7:[function(require,module,exports){
+/* global APP */
 var StreamEventTypes = require("../../service/RTC/StreamEventTypes.js");
+var RTCEvents = require("../../service/RTC/RTCEvents");
+var RTCBrowserType = require("./RTCBrowserType");
 
+/**
+ * This implements 'onended' callback normally fired by WebRTC after the stream
+ * is stopped. There is no such behaviour yet in FF, so we have to add it.
+ * @param stream original WebRTC stream object to which 'onended' handling
+ *               will be added.
+ */
+function implementOnEndedHandling(stream) {
+    var originalStop = stream.stop;
+    stream.stop = function () {
+        originalStop.apply(stream);
+        if (!stream.ended) {
+            stream.ended = true;
+            stream.onended();
+        }
+    };
+}
 
-function LocalStream(stream, type, eventEmitter, videoType, isGUMStream)
-{
+function LocalStream(stream, type, eventEmitter, videoType, isGUMStream) {
     this.stream = stream;
     this.eventEmitter = eventEmitter;
     this.type = type;
@@ -571,69 +941,72 @@ function LocalStream(stream, type, eventEmitter, videoType, isGUMStream)
     if(isGUMStream === false)
         this.isGUMStream = isGUMStream;
     var self = this;
-    if(type == "audio")
-    {
+    if(type == "audio") {
         this.getTracks = function () {
             return self.stream.getAudioTracks();
         };
-    }
-    else
-    {
+    } else {
         this.getTracks = function () {
             return self.stream.getVideoTracks();
         };
     }
 
-    this.stream.onended = function()
-    {
+    this.stream.onended = function () {
         self.streamEnded();
     };
+    if (RTCBrowserType.isFirefox()) {
+        implementOnEndedHandling(this.stream);
+    }
 }
 
 LocalStream.prototype.streamEnded = function () {
     this.eventEmitter.emit(StreamEventTypes.EVENT_TYPE_LOCAL_ENDED, this);
-}
+};
 
 LocalStream.prototype.getOriginalStream = function()
 {
     return this.stream;
-}
+};
 
 LocalStream.prototype.isAudioStream = function () {
     return this.type === "audio";
 };
 
-LocalStream.prototype.setMute = function(mute)
+LocalStream.prototype.setMute = function (mute)
 {
+    var isAudio = this.isAudioStream();
+    var eventType = isAudio ? RTCEvents.AUDIO_MUTE : RTCEvents.VIDEO_MUTE;
 
-    if((window.location.protocol != "https:" && this.isGUMStream) ||
-        (this.isAudioStream() && this.isGUMStream) || this.videoType === "screen")
-    {
+    if ((window.location.protocol != "https:" && this.isGUMStream) ||
+        (isAudio && this.isGUMStream) || this.videoType === "screen" ||
+        // FIXME FF does not support 'removeStream' method used to mute
+        RTCBrowserType.isFirefox()) {
+
         var tracks = this.getTracks();
-
         for (var idx = 0; idx < tracks.length; idx++) {
-            tracks[idx].enabled = mute;
+            tracks[idx].enabled = !mute;
         }
-    }
-    else
-    {
-        if(mute === false) {
+        this.eventEmitter.emit(eventType, mute);
+    } else {
+        if (mute) {
             APP.xmpp.removeStream(this.stream);
             this.stream.stop();
-        }
-        else
-        {
+            this.eventEmitter.emit(eventType, true);
+        } else {
             var self = this;
             APP.RTC.rtcUtils.obtainAudioAndVideoPermissions(
                 (this.isAudioStream() ? ["audio"] : ["video"]),
                 function (stream) {
-                    if(self.isAudioStream())
-                    {
-                        APP.RTC.changeLocalAudio(stream, function () {});
-                    }
-                    else
-                    {
-                        APP.RTC.changeLocalVideo(stream, false, function () {});
+                    if (isAudio) {
+                        APP.RTC.changeLocalAudio(stream,
+                            function () {
+                                self.eventEmitter.emit(eventType, false);
+                            });
+                    } else {
+                        APP.RTC.changeLocalVideo(stream, false,
+                            function () {
+                                self.eventEmitter.emit(eventType, false);
+                            });
                     }
                 });
         }
@@ -642,13 +1015,10 @@ LocalStream.prototype.setMute = function(mute)
 
 LocalStream.prototype.isMuted = function () {
     var tracks = [];
-    if(this.type == "audio")
-    {
+    if (this.isAudioStream()) {
         tracks = this.stream.getAudioTracks();
-    }
-    else
-    {
-        if(this.stream.ended)
+    } else {
+        if (this.stream.ended)
             return true;
         tracks = this.stream.getVideoTracks();
     }
@@ -657,18 +1027,16 @@ LocalStream.prototype.isMuted = function () {
             return false;
     }
     return true;
-}
+};
 
 LocalStream.prototype.getId = function () {
     return this.stream.getTracks()[0].id;
-}
+};
 
 module.exports = LocalStream;
 
-},{"../../service/RTC/StreamEventTypes.js":99}],6:[function(require,module,exports){
-////These lines should be uncommented when require works in app.js
+},{"../../service/RTC/RTCEvents":168,"../../service/RTC/StreamEventTypes.js":170,"./RTCBrowserType":10}],8:[function(require,module,exports){
 var MediaStreamType = require("../../service/RTC/MediaStreamTypes");
-var StreamEventType = require("../../service/RTC/StreamEventTypes");
 
 /**
  * Creates a MediaStream object for the given data, session id and ssrc.
@@ -696,39 +1064,30 @@ function MediaStream(data, sid, ssrc, browser, eventEmitter) {
     this.sid = sid;
     this.stream = data.stream;
     this.peerjid = data.peerjid;
+    this.videoType = data.videoType;
     this.ssrc = ssrc;
     this.type = (this.stream.getVideoTracks().length > 0)?
         MediaStreamType.VIDEO_TYPE : MediaStreamType.AUDIO_TYPE;
-    this.videoType = null;
     this.muted = false;
     this.eventEmitter = eventEmitter;
 }
 
 
-MediaStream.prototype.getOriginalStream = function()
-{
+MediaStream.prototype.getOriginalStream = function() {
     return this.stream;
 };
 
-MediaStream.prototype.setMute = function (value)
-{
+MediaStream.prototype.setMute = function (value) {
     this.stream.muted = value;
     this.muted = value;
 };
 
-MediaStream.prototype.setVideoType = function (value) {
-    if(this.videoType === value)
-        return;
-    this.videoType = value;
-    this.eventEmitter.emit(StreamEventType.EVENT_TYPE_REMOTE_CHANGED,
-        this.peerjid);
-};
-
-
 module.exports = MediaStream;
 
-},{"../../service/RTC/MediaStreamTypes":95,"../../service/RTC/StreamEventTypes":99}],7:[function(require,module,exports){
+},{"../../service/RTC/MediaStreamTypes":167}],9:[function(require,module,exports){
+/* global APP */
 var EventEmitter = require("events");
+var RTCBrowserType = require("./RTCBrowserType");
 var RTCUtils = require("./RTCUtils.js");
 var LocalStream = require("./LocalStream.js");
 var DataChannels = require("./DataChannels");
@@ -801,14 +1160,11 @@ var RTC = {
             this.localStreams[0].getOriginalStream() != stream)
             this.localStreams.push(localStream);
         if(isMuted === true)
-            localStream.setMute(false);
+            localStream.setMute(true);
 
-        if(type == "audio")
-        {
+        if(type == "audio") {
             this.localAudio = localStream;
-        }
-        else
-        {
+        } else {
             this.localVideo = localStream;
         }
         var eventType = StreamEventTypes.EVENT_TYPE_LOCAL_CREATED;
@@ -819,8 +1175,7 @@ var RTC = {
         return localStream;
     },
     removeLocalStream: function (stream) {
-        for(var i = 0; i < this.localStreams.length; i++)
-        {
+        for(var i = 0; i < this.localStreams.length; i++) {
             if(this.localStreams[i].getOriginalStream() === stream) {
                 delete this.localStreams[i];
                 return;
@@ -829,7 +1184,7 @@ var RTC = {
     },
     createRemoteStream: function (data, sid, thessrc) {
         var remoteStream = new MediaStream(data, sid, thessrc,
-            this.getBrowserType(), eventEmitter);
+            RTCBrowserType.getBrowserType(), eventEmitter);
         var jid = data.peerjid || APP.xmpp.myJid();
         if(!this.remoteStreams[jid]) {
             this.remoteStreams[jid] = {};
@@ -837,9 +1192,6 @@ var RTC = {
         this.remoteStreams[jid][remoteStream.type]= remoteStream;
         eventEmitter.emit(StreamEventTypes.EVENT_TYPE_REMOTE_CREATED, remoteStream);
         return remoteStream;
-    },
-    getBrowserType: function () {
-        return this.rtcUtils.browser;
     },
     getPCConstraints: function () {
         return this.rtcUtils.pc_constraints;
@@ -851,8 +1203,8 @@ var RTC = {
         return this.rtcUtils.getUserMediaWithConstraints(um, success_callback,
             failure_callback, resolution, bandwidth, fps, desktopStream);
     },
-    attachMediaStream:  function (element, stream) {
-        this.rtcUtils.attachMediaStream(element, stream);
+    attachMediaStream:  function (elSelector, stream) {
+        this.rtcUtils.attachMediaStream(elSelector, stream);
     },
     getStreamID:  function (stream) {
         return this.rtcUtils.getStreamID(stream);
@@ -862,6 +1214,9 @@ var RTC = {
     },
     setVideoSrc: function (element, src) {
         this.rtcUtils.setVideoSrc(element, src);
+    },
+    getVideoElementName: function () {
+        return RTCBrowserType.isTemasysPluginUsed() ? 'object' : 'video';
     },
     dispose: function() {
         if (this.rtcUtils) {
@@ -877,20 +1232,6 @@ var RTC = {
             function (stream, isUsingScreenStream, callback) {
                 self.changeLocalVideo(stream, isUsingScreenStream, callback);
             }, DesktopSharingEventTypes.NEW_STREAM_CREATED);
-        APP.xmpp.addListener(XMPPEvents.STREAMS_CHANGED, function (jid, changedStreams) {
-            for(var i = 0; i < changedStreams.length; i++) {
-                var type = changedStreams[i].type;
-                if (type != "audio") {
-                    var peerStreams = self.remoteStreams[jid];
-                    if(!peerStreams)
-                        continue;
-                    var videoStream = peerStreams[MediaStreamType.VIDEO_TYPE];
-                    if(!videoStream)
-                        continue;
-                    videoStream.setVideoType(changedStreams[i].type);
-                }
-            }
-        });
         APP.xmpp.addListener(XMPPEvents.CALL_INCOMING, function(event) {
             DataChannels.init(event.peerconnection, eventEmitter);
         });
@@ -898,16 +1239,28 @@ var RTC = {
             DataChannels.handleSelectedEndpointEvent);
         APP.UI.addListener(UIEvents.PINNED_ENDPOINT,
             DataChannels.handlePinnedEndpointEvent);
-        this.rtcUtils = new RTCUtils(this);
-        this.rtcUtils.obtainAudioAndVideoPermissions(
-            null, null, getMediaStreamUsage());
+
+        // In case of IE we continue from 'onReady' callback
+        // passed to RTCUtils constructor. It will be invoked by Temasys plugin
+        // once it is initialized.
+        var onReady = function () {
+            eventEmitter.emit(RTCEvents.RTC_READY, true);
+            self.rtcUtils.obtainAudioAndVideoPermissions(
+                null, null, getMediaStreamUsage());
+        };
+
+        this.rtcUtils = new RTCUtils(this, onReady);
+
+        // Call onReady() if Temasys plugin is not used
+        if (!RTCBrowserType.isTemasysPluginUsed()) {
+            onReady();
+        }
     },
     muteRemoteVideoStream: function (jid, value) {
         var stream;
 
         if(this.remoteStreams[jid] &&
-            this.remoteStreams[jid][MediaStreamType.VIDEO_TYPE])
-        {
+            this.remoteStreams[jid][MediaStreamType.VIDEO_TYPE]) {
             stream = this.remoteStreams[jid][MediaStreamType.VIDEO_TYPE];
         }
 
@@ -932,19 +1285,28 @@ var RTC = {
     },
     changeLocalVideo: function (stream, isUsingScreenStream, callback) {
         var oldStream = this.localVideo.getOriginalStream();
-        var type = (isUsingScreenStream? "screen" : "video");
+        var type = (isUsingScreenStream ? "screen" : "camera");
         var localCallback = callback;
-        if(this.localVideo.isMuted() && this.localVideo.videoType !== type)
-        {
+        if(this.localVideo.isMuted() && this.localVideo.videoType !== type) {
             localCallback = function() {
-                APP.xmpp.setVideoMute(false, APP.UI.setVideoMuteButtonsState);
+                APP.xmpp.setVideoMute(false, function(mute) {
+                    eventEmitter.emit(RTCEvents.VIDEO_MUTE, mute);
+                });
+                
                 callback();
             };
+        }
+        // FIXME: Workaround for FF/IE/Safari
+        if (stream && stream.videoStream) {
+            stream = stream.videoStream;
         }
         var videoStream = this.rtcUtils.createStream(stream, true);
         this.localVideo = this.createLocalStream(videoStream, "video", true, type);
         // Stop the stream to trigger onended event for old stream
         oldStream.stop();
+
+        this.switchVideoStreams(videoStream, oldStream);
+
         APP.xmpp.switchStreams(videoStream, oldStream,localCallback);
     },
     changeLocalAudio: function (stream, callback) {
@@ -955,45 +1317,31 @@ var RTC = {
         oldStream.stop();
         APP.xmpp.switchStreams(newStream, oldStream, callback, true);
     },
-    /**
-     * Checks if video identified by given src is desktop stream.
-     * @param videoSrc eg.
-     * blob:https%3A//pawel.jitsi.net/9a46e0bd-131e-4d18-9c14-a9264e8db395
-     * @returns {boolean}
-     */
-    isVideoSrcDesktop: function (jid) {
-        if(!jid)
-            return false;
-        var isDesktop = false;
-        var stream = null;
-        if (APP.xmpp.myJid() === jid) {
-            // local video
-            stream = this.localVideo;
+    isVideoMuted: function (jid) {
+        if (jid === APP.xmpp.myJid()) {
+            var localVideo = APP.RTC.localVideo;
+            return (!localVideo || localVideo.isMuted());
         } else {
-            var peerStreams = this.remoteStreams[jid];
-            if(!peerStreams)
-                return false;
-            stream = peerStreams[MediaStreamType.VIDEO_TYPE];
+            if (!APP.RTC.remoteStreams[jid] ||
+                !APP.RTC.remoteStreams[jid][MediaStreamType.VIDEO_TYPE]) {
+                return null;
+            }
+            return APP.RTC.remoteStreams[jid][MediaStreamType.VIDEO_TYPE].muted;
         }
-
-        if(stream)
-            isDesktop = (stream.videoType === "screen");
-
-        return isDesktop;
     },
-    setVideoMute: function(mute, callback, options) {
-        if(!this.localVideo)
+    setVideoMute: function (mute, callback, options) {
+        if (!this.localVideo)
             return;
 
         if (mute == APP.RTC.localVideo.isMuted())
         {
             APP.xmpp.sendVideoInfoPresence(mute);
-            if(callback)
+            if (callback)
                 callback(mute);
         }
         else
         {
-            APP.RTC.localVideo.setMute(!mute);
+            APP.RTC.localVideo.setMute(mute);
             APP.xmpp.setVideoMute(
                 mute,
                 callback,
@@ -1013,9 +1361,184 @@ var RTC = {
 
 module.exports = RTC;
 
-},{"../../service/RTC/MediaStreamTypes":95,"../../service/RTC/RTCEvents.js":97,"../../service/RTC/StreamEventTypes.js":99,"../../service/UI/UIEvents":100,"../../service/desktopsharing/DesktopSharingEventTypes":103,"../../service/xmpp/XMPPEvents":106,"./DataChannels":4,"./LocalStream.js":5,"./MediaStream.js":6,"./RTCUtils.js":8,"events":107}],8:[function(require,module,exports){
-var RTCBrowserType = require("../../service/RTC/RTCBrowserType.js");
+},{"../../service/RTC/MediaStreamTypes":167,"../../service/RTC/RTCEvents.js":168,"../../service/RTC/StreamEventTypes.js":170,"../../service/UI/UIEvents":171,"../../service/desktopsharing/DesktopSharingEventTypes":174,"../../service/xmpp/XMPPEvents":177,"./DataChannels":6,"./LocalStream.js":7,"./MediaStream.js":8,"./RTCBrowserType":10,"./RTCUtils.js":11,"events":1}],10:[function(require,module,exports){
+
+var currentBrowser;
+
+var browserVersion;
+
+var isAndroid;
+
+var RTCBrowserType = {
+
+    RTC_BROWSER_CHROME: "rtc_browser.chrome",
+
+    RTC_BROWSER_OPERA: "rtc_browser.opera",
+
+    RTC_BROWSER_FIREFOX: "rtc_browser.firefox",
+
+    RTC_BROWSER_IEXPLORER: "rtc_browser.iexplorer",
+
+    RTC_BROWSER_SAFARI: "rtc_browser.safari",
+
+    getBrowserType: function () {
+        return currentBrowser;
+    },
+
+    isChrome: function () {
+        return currentBrowser === RTCBrowserType.RTC_BROWSER_CHROME;
+    },
+
+    isOpera: function () {
+        return currentBrowser === RTCBrowserType.RTC_BROWSER_OPERA;
+    },
+    isFirefox: function () {
+        return currentBrowser === RTCBrowserType.RTC_BROWSER_FIREFOX;
+    },
+
+    isIExplorer: function () {
+        return currentBrowser === RTCBrowserType.RTC_BROWSER_IEXPLORER;
+    },
+
+    isSafari: function () {
+        return currentBrowser === RTCBrowserType.RTC_BROWSER_SAFARI;
+    },
+    isTemasysPluginUsed: function () {
+        return RTCBrowserType.isIExplorer() || RTCBrowserType.isSafari();
+    },
+    getFirefoxVersion: function () {
+        return RTCBrowserType.isFirefox() ? browserVersion : null;
+    },
+
+    getChromeVersion: function () {
+        return RTCBrowserType.isChrome() ? browserVersion : null;
+    },
+
+    usesPlanB: function() {
+        return RTCBrowserType.isChrome() || RTCBrowserType.isOpera() ||
+            RTCBrowserType.isTemasysPluginUsed();
+    },
+
+    usesUnifiedPlan: function() {
+        return RTCBrowserType.isFirefox();
+    },
+
+    /**
+     * Whether the browser is running on an android device.
+     */
+    isAndroid: function() {
+        return isAndroid;
+    }
+
+    // Add version getters for other browsers when needed
+};
+
+// detectOpera() must be called before detectChrome() !!!
+// otherwise Opera wil be detected as Chrome
+function detectChrome() {
+    if (navigator.webkitGetUserMedia) {
+        currentBrowser = RTCBrowserType.RTC_BROWSER_CHROME;
+        var userAgent = navigator.userAgent.toLowerCase();
+        // We can assume that user agent is chrome, because it's
+        // enforced when 'ext' streaming method is set
+        var ver = parseInt(userAgent.match(/chrome\/(\d+)\./)[1], 10);
+        console.log("This appears to be Chrome, ver: " + ver);
+        return ver;
+    }
+    return null;
+}
+
+function detectOpera() {
+    var userAgent = navigator.userAgent;
+    if (userAgent.match(/Opera|OPR/)) {
+        currentBrowser = RTCBrowserType.RTC_BROWSER_OPERA;
+        var version = userAgent.match(/(Opera|OPR) ?\/?(\d+)\.?/)[2];
+        console.info("This appears to be Opera, ver: " + version);
+        return version;
+    }
+    return null;
+}
+
+function detectFirefox() {
+    if (navigator.mozGetUserMedia) {
+        currentBrowser = RTCBrowserType.RTC_BROWSER_FIREFOX;
+        var version = parseInt(
+            navigator.userAgent.match(/Firefox\/([0-9]+)\./)[1], 10);
+        console.log('This appears to be Firefox, ver: ' + version);
+        return version;
+    }
+    return null;
+}
+
+function detectSafari() {
+    if ((/^((?!chrome).)*safari/i.test(navigator.userAgent))) {
+        currentBrowser = RTCBrowserType.RTC_BROWSER_SAFARI;
+        console.info("This appears to be Safari");
+        // FIXME detect Safari version when needed
+        return 1;
+    }
+    return null;
+}
+
+function detectIE() {
+    var version;
+    var ua = window.navigator.userAgent;
+
+    var msie = ua.indexOf('MSIE ');
+    if (msie > 0) {
+        // IE 10 or older => return version number
+        version = parseInt(ua.substring(msie + 5, ua.indexOf('.', msie)), 10);
+    }
+
+    var trident = ua.indexOf('Trident/');
+    if (!version && trident > 0) {
+        // IE 11 => return version number
+        var rv = ua.indexOf('rv:');
+        version = parseInt(ua.substring(rv + 3, ua.indexOf('.', rv)), 10);
+    }
+
+    var edge = ua.indexOf('Edge/');
+    if (!version && edge > 0) {
+        // IE 12 => return version number
+        version = parseInt(ua.substring(edge + 5, ua.indexOf('.', edge)), 10);
+    }
+
+    if (version) {
+        currentBrowser = RTCBrowserType.RTC_BROWSER_IEXPLORER;
+        console.info("This appears to be IExplorer, ver: " + version);
+    }
+    return version;
+}
+
+function detectBrowser() {
+    var version;
+    var detectors = [
+        detectOpera,
+        detectChrome,
+        detectFirefox,
+        detectIE,
+        detectSafari
+    ];
+    // Try all browser detectors
+    for (var i = 0; i < detectors.length; i++) {
+        version = detectors[i]();
+        if (version)
+            return version;
+    }
+    console.error("Failed to detect browser type");
+    return undefined;
+}
+
+browserVersion = detectBrowser();
+isAndroid = navigator.userAgent.indexOf('Android') != -1;
+
+module.exports = RTCBrowserType;
+},{}],11:[function(require,module,exports){
+/* global config, require, attachMediaStream, getUserMedia */
+var RTCBrowserType = require("./RTCBrowserType");
 var Resolutions = require("../../service/RTC/Resolutions");
+var AdapterJS = require("./adapter.screenshare");
+var SDPUtil = require("../xmpp/SDPUtil");
 
 var currentResolution = null;
 
@@ -1025,11 +1548,9 @@ function getPreviousResolution(resolution) {
     var order = Resolutions[resolution].order;
     var res = null;
     var resName = null;
-    for(var i in Resolutions)
-    {
+    for(var i in Resolutions) {
         var tmp = Resolutions[i];
-        if(res == null || (res.order < tmp.order && tmp.order < order))
-        {
+        if(res == null || (res.order < tmp.order && tmp.order < order)) {
             resName = i;
             res = tmp;
         }
@@ -1037,53 +1558,83 @@ function getPreviousResolution(resolution) {
     return resName;
 }
 
-function setResolutionConstraints(constraints, resolution, isAndroid)
-{
-    if (resolution && !constraints.video || isAndroid) {
-        constraints.video = { mandatory: {}, optional: [] };// same behaviour as true
-    }
+function setResolutionConstraints(constraints, resolution) {
+    var isAndroid = RTCBrowserType.isAndroid();
 
-    if(Resolutions[resolution])
-    {
+    if (Resolutions[resolution]) {
         constraints.video.mandatory.minWidth = Resolutions[resolution].width;
         constraints.video.mandatory.minHeight = Resolutions[resolution].height;
     }
-    else
-    {
-        if (isAndroid) {
-            constraints.video.mandatory.minWidth = 320;
-            constraints.video.mandatory.minHeight = 240;
-            constraints.video.mandatory.maxFrameRate = 15;
-        }
+    else if (isAndroid) {
+        // FIXME can't remember if the purpose of this was to always request
+        //       low resolution on Android ? if yes it should be moved up front
+        constraints.video.mandatory.minWidth = 320;
+        constraints.video.mandatory.minHeight = 240;
+        constraints.video.mandatory.maxFrameRate = 15;
     }
 
     if (constraints.video.mandatory.minWidth)
-        constraints.video.mandatory.maxWidth = constraints.video.mandatory.minWidth;
+        constraints.video.mandatory.maxWidth =
+            constraints.video.mandatory.minWidth;
     if (constraints.video.mandatory.minHeight)
-        constraints.video.mandatory.maxHeight = constraints.video.mandatory.minHeight;
+        constraints.video.mandatory.maxHeight =
+            constraints.video.mandatory.minHeight;
 }
 
-function getConstraints(um, resolution, bandwidth, fps, desktopStream, isAndroid)
-{
+function getConstraints(um, resolution, bandwidth, fps, desktopStream) {
     var constraints = {audio: false, video: false};
 
     if (um.indexOf('video') >= 0) {
-        constraints.video = { mandatory: {}, optional: [] };// same behaviour as true
+        // same behaviour as true
+        constraints.video = { mandatory: {}, optional: [] };
+
+        constraints.video.optional.push({ googLeakyBucket: true });
+
+        setResolutionConstraints(constraints, resolution);
     }
     if (um.indexOf('audio') >= 0) {
-        constraints.audio = { mandatory: {}, optional: []};// same behaviour as true
+        if (!RTCBrowserType.isFirefox()) {
+            // same behaviour as true
+            constraints.audio = { mandatory: {}, optional: []};
+            // if it is good enough for hangouts...
+            constraints.audio.optional.push(
+                {googEchoCancellation: true},
+                {googAutoGainControl: true},
+                {googNoiseSupression: true},
+                {googHighpassFilter: true},
+                {googNoisesuppression2: true},
+                {googEchoCancellation2: true},
+                {googAutoGainControl2: true}
+            );
+        } else {
+            constraints.audio = true;
+        }
     }
     if (um.indexOf('screen') >= 0) {
-        constraints.video = {
-            mandatory: {
-                chromeMediaSource: "screen",
-                googLeakyBucket: true,
-                maxWidth: window.screen.width,
-                maxHeight: window.screen.height,
-                maxFrameRate: 3
-            },
-            optional: []
-        };
+        if (RTCBrowserType.isChrome()) {
+            constraints.video = {
+                mandatory: {
+                    chromeMediaSource: "screen",
+                    googLeakyBucket: true,
+                    maxWidth: window.screen.width,
+                    maxHeight: window.screen.height,
+                    maxFrameRate: 3
+                },
+                optional: []
+            };
+        } else if (RTCBrowserType.isTemasysPluginUsed()) {
+            constraints.video = {
+                optional: [
+                    {
+                        sourceId: AdapterJS.WebRTCPlugin.plugin.screensharingKey
+                    }
+                ]
+            };
+        } else {
+            console.error(
+                "'screen' WebRTC media source is supported only in Chrome" +
+                " and with Temasys plugin");
+        }
     }
     if (um.indexOf('desktop') >= 0) {
         constraints.video = {
@@ -1099,57 +1650,44 @@ function getConstraints(um, resolution, bandwidth, fps, desktopStream, isAndroid
         };
     }
 
-    if (constraints.audio) {
-        // if it is good enough for hangouts...
-        constraints.audio.optional.push(
-            {googEchoCancellation: true},
-            {googAutoGainControl: true},
-            {googNoiseSupression: true},
-            {googHighpassFilter: true},
-            {googNoisesuppression2: true},
-            {googEchoCancellation2: true},
-            {googAutoGainControl2: true}
-        );
-    }
-    if (constraints.video) {
-        constraints.video.optional.push(
-            {googNoiseReduction: false} // chrome 37 workaround for issue 3807, reenable in M38
-        );
-        if (um.indexOf('video') >= 0) {
-            constraints.video.optional.push(
-                {googLeakyBucket: true}
-            );
+    if (bandwidth) {
+        if (!constraints.video) {
+            //same behaviour as true
+            constraints.video = {mandatory: {}, optional: []};
         }
-    }
-
-    if (um.indexOf('video') >= 0) {
-        setResolutionConstraints(constraints, resolution, isAndroid);
-    }
-
-    if (bandwidth) { // doesn't work currently, see webrtc issue 1846
-        if (!constraints.video) constraints.video = {mandatory: {}, optional: []};//same behaviour as true
         constraints.video.optional.push({bandwidth: bandwidth});
     }
-    if (fps) { // for some cameras it might be necessary to request 30fps
+    if (fps) {
+        // for some cameras it might be necessary to request 30fps
         // so they choose 30fps mjpg over 10fps yuy2
-        if (!constraints.video) constraints.video = {mandatory: {}, optional: []};// same behaviour as true;
+        if (!constraints.video) {
+            // same behaviour as true;
+            constraints.video = {mandatory: {}, optional: []};
+        }
         constraints.video.mandatory.minFrameRate = fps;
+    }
+
+    // we turn audio for both audio and video tracks, the fake audio & video seems to work
+    // only when enabled in one getUserMedia call, we cannot get fake audio separate by fake video
+    // this later can be a problem with some of the tests
+    if(RTCBrowserType.isFirefox() && config.firefox_fake_device)
+    {
+        constraints.audio = true;
+        constraints.fake = true;
     }
 
     return constraints;
 }
 
 
-function RTCUtils(RTCService)
+function RTCUtils(RTCService, onTemasysPluginReady)
 {
+    var self = this;
     this.service = RTCService;
-    if (navigator.mozGetUserMedia) {
-        console.log('This appears to be Firefox');
-        var version = parseInt(navigator.userAgent.match(/Firefox\/([0-9]+)\./)[1], 10);
-        if (version >= 40
-            && config.useBundle && config.useRtcpMux) {
+    if (RTCBrowserType.isFirefox()) {
+        var FFversion = RTCBrowserType.getFirefoxVersion();
+        if (FFversion >= 40) {
             this.peerconnection = mozRTCPeerConnection;
-            this.browser = RTCBrowserType.RTC_BROWSER_FIREFOX;
             this.getUserMedia = navigator.mozGetUserMedia.bind(navigator);
             this.pc_constraints = {};
             this.attachMediaStream =  function (element, stream) {
@@ -1166,12 +1704,15 @@ function RTCUtils(RTCService)
                 element[0].play();
             };
             this.getStreamID =  function (stream) {
-                var tracks = stream.getVideoTracks();
-                if(!tracks || tracks.length == 0)
-                {
-                    tracks = stream.getAudioTracks();
+                var id = stream.id;
+                if (!id) {
+                    var tracks = stream.getVideoTracks();
+                    if (!tracks || tracks.length === 0) {
+                        tracks = stream.getAudioTracks();
+                    }
+                    id = tracks[0].id;
                 }
-                return tracks[0].id.replace(/[\{,\}]/g,"");
+                return SDPUtil.filter_special_chars(id);
             };
             this.getVideoSrc = function (element) {
                 if(!element)
@@ -1185,14 +1726,14 @@ function RTCUtils(RTCService)
             RTCSessionDescription = mozRTCSessionDescription;
             RTCIceCandidate = mozRTCIceCandidate;
         } else {
+            console.error(
+                "Firefox version too old: " + FFversion + ". Required >= 40.");
             window.location.href = 'unsupported_browser.html';
             return;
         }
 
-    } else if (navigator.webkitGetUserMedia) {
-        console.log('This appears to be Chrome');
+    } else if (RTCBrowserType.isChrome() || RTCBrowserType.isOpera()) {
         this.peerconnection = webkitRTCPeerConnection;
-        this.browser = RTCBrowserType.RTC_BROWSER_CHROME;
         this.getUserMedia = navigator.webkitGetUserMedia.bind(navigator);
         this.attachMediaStream = function (element, stream) {
             element.attr('src', webkitURL.createObjectURL(stream));
@@ -1200,7 +1741,7 @@ function RTCUtils(RTCService)
         this.getStreamID = function (stream) {
             // streams from FF endpoints have the characters '{' and '}'
             // that make jQuery choke.
-            return stream.id.replace(/[\{,\}]/g,"");
+            return SDPUtil.filter_special_chars(stream.id);
         };
         this.getVideoSrc = function (element) {
             if(!element)
@@ -1213,7 +1754,7 @@ function RTCUtils(RTCService)
         };
         // DTLS should now be enabled by default but..
         this.pc_constraints = {'optional': [{'DtlsSrtpKeyAgreement': 'true'}]};
-        if (navigator.userAgent.indexOf('Android') != -1) {
+        if (RTCBrowserType.isAndroid()) {
             this.pc_constraints = {}; // disable DTLS on Android
         }
         if (!webkitMediaStream.prototype.getVideoTracks) {
@@ -1227,28 +1768,74 @@ function RTCUtils(RTCService)
             };
         }
     }
-    else
-    {
-        try { console.log('Browser does not appear to be WebRTC-capable'); } catch (e) { }
+    // Detect IE/Safari
+    else if (RTCBrowserType.isTemasysPluginUsed()) {
 
+        //AdapterJS.WebRTCPlugin.setLogLevel(
+        //    AdapterJS.WebRTCPlugin.PLUGIN_LOG_LEVELS.VERBOSE);
+
+        AdapterJS.webRTCReady(function (isPlugin) {
+
+            self.peerconnection = RTCPeerConnection;
+            self.getUserMedia = getUserMedia;
+            self.attachMediaStream = function (elSel, stream) {
+
+                if (stream.id === "dummyAudio" || stream.id === "dummyVideo") {
+                    return;
+                }
+
+                attachMediaStream(elSel[0], stream);
+            };
+            self.getStreamID = function (stream) {
+                var id = SDPUtil.filter_special_chars(stream.label);
+                return id;
+            };
+            self.getVideoSrc = function (element) {
+                if (!element) {
+                    console.warn("Attempt to get video SRC of null element");
+                    return null;
+                }
+                var children = element.children;
+                for (var i = 0; i !== children.length; ++i) {
+                    if (children[i].name === 'streamId') {
+                        return children[i].value;
+                    }
+                }
+                //console.info(element.id + " SRC: " + src);
+                return null;
+            };
+            self.setVideoSrc = function (element, src) {
+                //console.info("Set video src: ", element, src);
+                if (!src) {
+                    console.warn("Not attaching video stream, 'src' is null");
+                    return;
+                }
+                AdapterJS.WebRTCPlugin.WaitForPluginReady();
+                var stream = AdapterJS.WebRTCPlugin.plugin
+                    .getStreamWithId(AdapterJS.WebRTCPlugin.pageId, src);
+                attachMediaStream(element, stream);
+            };
+
+            onTemasysPluginReady(isPlugin);
+        });
+    } else {
+        try {
+            console.log('Browser does not appear to be WebRTC-capable');
+        } catch (e) { }
         window.location.href = 'unsupported_browser.html';
-        return;
     }
 }
 
 
 RTCUtils.prototype.getUserMediaWithConstraints = function(
     um, success_callback, failure_callback, resolution,bandwidth, fps,
-    desktopStream)
-{
+    desktopStream) {
     currentResolution = resolution;
-    // Check if we are running on Android device
-    var isAndroid = navigator.userAgent.indexOf('Android') != -1;
 
     var constraints = getConstraints(
-        um, resolution, bandwidth, fps, desktopStream, isAndroid);
+        um, resolution, bandwidth, fps, desktopStream);
 
-    var isFF = navigator.userAgent.toLowerCase().indexOf('firefox') > -1;
+    console.info("Get media constraints", constraints);
 
     var self = this;
 
@@ -1277,16 +1864,14 @@ RTCUtils.prototype.getUserMediaWithConstraints = function(
 
 RTCUtils.prototype.setAvailableDevices = function (um, available) {
     var devices = {};
-    if(um.indexOf("video") != -1)
-    {
+    if(um.indexOf("video") != -1) {
         devices.video = available;
     }
-    if(um.indexOf("audio") != -1)
-    {
+    if(um.indexOf("audio") != -1) {
         devices.audio = available;
     }
     this.service.setDeviceAvailability(devices);
-}
+};
 
 /**
  * We ask for audio and video combined stream in order to get permissions and
@@ -1312,8 +1897,7 @@ RTCUtils.prototype.obtainAudioAndVideoPermissions =
 
 
     if(usageOptions)
-        for(var i = 0; i < devices.length; i++)
-        {
+        for(var i = 0; i < devices.length; i++) {
             var device = devices[i];
             if(usageOptions[device] === true)
                 newDevices.push(device);
@@ -1321,15 +1905,14 @@ RTCUtils.prototype.obtainAudioAndVideoPermissions =
     else
         newDevices = devices;
 
-    if(newDevices.length === 0)
-    {
+    if(newDevices.length === 0) {
         successCallback();
         return;
     }
 
-    if (navigator.mozGetUserMedia) {
+    if (RTCBrowserType.isFirefox() || RTCBrowserType.isTemasysPluginUsed()) {
 
-        // With FF we can't split the stream into audio and video because FF
+        // With FF/IE we can't split the stream into audio and video because FF
         // doesn't support media stream constructors. So, we need to get the
         // audio stream separately from the video stream using two distinct GUM
         // calls. Not very user friendly :-( but we don't have many other
@@ -1337,31 +1920,41 @@ RTCUtils.prototype.obtainAudioAndVideoPermissions =
         //
         // Note that we pack those 2 streams in a single object and pass it to
         // the successCallback method.
-
-        self.getUserMediaWithConstraints(
-            ['audio'],
-            function (audioStream) {
-                self.getUserMediaWithConstraints(
-                    ['video'],
-                    function (videoStream) {
-                        return self.successCallback({
-                            audioStream: audioStream,
-                            videoStream: videoStream
-                        });
-                    },
-                    function (error) {
-                        console.error('failed to obtain video stream - stop',
-                            error);
-                        return self.successCallback(null);
-                    },
-                    config.resolution || '360');
-            },
-            function (error) {
-                console.error('failed to obtain audio stream - stop',
-                        error);
-                return self.successCallback(null);
-            }
-        );
+        var obtainVideo = function (audioStream) {
+            self.getUserMediaWithConstraints(
+                ['video'],
+                function (videoStream) {
+                    return successCallback({
+                        audioStream: audioStream,
+                        videoStream: videoStream
+                    });
+                },
+                function (error) {
+                    console.error(
+                        'failed to obtain video stream - stop', error);
+                    self.errorCallback(error);
+                },
+                config.resolution || '360');
+        };
+        var obtainAudio = function () {
+            self.getUserMediaWithConstraints(
+                ['audio'],
+                function (audioStream) {
+                    if (newDevices.indexOf('video') !== -1)
+                        obtainVideo(audioStream);
+                },
+                function (error) {
+                    console.error(
+                        'failed to obtain audio stream - stop', error);
+                    self.errorCallback(error);
+                }
+            );
+        };
+        if (newDevices.indexOf('audio') !== -1) {
+            obtainAudio();
+        } else {
+            obtainVideo(null);
+        }
     } else {
         this.getUserMediaWithConstraints(
         newDevices,
@@ -1373,13 +1966,12 @@ RTCUtils.prototype.obtainAudioAndVideoPermissions =
         },
         config.resolution || '360');
     }
-
-}
+};
 
 RTCUtils.prototype.successCallback = function (stream, usageOptions) {
-    // If this is FF, the stream parameter is *not* a MediaStream object, it's
-    // an object with two properties: audioStream, videoStream.
-    if(stream && !navigator.mozGetUserMedia)
+    // If this is FF or IE, the stream parameter is *not* a MediaStream object,
+    // it's an object with two properties: audioStream, videoStream.
+    if (stream && stream.getAudioTracks && stream.getVideoTracks)
         console.log('got', stream, stream.getAudioTracks().length,
             stream.getVideoTracks().length);
     this.handleLocalStream(stream, usageOptions);
@@ -1403,8 +1995,7 @@ RTCUtils.prototype.errorCallback = function (error) {
                 return self.errorCallback(error);
             }, resolution);
     }
-    else
-    {
+    else {
         self.getUserMediaWithConstraints(
             ['audio'],
             function (stream) {
@@ -1417,11 +2008,9 @@ RTCUtils.prototype.errorCallback = function (error) {
             }
         );
     }
+};
 
-}
-
-RTCUtils.prototype.handleLocalStream = function(stream, usageOptions)
-{
+RTCUtils.prototype.handleLocalStream = function(stream, usageOptions) {
     // If this is FF, the stream parameter is *not* a MediaStream object, it's
     // an object with two properties: audioStream, videoStream.
     var audioStream, videoStream;
@@ -1443,10 +2032,17 @@ RTCUtils.prototype.handleLocalStream = function(stream, usageOptions)
             }
         }
     }
-    else
-    {//firefox
-        audioStream = stream.audioStream;
-        videoStream = stream.videoStream;
+    else if (RTCBrowserType.isFirefox() || RTCBrowserType.isTemasysPluginUsed())
+    {   // Firefox and Temasys plugin
+        if (stream && stream.audioStream)
+            audioStream = stream.audioStream;
+        else
+            audioStream = new DummyMediaStream("dummyAudio");
+
+        if (stream && stream.videoStream)
+            videoStream = stream.videoStream;
+        else
+            videoStream = new DummyMediaStream("dummyVideo");
     }
 
     var audioMuted = (usageOptions && usageOptions.audio === false),
@@ -1459,35 +2055,1213 @@ RTCUtils.prototype.handleLocalStream = function(stream, usageOptions)
     this.service.createLocalStream(audioStream, "audio", null, null,
         audioMuted, audioGUM);
 
-    this.service.createLocalStream(videoStream, "video", null, null,
+    this.service.createLocalStream(videoStream, "video", null, 'camera',
         videoMuted, videoGUM);
 };
 
-RTCUtils.prototype.createStream = function(stream, isVideo)
-{
-    var newStream = null;
-    if(window.webkitMediaStream)
-    {
-        newStream = new webkitMediaStream();
-        if(newStream)
-        {
-            var tracks = (isVideo? stream.getVideoTracks() : stream.getAudioTracks());
+function DummyMediaStream(id) {
+    this.id = id;
+    this.label = id;
+    this.stop = function() { };
+    this.getAudioTracks = function() { return []; };
+    this.getVideoTracks = function() { return []; };
+}
 
-            for (i = 0; i < tracks.length; i++) {
+RTCUtils.prototype.createStream = function(stream, isVideo) {
+    var newStream = null;
+    if (window.webkitMediaStream) {
+        newStream = new webkitMediaStream();
+        if (newStream) {
+            var tracks = (isVideo ? stream.getVideoTracks() : stream.getAudioTracks());
+
+            for (var i = 0; i < tracks.length; i++) {
                 newStream.addTrack(tracks[i]);
             }
         }
 
     }
-    else
-        newStream = stream;
+    else {
+        // FIXME: this is duplicated with 'handleLocalStream' !!!
+        if (stream) {
+            newStream = stream;
+        } else {
+            newStream =
+                new DummyMediaStream(isVideo ? "dummyVideo" : "dummyAudio");
+        }
+    }
 
     return newStream;
 };
 
 module.exports = RTCUtils;
 
-},{"../../service/RTC/RTCBrowserType.js":96,"../../service/RTC/Resolutions":98}],9:[function(require,module,exports){
+},{"../../service/RTC/Resolutions":169,"../xmpp/SDPUtil":62,"./RTCBrowserType":10,"./adapter.screenshare":12}],12:[function(require,module,exports){
+/*! adapterjs - custom version from - 2015-08-19 */
+
+// Adapter's interface.
+var AdapterJS = AdapterJS || {};
+
+// Browserify compatibility
+if(typeof exports !== 'undefined') {
+  module.exports = AdapterJS;
+}
+
+AdapterJS.options = AdapterJS.options || {};
+
+// uncomment to get virtual webcams
+// AdapterJS.options.getAllCams = true;
+
+// uncomment to prevent the install prompt when the plugin in not yet installed
+// AdapterJS.options.hidePluginInstallPrompt = true;
+
+// AdapterJS version
+AdapterJS.VERSION = '0.12.0';
+
+// This function will be called when the WebRTC API is ready to be used
+// Whether it is the native implementation (Chrome, Firefox, Opera) or
+// the plugin
+// You may Override this function to synchronise the start of your application
+// with the WebRTC API being ready.
+// If you decide not to override use this synchronisation, it may result in
+// an extensive CPU usage on the plugin start (once per tab loaded)
+// Params:
+//    - isUsingPlugin: true is the WebRTC plugin is being used, false otherwise
+//
+AdapterJS.onwebrtcready = AdapterJS.onwebrtcready || function(isUsingPlugin) {
+  // The WebRTC API is ready.
+  // Override me and do whatever you want here
+};
+
+// Sets a callback function to be called when the WebRTC interface is ready.
+// The first argument is the function to callback.\
+// Throws an error if the first argument is not a function
+AdapterJS.webRTCReady = function (callback) {
+  if (typeof callback !== 'function') {
+    throw new Error('Callback provided is not a function');
+  }
+
+  if (true === AdapterJS.onwebrtcreadyDone) {
+    // All WebRTC interfaces are ready, just call the callback
+    callback(null !== AdapterJS.WebRTCPlugin.plugin);
+  } else {
+    // will be triggered automatically when your browser/plugin is ready.
+    AdapterJS.onwebrtcready = callback;
+  }
+};
+
+// Plugin namespace
+AdapterJS.WebRTCPlugin = AdapterJS.WebRTCPlugin || {};
+
+// The object to store plugin information
+AdapterJS.WebRTCPlugin.pluginInfo = {
+  prefix : 'Tem',
+  plugName : 'TemWebRTCPlugin',
+  pluginId : 'plugin0',
+  type : 'application/x-temwebrtcplugin',
+  onload : '__TemWebRTCReady0',
+  portalLink : 'http://skylink.io/plugin/',
+  downloadLink : null, //set below
+  companyName: 'Temasys'
+};
+if(!!navigator.platform.match(/^Mac/i)) {
+  AdapterJS.WebRTCPlugin.pluginInfo.downloadLink = 'http://bit.ly/1n77hco';
+}
+else if(!!navigator.platform.match(/^Win/i)) {
+  AdapterJS.WebRTCPlugin.pluginInfo.downloadLink = 'http://bit.ly/1kkS4FN';
+}
+
+AdapterJS.WebRTCPlugin.TAGS = {
+  NONE  : 'none',
+  AUDIO : 'audio',
+  VIDEO : 'video'
+};
+
+// Unique identifier of each opened page
+AdapterJS.WebRTCPlugin.pageId = Math.random().toString(36).slice(2);
+
+// Use this whenever you want to call the plugin.
+AdapterJS.WebRTCPlugin.plugin = null;
+
+// Set log level for the plugin once it is ready.
+// The different values are
+// This is an asynchronous function that will run when the plugin is ready
+AdapterJS.WebRTCPlugin.setLogLevel = null;
+
+// Defines webrtc's JS interface according to the plugin's implementation.
+// Define plugin Browsers as WebRTC Interface.
+AdapterJS.WebRTCPlugin.defineWebRTCInterface = null;
+
+// This function detects whether or not a plugin is installed.
+// Checks if Not IE (firefox, for example), else if it's IE,
+// we're running IE and do something. If not it is not supported.
+AdapterJS.WebRTCPlugin.isPluginInstalled = null;
+
+ // Lets adapter.js wait until the the document is ready before injecting the plugin
+AdapterJS.WebRTCPlugin.pluginInjectionInterval = null;
+
+// Inject the HTML DOM object element into the page.
+AdapterJS.WebRTCPlugin.injectPlugin = null;
+
+// States of readiness that the plugin goes through when
+// being injected and stated
+AdapterJS.WebRTCPlugin.PLUGIN_STATES = {
+  NONE : 0,           // no plugin use
+  INITIALIZING : 1,   // Detected need for plugin
+  INJECTING : 2,      // Injecting plugin
+  INJECTED: 3,        // Plugin element injected but not usable yet
+  READY: 4            // Plugin ready to be used
+};
+
+// Current state of the plugin. You cannot use the plugin before this is
+// equal to AdapterJS.WebRTCPlugin.PLUGIN_STATES.READY
+AdapterJS.WebRTCPlugin.pluginState = AdapterJS.WebRTCPlugin.PLUGIN_STATES.NONE;
+
+// True is AdapterJS.onwebrtcready was already called, false otherwise
+// Used to make sure AdapterJS.onwebrtcready is only called once
+AdapterJS.onwebrtcreadyDone = false;
+
+// Log levels for the plugin.
+// To be set by calling AdapterJS.WebRTCPlugin.setLogLevel
+/*
+Log outputs are prefixed in some cases.
+  INFO: Information reported by the plugin.
+  ERROR: Errors originating from within the plugin.
+  WEBRTC: Error originating from within the libWebRTC library
+*/
+// From the least verbose to the most verbose
+AdapterJS.WebRTCPlugin.PLUGIN_LOG_LEVELS = {
+  NONE : 'NONE',
+  ERROR : 'ERROR',
+  WARNING : 'WARNING',
+  INFO: 'INFO',
+  VERBOSE: 'VERBOSE',
+  SENSITIVE: 'SENSITIVE'
+};
+
+// Does a waiting check before proceeding to load the plugin.
+AdapterJS.WebRTCPlugin.WaitForPluginReady = null;
+
+// This methid will use an interval to wait for the plugin to be ready.
+AdapterJS.WebRTCPlugin.callWhenPluginReady = null;
+
+// !!!! WARNING: DO NOT OVERRIDE THIS FUNCTION. !!!
+// This function will be called when plugin is ready. It sends necessary
+// details to the plugin.
+// The function will wait for the document to be ready and the set the
+// plugin state to AdapterJS.WebRTCPlugin.PLUGIN_STATES.READY,
+// indicating that it can start being requested.
+// This function is not in the IE/Safari condition brackets so that
+// TemPluginLoaded function might be called on Chrome/Firefox.
+// This function is the only private function that is not encapsulated to
+// allow the plugin method to be called.
+__TemWebRTCReady0 = function () {
+  if (document.readyState === 'complete') {
+    AdapterJS.WebRTCPlugin.pluginState = AdapterJS.WebRTCPlugin.PLUGIN_STATES.READY;
+
+    AdapterJS.maybeThroughWebRTCReady();
+  } else {
+    AdapterJS.WebRTCPlugin.documentReadyInterval = setInterval(function () {
+      if (document.readyState === 'complete') {
+        // TODO: update comments, we wait for the document to be ready
+        clearInterval(AdapterJS.WebRTCPlugin.documentReadyInterval);
+        AdapterJS.WebRTCPlugin.pluginState = AdapterJS.WebRTCPlugin.PLUGIN_STATES.READY;
+
+        AdapterJS.maybeThroughWebRTCReady();
+      }
+    }, 100);
+  }
+};
+
+AdapterJS.maybeThroughWebRTCReady = function() {
+  if (!AdapterJS.onwebrtcreadyDone) {
+    AdapterJS.onwebrtcreadyDone = true;
+
+    if (typeof(AdapterJS.onwebrtcready) === 'function') {
+      AdapterJS.onwebrtcready(AdapterJS.WebRTCPlugin.plugin !== null);
+    }
+  }
+};
+
+// Text namespace
+AdapterJS.TEXT = {
+  PLUGIN: {
+    REQUIRE_INSTALLATION: 'This website requires you to install a WebRTC-enabling plugin ' +
+      'to work on this browser.',
+    NOT_SUPPORTED: 'Your browser does not support WebRTC.',
+    BUTTON: 'Install Now'
+  },
+  REFRESH: {
+    REQUIRE_REFRESH: 'Please refresh page',
+    BUTTON: 'Refresh Page'
+  }
+};
+
+// The result of ice connection states.
+// - starting: Ice connection is starting.
+// - checking: Ice connection is checking.
+// - connected Ice connection is connected.
+// - completed Ice connection is connected.
+// - done Ice connection has been completed.
+// - disconnected Ice connection has been disconnected.
+// - failed Ice connection has failed.
+// - closed Ice connection is closed.
+AdapterJS._iceConnectionStates = {
+  starting : 'starting',
+  checking : 'checking',
+  connected : 'connected',
+  completed : 'connected',
+  done : 'completed',
+  disconnected : 'disconnected',
+  failed : 'failed',
+  closed : 'closed'
+};
+
+//The IceConnection states that has been fired for each peer.
+AdapterJS._iceConnectionFiredStates = [];
+
+
+// Check if WebRTC Interface is defined.
+AdapterJS.isDefined = null;
+
+// This function helps to retrieve the webrtc detected browser information.
+// This sets:
+// - webrtcDetectedBrowser: The browser agent name.
+// - webrtcDetectedVersion: The browser version.
+// - webrtcDetectedType: The types of webRTC support.
+//   - 'moz': Mozilla implementation of webRTC.
+//   - 'webkit': WebKit implementation of webRTC.
+//   - 'plugin': Using the plugin implementation.
+AdapterJS.parseWebrtcDetectedBrowser = function () {
+  var hasMatch, checkMatch = navigator.userAgent.match(
+    /(opera|chrome|safari|firefox|msie|trident(?=\/))\/?\s*(\d+)/i) || [];
+  if (/trident/i.test(checkMatch[1])) {
+    hasMatch = /\brv[ :]+(\d+)/g.exec(navigator.userAgent) || [];
+    webrtcDetectedBrowser = 'IE';
+    webrtcDetectedVersion = parseInt(hasMatch[1] || '0', 10);
+  } else if (checkMatch[1] === 'Chrome') {
+    hasMatch = navigator.userAgent.match(/\bOPR\/(\d+)/);
+    if (hasMatch !== null) {
+      webrtcDetectedBrowser = 'opera';
+      webrtcDetectedVersion = parseInt(hasMatch[1], 10);
+    }
+  }
+  if (navigator.userAgent.indexOf('Safari')) {
+    if (typeof InstallTrigger !== 'undefined') {
+      webrtcDetectedBrowser = 'firefox';
+    } else if (/*@cc_on!@*/ false || !!document.documentMode) {
+      webrtcDetectedBrowser = 'IE';
+    } else if (
+      Object.prototype.toString.call(window.HTMLElement).indexOf('Constructor') > 0) {
+      webrtcDetectedBrowser = 'safari';
+    } else if (!!window.opera || navigator.userAgent.indexOf(' OPR/') >= 0) {
+      webrtcDetectedBrowser = 'opera';
+    } else if (!!window.chrome) {
+      webrtcDetectedBrowser = 'chrome';
+    }
+  }
+  if (!webrtcDetectedBrowser) {
+    webrtcDetectedVersion = checkMatch[1];
+  }
+  if (!webrtcDetectedVersion) {
+    try {
+      checkMatch = (checkMatch[2]) ? [checkMatch[1], checkMatch[2]] :
+        [navigator.appName, navigator.appVersion, '-?'];
+      if ((hasMatch = navigator.userAgent.match(/version\/(\d+)/i)) !== null) {
+        checkMatch.splice(1, 1, hasMatch[1]);
+      }
+      webrtcDetectedVersion = parseInt(checkMatch[1], 10);
+    } catch (error) { }
+  }
+};
+
+// To fix configuration as some browsers does not support
+// the 'urls' attribute.
+AdapterJS.maybeFixConfiguration = function (pcConfig) {
+  if (pcConfig === null) {
+    return;
+  }
+  for (var i = 0; i < pcConfig.iceServers.length; i++) {
+    if (pcConfig.iceServers[i].hasOwnProperty('urls')) {
+      pcConfig.iceServers[i].url = pcConfig.iceServers[i].urls;
+      delete pcConfig.iceServers[i].urls;
+    }
+  }
+};
+
+AdapterJS.addEvent = function(elem, evnt, func) {
+  if (elem.addEventListener) { // W3C DOM
+    elem.addEventListener(evnt, func, false);
+  } else if (elem.attachEvent) {// OLD IE DOM
+    elem.attachEvent('on'+evnt, func);
+  } else { // No much to do
+    elem[evnt] = func;
+  }
+};
+
+AdapterJS.renderNotificationBar = function (text, buttonText, buttonLink, openNewTab, displayRefreshBar) {
+  // only inject once the page is ready
+  if (document.readyState !== 'complete') {
+    return;
+  }
+
+  var w = window;
+  var i = document.createElement('iframe');
+  i.style.position = 'fixed';
+  i.style.top = '-41px';
+  i.style.left = 0;
+  i.style.right = 0;
+  i.style.width = '100%';
+  i.style.height = '40px';
+  i.style.backgroundColor = '#ffffe1';
+  i.style.border = 'none';
+  i.style.borderBottom = '1px solid #888888';
+  i.style.zIndex = '9999999';
+  if(typeof i.style.webkitTransition === 'string') {
+    i.style.webkitTransition = 'all .5s ease-out';
+  } else if(typeof i.style.transition === 'string') {
+    i.style.transition = 'all .5s ease-out';
+  }
+  document.body.appendChild(i);
+  c = (i.contentWindow) ? i.contentWindow :
+    (i.contentDocument.document) ? i.contentDocument.document : i.contentDocument;
+  c.document.open();
+  c.document.write('<span style="display: inline-block; font-family: Helvetica, Arial,' +
+    'sans-serif; font-size: .9rem; padding: 4px; vertical-align: ' +
+    'middle; cursor: default;">' + text + '</span>');
+  if(buttonText && buttonLink) {
+    c.document.write('<button id="okay">' + buttonText + '</button><button>Cancel</button>');
+    c.document.close();
+
+    AdapterJS.addEvent(c.document.getElementById('okay'), 'click', function(e) {
+      if (!!displayRefreshBar) {
+        AdapterJS.renderNotificationBar(AdapterJS.TEXT.EXTENSION ?
+          AdapterJS.TEXT.EXTENSION.REQUIRE_REFRESH : AdapterJS.TEXT.REFRESH.REQUIRE_REFRESH,
+          AdapterJS.TEXT.REFRESH.BUTTON, 'javascript:location.reload()');
+      }
+      window.open(buttonLink, !!openNewTab ? '_blank' : '_top');
+
+      e.preventDefault();
+      try {
+        event.cancelBubble = true;
+      } catch(error) { }
+
+      var pluginInstallInterval = setInterval(function(){
+        if(! isIE) {
+          navigator.plugins.refresh(false);
+        }
+        AdapterJS.WebRTCPlugin.isPluginInstalled(
+          AdapterJS.WebRTCPlugin.pluginInfo.prefix,
+          AdapterJS.WebRTCPlugin.pluginInfo.plugName,
+          function() { // plugin now installed
+            clearInterval(pluginInstallInterval);
+            AdapterJS.WebRTCPlugin.defineWebRTCInterface();
+          },
+          function() { 
+            // still no plugin detected, nothing to do
+          });
+      } , 500);
+    });   
+  } else {
+    c.document.close();
+  }
+  AdapterJS.addEvent(c.document, 'click', function() {
+    w.document.body.removeChild(i);
+  });
+  setTimeout(function() {
+    if(typeof i.style.webkitTransform === 'string') {
+      i.style.webkitTransform = 'translateY(40px)';
+    } else if(typeof i.style.transform === 'string') {
+      i.style.transform = 'translateY(40px)';
+    } else {
+      i.style.top = '0px';
+    }
+  }, 300);
+};
+
+// -----------------------------------------------------------
+// Detected webrtc implementation. Types are:
+// - 'moz': Mozilla implementation of webRTC.
+// - 'webkit': WebKit implementation of webRTC.
+// - 'plugin': Using the plugin implementation.
+webrtcDetectedType = null;
+
+// Detected webrtc datachannel support. Types are:
+// - 'SCTP': SCTP datachannel support.
+// - 'RTP': RTP datachannel support.
+webrtcDetectedDCSupport = null;
+
+// Set the settings for creating DataChannels, MediaStream for
+// Cross-browser compability.
+// - This is only for SCTP based support browsers.
+// the 'urls' attribute.
+checkMediaDataChannelSettings =
+  function (peerBrowserAgent, peerBrowserVersion, callback, constraints) {
+  if (typeof callback !== 'function') {
+    return;
+  }
+  var beOfferer = true;
+  var isLocalFirefox = webrtcDetectedBrowser === 'firefox';
+  // Nightly version does not require MozDontOfferDataChannel for interop
+  var isLocalFirefoxInterop = webrtcDetectedType === 'moz' && webrtcDetectedVersion > 30;
+  var isPeerFirefox = peerBrowserAgent === 'firefox';
+  var isPeerFirefoxInterop = peerBrowserAgent === 'firefox' &&
+    ((peerBrowserVersion) ? (peerBrowserVersion > 30) : false);
+
+  // Resends an updated version of constraints for MozDataChannel to work
+  // If other userAgent is firefox and user is firefox, remove MozDataChannel
+  if ((isLocalFirefox && isPeerFirefox) || (isLocalFirefoxInterop)) {
+    try {
+      delete constraints.mandatory.MozDontOfferDataChannel;
+    } catch (error) {
+      console.error('Failed deleting MozDontOfferDataChannel');
+      console.error(error);
+    }
+  } else if ((isLocalFirefox && !isPeerFirefox)) {
+    constraints.mandatory.MozDontOfferDataChannel = true;
+  }
+  if (!isLocalFirefox) {
+    // temporary measure to remove Moz* constraints in non Firefox browsers
+    for (var prop in constraints.mandatory) {
+      if (constraints.mandatory.hasOwnProperty(prop)) {
+        if (prop.indexOf('Moz') !== -1) {
+          delete constraints.mandatory[prop];
+        }
+      }
+    }
+  }
+  // Firefox (not interopable) cannot offer DataChannel as it will cause problems to the
+  // interopability of the media stream
+  if (isLocalFirefox && !isPeerFirefox && !isLocalFirefoxInterop) {
+    beOfferer = false;
+  }
+  callback(beOfferer, constraints);
+};
+
+// Handles the differences for all browsers ice connection state output.
+// - Tested outcomes are:
+//   - Chrome (offerer)  : 'checking' > 'completed' > 'completed'
+//   - Chrome (answerer) : 'checking' > 'connected'
+//   - Firefox (offerer) : 'checking' > 'connected'
+//   - Firefox (answerer): 'checking' > 'connected'
+checkIceConnectionState = function (peerId, iceConnectionState, callback) {
+  if (typeof callback !== 'function') {
+    console.warn('No callback specified in checkIceConnectionState. Aborted.');
+    return;
+  }
+  peerId = (peerId) ? peerId : 'peer';
+
+  if (!AdapterJS._iceConnectionFiredStates[peerId] ||
+    iceConnectionState === AdapterJS._iceConnectionStates.disconnected ||
+    iceConnectionState === AdapterJS._iceConnectionStates.failed ||
+    iceConnectionState === AdapterJS._iceConnectionStates.closed) {
+    AdapterJS._iceConnectionFiredStates[peerId] = [];
+  }
+  iceConnectionState = AdapterJS._iceConnectionStates[iceConnectionState];
+  if (AdapterJS._iceConnectionFiredStates[peerId].indexOf(iceConnectionState) < 0) {
+    AdapterJS._iceConnectionFiredStates[peerId].push(iceConnectionState);
+    if (iceConnectionState === AdapterJS._iceConnectionStates.connected) {
+      setTimeout(function () {
+        AdapterJS._iceConnectionFiredStates[peerId]
+          .push(AdapterJS._iceConnectionStates.done);
+        callback(AdapterJS._iceConnectionStates.done);
+      }, 1000);
+    }
+    callback(iceConnectionState);
+  }
+  return;
+};
+
+// Firefox:
+// - Creates iceServer from the url for Firefox.
+// - Create iceServer with stun url.
+// - Create iceServer with turn url.
+//   - Ignore the transport parameter from TURN url for FF version <=27.
+//   - Return null for createIceServer if transport=tcp.
+// - FF 27 and above supports transport parameters in TURN url,
+// - So passing in the full url to create iceServer.
+// Chrome:
+// - Creates iceServer from the url for Chrome M33 and earlier.
+//   - Create iceServer with stun url.
+//   - Chrome M28 & above uses below TURN format.
+// Plugin:
+// - Creates Ice Server for Plugin Browsers
+//   - If Stun - Create iceServer with stun url.
+//   - Else - Create iceServer with turn url
+//   - This is a WebRTC Function
+createIceServer = null;
+
+// Firefox:
+// - Creates IceServers for Firefox
+//   - Use .url for FireFox.
+//   - Multiple Urls support
+// Chrome:
+// - Creates iceServers from the urls for Chrome M34 and above.
+//   - .urls is supported since Chrome M34.
+//   - Multiple Urls support
+// Plugin:
+// - Creates Ice Servers for Plugin Browsers
+//   - Multiple Urls support
+//   - This is a WebRTC Function
+createIceServers = null;
+//------------------------------------------------------------
+
+//The RTCPeerConnection object.
+RTCPeerConnection = null;
+
+// Creates RTCSessionDescription object for Plugin Browsers
+RTCSessionDescription = (typeof RTCSessionDescription === 'function') ?
+  RTCSessionDescription : null;
+
+// Creates RTCIceCandidate object for Plugin Browsers
+RTCIceCandidate = (typeof RTCIceCandidate === 'function') ?
+  RTCIceCandidate : null;
+
+// Get UserMedia (only difference is the prefix).
+// Code from Adam Barth.
+getUserMedia = null;
+
+// Attach a media stream to an element.
+attachMediaStream = null;
+
+// Re-attach a media stream to an element.
+reattachMediaStream = null;
+
+
+// Detected browser agent name. Types are:
+// - 'firefox': Firefox browser.
+// - 'chrome': Chrome browser.
+// - 'opera': Opera browser.
+// - 'safari': Safari browser.
+// - 'IE' - Internet Explorer browser.
+webrtcDetectedBrowser = null;
+
+// Detected browser version.
+webrtcDetectedVersion = null;
+
+// Check for browser types and react accordingly
+if (navigator.mozGetUserMedia) {
+  webrtcDetectedBrowser = 'firefox';
+  webrtcDetectedVersion = parseInt(navigator
+    .userAgent.match(/Firefox\/([0-9]+)\./)[1], 10);
+  webrtcDetectedType = 'moz';
+  webrtcDetectedDCSupport = 'SCTP';
+
+  RTCPeerConnection = function (pcConfig, pcConstraints) {
+    AdapterJS.maybeFixConfiguration(pcConfig);
+    return new mozRTCPeerConnection(pcConfig, pcConstraints);
+  };
+
+ // The RTCSessionDescription object.
+  RTCSessionDescription = mozRTCSessionDescription;
+  window.RTCSessionDescription = RTCSessionDescription;
+
+  // The RTCIceCandidate object.
+  RTCIceCandidate = mozRTCIceCandidate;
+  window.RTCIceCandidate = RTCIceCandidate;
+
+  window.getUserMedia = navigator.mozGetUserMedia.bind(navigator);
+  navigator.getUserMedia = window.getUserMedia;
+
+  // Shim for MediaStreamTrack.getSources.
+  MediaStreamTrack.getSources = function(successCb) {
+    setTimeout(function() {
+      var infos = [
+        { kind: 'audio', id: 'default', label:'', facing:'' },
+        { kind: 'video', id: 'default', label:'', facing:'' }
+      ];
+      successCb(infos);
+    }, 0);
+  };
+
+  createIceServer = function (url, username, password) {
+    var iceServer = null;
+    var url_parts = url.split(':');
+    if (url_parts[0].indexOf('stun') === 0) {
+      iceServer = { url : url };
+    } else if (url_parts[0].indexOf('turn') === 0) {
+      if (webrtcDetectedVersion < 27) {
+        var turn_url_parts = url.split('?');
+        if (turn_url_parts.length === 1 ||
+          turn_url_parts[1].indexOf('transport=udp') === 0) {
+          iceServer = {
+            url : turn_url_parts[0],
+            credential : password,
+            username : username
+          };
+        }
+      } else {
+        iceServer = {
+          url : url,
+          credential : password,
+          username : username
+        };
+      }
+    }
+    return iceServer;
+  };
+
+  createIceServers = function (urls, username, password) {
+    var iceServers = [];
+    for (i = 0; i < urls.length; i++) {
+      var iceServer = createIceServer(urls[i], username, password);
+      if (iceServer !== null) {
+        iceServers.push(iceServer);
+      }
+    }
+    return iceServers;
+  };
+
+  attachMediaStream = function (element, stream) {
+    element.mozSrcObject = stream;
+    if (stream !== null)
+      element.play();
+
+    return element;
+  };
+
+  reattachMediaStream = function (to, from) {
+    to.mozSrcObject = from.mozSrcObject;
+    to.play();
+    return to;
+  };
+
+  MediaStreamTrack.getSources = MediaStreamTrack.getSources || function (callback) {
+    if (!callback) {
+      throw new TypeError('Failed to execute \'getSources\' on \'MediaStreamTrack\'' +
+        ': 1 argument required, but only 0 present.');
+    }
+    return callback([]);
+  };
+
+  // Fake get{Video,Audio}Tracks
+  if (!MediaStream.prototype.getVideoTracks) {
+    MediaStream.prototype.getVideoTracks = function () {
+      return [];
+    };
+  }
+  if (!MediaStream.prototype.getAudioTracks) {
+    MediaStream.prototype.getAudioTracks = function () {
+      return [];
+    };
+  }
+
+  AdapterJS.maybeThroughWebRTCReady();
+} else if (navigator.webkitGetUserMedia) {
+  webrtcDetectedBrowser = 'chrome';
+  webrtcDetectedType = 'webkit';
+  webrtcDetectedVersion = parseInt(navigator
+    .userAgent.match(/Chrom(e|ium)\/([0-9]+)\./)[2], 10);
+  // check if browser is opera 20+
+  var checkIfOpera = navigator.userAgent.match(/\bOPR\/(\d+)/);
+  if (checkIfOpera !== null) {
+    webrtcDetectedBrowser = 'opera';
+    webrtcDetectedVersion = parseInt(checkIfOpera[1], 10);
+  }
+  // check browser datachannel support
+  if ((webrtcDetectedBrowser === 'chrome' && webrtcDetectedVersion >= 31) ||
+    (webrtcDetectedBrowser === 'opera' && webrtcDetectedVersion >= 20)) {
+    webrtcDetectedDCSupport = 'SCTP';
+  } else if (webrtcDetectedBrowser === 'chrome' && webrtcDetectedVersion < 30 &&
+    webrtcDetectedVersion > 24) {
+    webrtcDetectedDCSupport = 'RTP';
+  } else {
+    webrtcDetectedDCSupport = '';
+  }
+
+  createIceServer = function (url, username, password) {
+    var iceServer = null;
+    var url_parts = url.split(':');
+    if (url_parts[0].indexOf('stun') === 0) {
+      iceServer = { 'url' : url };
+    } else if (url_parts[0].indexOf('turn') === 0) {
+      iceServer = {
+        'url' : url,
+        'credential' : password,
+        'username' : username
+      };
+    }
+    return iceServer;
+  };
+
+  createIceServers = function (urls, username, password) {
+    var iceServers = [];
+    if (webrtcDetectedVersion >= 34) {
+      iceServers = {
+        'urls' : urls,
+        'credential' : password,
+        'username' : username
+      };
+    } else {
+      for (i = 0; i < urls.length; i++) {
+        var iceServer = createIceServer(urls[i], username, password);
+        if (iceServer !== null) {
+          iceServers.push(iceServer);
+        }
+      }
+    }
+    return iceServers;
+  };
+
+  RTCPeerConnection = function (pcConfig, pcConstraints) {
+    if (webrtcDetectedVersion < 34) {
+      AdapterJS.maybeFixConfiguration(pcConfig);
+    }
+    return new webkitRTCPeerConnection(pcConfig, pcConstraints);
+  };
+
+  window.getUserMedia = navigator.webkitGetUserMedia.bind(navigator);
+  navigator.getUserMedia = window.getUserMedia;
+
+  attachMediaStream = function (element, stream) {
+    if (typeof element.srcObject !== 'undefined') {
+      element.srcObject = stream;
+    } else if (typeof element.mozSrcObject !== 'undefined') {
+      element.mozSrcObject = stream;
+    } else if (typeof element.src !== 'undefined') {
+      element.src = (stream === null ? '' : URL.createObjectURL(stream));
+    } else {
+      console.log('Error attaching stream to element.');
+    }
+    return element;
+  };
+
+  reattachMediaStream = function (to, from) {
+    to.src = from.src;
+    return to;
+  };
+
+  AdapterJS.maybeThroughWebRTCReady();
+} else if (navigator.mediaDevices && navigator.userAgent.match(
+    /Edge\/(\d+).(\d+)$/)) {
+  webrtcDetectedBrowser = 'edge';
+
+  webrtcDetectedVersion =
+    parseInt(navigator.userAgent.match(/Edge\/(\d+).(\d+)$/)[2], 10);
+
+  // the minimum version still supported by adapter.
+  webrtcMinimumVersion = 12;
+
+  getUserMedia = navigator.getUserMedia;
+
+  attachMediaStream = function(element, stream) {
+    element.srcObject = stream;
+    return element;
+  };
+  reattachMediaStream = function(to, from) {
+    to.srcObject = from.srcObject;
+    return to;
+  };
+
+  AdapterJS.maybeThroughWebRTCReady();
+} else { // TRY TO USE PLUGIN
+  // IE 9 is not offering an implementation of console.log until you open a console
+  if (typeof console !== 'object' || typeof console.log !== 'function') {
+    /* jshint -W020 */
+    console = {} || console;
+    // Implemented based on console specs from MDN
+    // You may override these functions
+    console.log = function (arg) {};
+    console.info = function (arg) {};
+    console.error = function (arg) {};
+    console.dir = function (arg) {};
+    console.exception = function (arg) {};
+    console.trace = function (arg) {};
+    console.warn = function (arg) {};
+    console.count = function (arg) {};
+    console.debug = function (arg) {};
+    console.count = function (arg) {};
+    console.time = function (arg) {};
+    console.timeEnd = function (arg) {};
+    console.group = function (arg) {};
+    console.groupCollapsed = function (arg) {};
+    console.groupEnd = function (arg) {};
+    /* jshint +W020 */
+  }
+  webrtcDetectedType = 'plugin';
+  webrtcDetectedDCSupport = 'plugin';
+  AdapterJS.parseWebrtcDetectedBrowser();
+  isIE = webrtcDetectedBrowser === 'IE';
+
+  /* jshint -W035 */
+  AdapterJS.WebRTCPlugin.WaitForPluginReady = function() {
+    while (AdapterJS.WebRTCPlugin.pluginState !== AdapterJS.WebRTCPlugin.PLUGIN_STATES.READY) {
+      /* empty because it needs to prevent the function from running. */
+    }
+  };
+  /* jshint +W035 */
+
+  AdapterJS.WebRTCPlugin.callWhenPluginReady = function (callback) {
+    if (AdapterJS.WebRTCPlugin.pluginState === AdapterJS.WebRTCPlugin.PLUGIN_STATES.READY) {
+      // Call immediately if possible
+      // Once the plugin is set, the code will always take this path
+      callback();
+    } else {
+      // otherwise start a 100ms interval
+      var checkPluginReadyState = setInterval(function () {
+        if (AdapterJS.WebRTCPlugin.pluginState === AdapterJS.WebRTCPlugin.PLUGIN_STATES.READY) {
+          clearInterval(checkPluginReadyState);
+          callback();
+        }
+      }, 100);
+    }
+  };
+
+  AdapterJS.WebRTCPlugin.setLogLevel = function(logLevel) {
+    AdapterJS.WebRTCPlugin.callWhenPluginReady(function() {
+      AdapterJS.WebRTCPlugin.plugin.setLogLevel(logLevel);
+    });
+  };
+
+  AdapterJS.WebRTCPlugin.injectPlugin = function () {
+    // only inject once the page is ready
+    if (document.readyState !== 'complete') {
+      return;
+    }
+
+    // Prevent multiple injections
+    if (AdapterJS.WebRTCPlugin.pluginState !== AdapterJS.WebRTCPlugin.PLUGIN_STATES.INITIALIZING) {
+      return;
+    }
+
+    AdapterJS.WebRTCPlugin.pluginState = AdapterJS.WebRTCPlugin.PLUGIN_STATES.INJECTING;
+
+    if (webrtcDetectedBrowser === 'IE' && webrtcDetectedVersion <= 10) {
+      var frag = document.createDocumentFragment();
+      AdapterJS.WebRTCPlugin.plugin = document.createElement('div');
+      AdapterJS.WebRTCPlugin.plugin.innerHTML = '<object id="' +
+        AdapterJS.WebRTCPlugin.pluginInfo.pluginId + '" type="' +
+        AdapterJS.WebRTCPlugin.pluginInfo.type + '" ' + 'width="1" height="1">' +
+        '<param name="pluginId" value="' +
+        AdapterJS.WebRTCPlugin.pluginInfo.pluginId + '" /> ' +
+        '<param name="windowless" value="false" /> ' +
+        '<param name="pageId" value="' + AdapterJS.WebRTCPlugin.pageId + '" /> ' +
+        '<param name="onload" value="' + AdapterJS.WebRTCPlugin.pluginInfo.onload + '" />' +
+        '<param name="tag" value="' + AdapterJS.WebRTCPlugin.TAGS.NONE + '" />' +
+        // uncomment to be able to use virtual cams
+        (AdapterJS.options.getAllCams ? '<param name="forceGetAllCams" value="True" />':'') +
+
+        '</object>';
+      while (AdapterJS.WebRTCPlugin.plugin.firstChild) {
+        frag.appendChild(AdapterJS.WebRTCPlugin.plugin.firstChild);
+      }
+      document.body.appendChild(frag);
+
+      // Need to re-fetch the plugin
+      AdapterJS.WebRTCPlugin.plugin =
+        document.getElementById(AdapterJS.WebRTCPlugin.pluginInfo.pluginId);
+    } else {
+      // Load Plugin
+      AdapterJS.WebRTCPlugin.plugin = document.createElement('object');
+      AdapterJS.WebRTCPlugin.plugin.id =
+        AdapterJS.WebRTCPlugin.pluginInfo.pluginId;
+      // IE will only start the plugin if it's ACTUALLY visible
+      if (isIE) {
+        AdapterJS.WebRTCPlugin.plugin.width = '1px';
+        AdapterJS.WebRTCPlugin.plugin.height = '1px';
+      } else { // The size of the plugin on Safari should be 0x0px
+              // so that the autorisation prompt is at the top
+        AdapterJS.WebRTCPlugin.plugin.width = '0px';
+        AdapterJS.WebRTCPlugin.plugin.height = '0px';
+      }
+      AdapterJS.WebRTCPlugin.plugin.type = AdapterJS.WebRTCPlugin.pluginInfo.type;
+      AdapterJS.WebRTCPlugin.plugin.innerHTML = '<param name="onload" value="' +
+        AdapterJS.WebRTCPlugin.pluginInfo.onload + '">' +
+        '<param name="pluginId" value="' +
+        AdapterJS.WebRTCPlugin.pluginInfo.pluginId + '">' +
+        '<param name="windowless" value="false" /> ' +
+        (AdapterJS.options.getAllCams ? '<param name="forceGetAllCams" value="True" />':'') +
+        '<param name="pageId" value="' + AdapterJS.WebRTCPlugin.pageId + '">' +
+        '<param name="tag" value="' + AdapterJS.WebRTCPlugin.TAGS.NONE + '" />';
+      document.body.appendChild(AdapterJS.WebRTCPlugin.plugin);
+    }
+
+
+    AdapterJS.WebRTCPlugin.pluginState = AdapterJS.WebRTCPlugin.PLUGIN_STATES.INJECTED;
+  };
+
+  AdapterJS.WebRTCPlugin.isPluginInstalled =
+    function (comName, plugName, installedCb, notInstalledCb) {
+    if (!isIE) {
+      var pluginArray = navigator.plugins;
+      for (var i = 0; i < pluginArray.length; i++) {
+        if (pluginArray[i].name.indexOf(plugName) >= 0) {
+          installedCb();
+          return;
+        }
+      }
+      notInstalledCb();
+    } else {
+      try {
+        var axo = new ActiveXObject(comName + '.' + plugName);
+      } catch (e) {
+        notInstalledCb();
+        return;
+      }
+      installedCb();
+    }
+  };
+
+  AdapterJS.WebRTCPlugin.defineWebRTCInterface = function () {
+    if (AdapterJS.WebRTCPlugin.pluginState ===
+        AdapterJS.WebRTCPlugin.PLUGIN_STATES.READY) {
+      console.error("AdapterJS - WebRTC interface has already been defined");
+      return;
+    }
+
+    AdapterJS.WebRTCPlugin.pluginState = AdapterJS.WebRTCPlugin.PLUGIN_STATES.INITIALIZING;
+
+    AdapterJS.isDefined = function (variable) {
+      return variable !== null && variable !== undefined;
+    };
+
+    createIceServer = function (url, username, password) {
+      var iceServer = null;
+      var url_parts = url.split(':');
+      if (url_parts[0].indexOf('stun') === 0) {
+        iceServer = {
+          'url' : url,
+          'hasCredentials' : false
+        };
+      } else if (url_parts[0].indexOf('turn') === 0) {
+        iceServer = {
+          'url' : url,
+          'hasCredentials' : true,
+          'credential' : password,
+          'username' : username
+        };
+      }
+      return iceServer;
+    };
+
+    createIceServers = function (urls, username, password) {
+      var iceServers = [];
+      for (var i = 0; i < urls.length; ++i) {
+        iceServers.push(createIceServer(urls[i], username, password));
+      }
+      return iceServers;
+    };
+
+    RTCSessionDescription = function (info) {
+      AdapterJS.WebRTCPlugin.WaitForPluginReady();
+      return AdapterJS.WebRTCPlugin.plugin.
+        ConstructSessionDescription(info.type, info.sdp);
+    };
+
+    RTCPeerConnection = function (servers, constraints) {
+      var iceServers = null;
+      if (servers) {
+        iceServers = servers.iceServers;
+        for (var i = 0; i < iceServers.length; i++) {
+          if (iceServers[i].urls && !iceServers[i].url) {
+            iceServers[i].url = iceServers[i].urls;
+          }
+          iceServers[i].hasCredentials = AdapterJS.
+            isDefined(iceServers[i].username) &&
+            AdapterJS.isDefined(iceServers[i].credential);
+        }
+      }
+      var mandatory = (constraints && constraints.mandatory) ?
+        constraints.mandatory : null;
+      var optional = (constraints && constraints.optional) ?
+        constraints.optional : null;
+
+      AdapterJS.WebRTCPlugin.WaitForPluginReady();
+      return AdapterJS.WebRTCPlugin.plugin.
+        PeerConnection(AdapterJS.WebRTCPlugin.pageId,
+        iceServers, mandatory, optional);
+    };
+
+    MediaStreamTrack = {};
+    MediaStreamTrack.getSources = function (callback) {
+      AdapterJS.WebRTCPlugin.callWhenPluginReady(function() {
+        AdapterJS.WebRTCPlugin.plugin.GetSources(callback);
+      });
+    };
+
+    window.getUserMedia = function (constraints, successCallback, failureCallback) {
+      constraints.audio = constraints.audio || false;
+      constraints.video = constraints.video || false;
+
+      AdapterJS.WebRTCPlugin.callWhenPluginReady(function() {
+        AdapterJS.WebRTCPlugin.plugin.
+          getUserMedia(constraints, successCallback, failureCallback);
+      });
+    };
+    window.navigator.getUserMedia = window.getUserMedia;
+
+    attachMediaStream = function (element, stream) {
+      if (!element || !element.parentNode) {
+        return;
+      }
+
+      var streamId
+      if (stream === null) {
+        streamId = '';
+      }
+      else {
+        stream.enableSoundTracks(true); // TODO: remove on 0.12.0
+        streamId = stream.id;
+      }
+
+      var elementId = element.id.length === 0 ? Math.random().toString(36).slice(2) : element.id;
+      var nodeName = element.nodeName.toLowerCase();
+      if (nodeName !== 'object') { // not a plugin <object> tag yet
+        var tag;
+        switch(nodeName) {
+          case 'audio':
+            tag = AdapterJS.WebRTCPlugin.TAGS.AUDIO;
+            break;
+          case 'video':
+            tag = AdapterJS.WebRTCPlugin.TAGS.VIDEO;
+            break;
+          default:
+            tag = AdapterJS.WebRTCPlugin.TAGS.NONE;
+          }
+
+        var frag = document.createDocumentFragment();
+        var temp = document.createElement('div');
+        var classHTML = '';
+        if (element.className) {
+          classHTML = 'class="' + element.className + '" ';
+        } else if (element.attributes && element.attributes['class']) {
+          classHTML = 'class="' + element.attributes['class'].value + '" ';
+        }
+
+        temp.innerHTML = '<object id="' + elementId + '" ' + classHTML +
+          'type="' + AdapterJS.WebRTCPlugin.pluginInfo.type + '">' +
+          '<param name="pluginId" value="' + elementId + '" /> ' +
+          '<param name="pageId" value="' + AdapterJS.WebRTCPlugin.pageId + '" /> ' +
+          '<param name="windowless" value="true" /> ' +
+          '<param name="streamId" value="' + streamId + '" /> ' +
+          '<param name="tag" value="' + tag + '" /> ' +
+          '</object>';
+        while (temp.firstChild) {
+          frag.appendChild(temp.firstChild);
+        }
+
+        var height = '';
+        var width = '';
+        if (element.getBoundingClientRect) {
+          var rectObject = element.getBoundingClientRect();
+          width = rectObject.width + 'px';
+          height = rectObject.height + 'px';
+        }
+        else if (element.width) {
+          width = element.width;
+          height = element.height;
+        } else {
+          // TODO: What scenario could bring us here?
+        }
+
+        element.parentNode.insertBefore(frag, element);
+        frag = document.getElementById(elementId);
+        frag.width = width;
+        frag.height = height;
+        element.parentNode.removeChild(element);
+      } else { // already an <object> tag, just change the stream id
+        var children = element.children;
+        for (var i = 0; i !== children.length; ++i) {
+          if (children[i].name === 'streamId') {
+            children[i].value = streamId;
+            break;
+          }
+        }
+        element.setStreamId(streamId);
+      }
+      var newElement = document.getElementById(elementId);
+      newElement.onplaying = (element.onplaying) ? element.onplaying : function (arg) {};
+      newElement.onclick   = (element.onclick)   ? element.onclick   : function (arg) {};
+      if (isIE) { // on IE the event needs to be plugged manually
+        newElement.attachEvent('onplaying', newElement.onplaying);
+        newElement._TemOnClick = function (id) {
+          var arg = {
+            srcElement : document.getElementById(id)
+          };
+          newElement.onclick(arg);
+        };
+      }
+      
+      return newElement;
+    };
+
+    reattachMediaStream = function (to, from) {
+      var stream = null;
+      var children = from.children;
+      for (var i = 0; i !== children.length; ++i) {
+        if (children[i].name === 'streamId') {
+          AdapterJS.WebRTCPlugin.WaitForPluginReady();
+          stream = AdapterJS.WebRTCPlugin.plugin
+            .getStreamWithId(AdapterJS.WebRTCPlugin.pageId, children[i].value);
+          break;
+        }
+      }
+      if (stream !== null) {
+        return attachMediaStream(to, stream);
+      } else {
+        console.log('Could not find the stream associated with this element');
+      }
+    };
+
+    RTCIceCandidate = function (candidate) {
+      if (!candidate.sdpMid) {
+        candidate.sdpMid = '';
+      }
+
+      AdapterJS.WebRTCPlugin.WaitForPluginReady();
+      return AdapterJS.WebRTCPlugin.plugin.ConstructIceCandidate(
+        candidate.sdpMid, candidate.sdpMLineIndex, candidate.candidate
+      );
+    };
+
+    // inject plugin
+    AdapterJS.addEvent(document, 'readystatechange', AdapterJS.WebRTCPlugin.injectPlugin);
+    AdapterJS.WebRTCPlugin.injectPlugin();
+  };
+
+  // This function will be called if the plugin is needed (browser different
+  // from Chrome or Firefox), but the plugin is not installed.
+  AdapterJS.WebRTCPlugin.pluginNeededButNotInstalledCb = AdapterJS.WebRTCPlugin.pluginNeededButNotInstalledCb ||
+    function() {
+      AdapterJS.addEvent(document,
+                        'readystatechange',
+                         AdapterJS.WebRTCPlugin.pluginNeededButNotInstalledCbPriv);
+      AdapterJS.WebRTCPlugin.pluginNeededButNotInstalledCbPriv();
+    };
+
+  AdapterJS.WebRTCPlugin.pluginNeededButNotInstalledCbPriv = function () {
+    if (AdapterJS.options.hidePluginInstallPrompt) {
+      return;
+    }
+
+    var downloadLink = AdapterJS.WebRTCPlugin.pluginInfo.downloadLink;
+    if(downloadLink) { // if download link
+      var popupString;
+      if (AdapterJS.WebRTCPlugin.pluginInfo.portalLink) { // is portal link
+       popupString = 'This website requires you to install the ' +
+        ' <a href="' + AdapterJS.WebRTCPlugin.pluginInfo.portalLink +
+        '" target="_blank">' + AdapterJS.WebRTCPlugin.pluginInfo.companyName +
+        ' WebRTC Plugin</a>' +
+        ' to work on this browser.';
+      } else { // no portal link, just print a generic explanation
+       popupString = AdapterJS.TEXT.PLUGIN.REQUIRE_INSTALLATION;
+      }
+
+      AdapterJS.renderNotificationBar(popupString, AdapterJS.TEXT.PLUGIN.BUTTON, downloadLink);
+    } else { // no download link, just print a generic explanation
+      AdapterJS.renderNotificationBar(AdapterJS.TEXT.PLUGIN.NOT_SUPPORTED);
+    }
+  };
+
+  // Try to detect the plugin and act accordingly
+  AdapterJS.WebRTCPlugin.isPluginInstalled(
+    AdapterJS.WebRTCPlugin.pluginInfo.prefix,
+    AdapterJS.WebRTCPlugin.pluginInfo.plugName,
+    AdapterJS.WebRTCPlugin.defineWebRTCInterface,
+    AdapterJS.WebRTCPlugin.pluginNeededButNotInstalledCb);
+}
+
+},{}],13:[function(require,module,exports){
+/* global Strophe, APP, $, config, interfaceConfig, toastr */
 var UI = {};
 
 var VideoLayout = require("./videolayout/VideoLayout.js");
@@ -1510,34 +3284,79 @@ var messageHandler = UI.messageHandler;
 var Authentication  = require("./authentication/Authentication");
 var UIUtil = require("./util/UIUtil");
 var NicknameHandler = require("./util/NicknameHandler");
+var JitsiPopover = require("./util/JitsiPopover");
 var CQEvents = require("../../service/connectionquality/CQEvents");
 var DesktopSharingEventTypes
     = require("../../service/desktopsharing/DesktopSharingEventTypes");
 var RTCEvents = require("../../service/RTC/RTCEvents");
+var RTCBrowserType = require("../RTC/RTCBrowserType");
 var StreamEventTypes = require("../../service/RTC/StreamEventTypes");
 var XMPPEvents = require("../../service/xmpp/XMPPEvents");
+var UIEvents = require("../../service/UI/UIEvents");
 var MemberEvents = require("../../service/members/Events");
 
 var eventEmitter = new EventEmitter();
+var roomNode = null;
 var roomName = null;
 
 
-function notifyForInitialMute()
-{
+function promptDisplayName() {
+    var message = '<h2 data-i18n="dialog.displayNameRequired">';
+    message += APP.translation.translateString(
+        "dialog.displayNameRequired");
+    message += '</h2>' +
+        '<input name="displayName" type="text" data-i18n=' +
+        '"[placeholder]defaultNickname" placeholder="' +
+        APP.translation.translateString(
+            "defaultNickname", {name: "Jane Pink"}) +
+        '" autofocus>';
+
+    var buttonTxt
+        = APP.translation.generateTranslationHTML("dialog.Ok");
+    var buttons = [];
+    buttons.push({title: buttonTxt, value: "ok"});
+
+    messageHandler.openDialog(null, message,
+        true,
+        buttons,
+        function (e, v, m, f) {
+            if (v == "ok") {
+                var displayName = f.displayName;
+                if (displayName) {
+                    VideoLayout.inputDisplayNameHandler(displayName);
+                    return true;
+                }
+            }
+            e.preventDefault();
+        },
+        function () {
+            var form  = $.prompt.getPrompt();
+            var input = form.find("input[name='displayName']");
+            input.focus();
+            var button = form.find("button");
+            button.attr("disabled", "disabled");
+            input.keyup(function () {
+                if(!input.val())
+                    button.attr("disabled", "disabled");
+                else
+                    button.removeAttr("disabled");
+            });
+        }
+    );
+}
+
+function notifyForInitialMute() {
     messageHandler.notify(null, "notify.mutedTitle", "connected",
         "notify.muted", null, {timeOut: 120000});
 }
 
-function setupPrezi()
-{
-    $("#reloadPresentationLink").click(function()
-    {
+function setupPrezi() {
+    $("#reloadPresentationLink").click(function() {
         Prezi.reloadPresentation();
     });
 }
 
-function setupChat()
-{
+function setupChat() {
     Chat.init();
     $("#toggle_smileys").click(function() {
         Chat.toggleSmileys();
@@ -1551,8 +3370,7 @@ function setupToolbars() {
 }
 
 function streamHandler(stream, isMuted) {
-    switch (stream.type)
-    {
+    switch (stream.type) {
         case "audio":
             VideoLayout.changeLocalAudio(stream, isMuted);
             break;
@@ -1567,15 +3385,15 @@ function streamHandler(stream, isMuted) {
 
 function onXmppConnectionFailed(stropheErrorMsg) {
 
-    var title = APP.translation.generateTranslatonHTML(
+    var title = APP.translation.generateTranslationHTML(
         "dialog.error");
 
     var message;
     if (stropheErrorMsg) {
-        message = APP.translation.generateTranslatonHTML(
+        message = APP.translation.generateTranslationHTML(
             "dialog.connectErrorWithMsg", {msg: stropheErrorMsg});
     } else {
-        message = APP.translation.generateTranslatonHTML(
+        message = APP.translation.generateTranslationHTML(
             "dialog.connectError");
     }
 
@@ -1594,17 +3412,16 @@ function onDisplayNameChanged(jid, displayName) {
 }
 
 function registerListeners() {
-    APP.RTC.addStreamListener(streamHandler, StreamEventTypes.EVENT_TYPE_LOCAL_CREATED);
-
-    APP.RTC.addStreamListener(streamHandler, StreamEventTypes.EVENT_TYPE_LOCAL_CHANGED);
+    APP.RTC.addStreamListener(streamHandler,
+        StreamEventTypes.EVENT_TYPE_LOCAL_CREATED);
+    APP.RTC.addStreamListener(streamHandler,
+        StreamEventTypes.EVENT_TYPE_LOCAL_CHANGED);
     APP.RTC.addStreamListener(function (stream) {
         VideoLayout.onRemoteStreamAdded(stream);
     }, StreamEventTypes.EVENT_TYPE_REMOTE_CREATED);
-    APP.RTC.addStreamListener(function (jid) {
-        VideoLayout.onVideoTypeChanged(jid);
-    }, StreamEventTypes.EVENT_TYPE_REMOTE_CHANGED);
     APP.RTC.addListener(RTCEvents.LASTN_CHANGED, onLastNChanged);
-    APP.RTC.addListener(RTCEvents.DOMINANTSPEAKER_CHANGED, function (resourceJid) {
+    APP.RTC.addListener(RTCEvents.DOMINANTSPEAKER_CHANGED,
+        function (resourceJid) {
         VideoLayout.onDominantSpeakerChanged(resourceJid);
     });
     APP.RTC.addListener(RTCEvents.LASTN_ENDPOINT_CHANGED,
@@ -1615,25 +3432,29 @@ function registerListeners() {
     APP.RTC.addListener(RTCEvents.AVAILABLE_DEVICES_CHANGED,
         function (devices) {
             VideoLayout.setDeviceAvailabilityIcons(null, devices);
-        })
-    APP.statistics.addAudioLevelListener(function(jid, audioLevel)
-    {
+        });
+    APP.RTC.addListener(RTCEvents.VIDEO_MUTE, UI.setVideoMuteButtonsState);
+    APP.RTC.addListener(RTCEvents.DATA_CHANNEL_OPEN, function () {
+        // when the data channel becomes available, tell the bridge about video
+        // selections so that it can do adaptive simulcast,
+        // we want the notification to trigger even if userJid is undefined,
+        // or null.
+        var userResource = APP.UI.getLargeVideoResource();
+        eventEmitter.emit(UIEvents.SELECTED_ENDPOINT, userResource);
+    });
+    APP.statistics.addAudioLevelListener(function(jid, audioLevel) {
         var resourceJid;
-        if(jid === APP.statistics.LOCAL_JID)
-        {
+        if(jid === APP.statistics.LOCAL_JID) {
             resourceJid = AudioLevels.LOCAL_LEVEL;
-            if(APP.RTC.localAudio.isMuted())
-            {
+            if(APP.RTC.localAudio.isMuted()) {
                 audioLevel = 0;
             }
-        }
-        else
-        {
+        } else {
             resourceJid = Strophe.getResourceFromJid(jid);
         }
 
         AudioLevels.updateAudioLevel(resourceJid, audioLevel,
-            UI.getLargeVideoJid());
+            UI.getLargeVideoResource());
     });
     APP.desktopsharing.addListener(function () {
         ToolbarToggler.showDesktopSharingButton();
@@ -1656,16 +3477,15 @@ function registerListeners() {
         );
     });
     APP.xmpp.addListener(XMPPEvents.RESERVATION_ERROR, function (code, msg) {
-        var title = APP.translation.generateTranslatonHTML(
+        var title = APP.translation.generateTranslationHTML(
             "dialog.reservationError");
-        var message = APP.translation.generateTranslatonHTML(
+        var message = APP.translation.generateTranslationHTML(
             "dialog.reservationErrorMsg", {code: code, msg: msg});
         messageHandler.openDialog(
             title,
             message,
             true, {},
-            function (event, value, message, formVals)
-            {
+            function (event, value, message, formVals) {
                 return false;
             }
         );
@@ -1677,11 +3497,10 @@ function registerListeners() {
     APP.xmpp.addListener(XMPPEvents.MUC_DESTROYED, function (reason) {
         //FIXME: use Session Terminated from translation, but
         // 'reason' text comes from XMPP packet and is not translated
-        var title = APP.translation.generateTranslatonHTML("dialog.sessTerminated");
+        var title = APP.translation.generateTranslationHTML("dialog.sessTerminated");
         messageHandler.openDialog(
             title, reason, true, {},
-            function (event, value, message, formVals)
-            {
+            function (event, value, message, formVals) {
                 return false;
             }
         );
@@ -1693,24 +3512,6 @@ function registerListeners() {
     APP.xmpp.addListener(XMPPEvents.USER_ID_CHANGED, function (from, id) {
         Avatar.setUserAvatar(from, id);
     });
-    APP.xmpp.addListener(XMPPEvents.STREAMS_CHANGED, function (jid, changedStreams) {
-        for(stream in changedStreams)
-        {
-            // might need to update the direction if participant just went from sendrecv to recvonly
-            if (stream.type === 'video' || stream.type === 'screen') {
-                var el = $('#participant_'  + Strophe.getResourceFromJid(jid) + '>video');
-                switch (stream.direction) {
-                    case 'sendrecv':
-                        el.show();
-                        break;
-                    case 'recvonly':
-                        el.hide();
-                        break;
-                }
-            }
-        }
-
-    });
     APP.xmpp.addListener(XMPPEvents.DISPLAY_NAME_CHANGED, onDisplayNameChanged);
     APP.xmpp.addListener(XMPPEvents.MUC_JOINED, onMucJoined);
     APP.xmpp.addListener(XMPPEvents.LOCAL_ROLE_CHANGED, onLocalRoleChanged);
@@ -1718,23 +3519,93 @@ function registerListeners() {
     APP.xmpp.addListener(XMPPEvents.MUC_ROLE_CHANGED, onMucRoleChanged);
     APP.xmpp.addListener(XMPPEvents.PRESENCE_STATUS, onMucPresenceStatus);
     APP.xmpp.addListener(XMPPEvents.SUBJECT_CHANGED, chatSetSubject);
-    APP.xmpp.addListener(XMPPEvents.MESSAGE_RECEIVED, updateChatConversation);
     APP.xmpp.addListener(XMPPEvents.MUC_MEMBER_LEFT, onMucMemberLeft);
     APP.xmpp.addListener(XMPPEvents.PASSWORD_REQUIRED, onPasswordRequired);
-    APP.xmpp.addListener(XMPPEvents.CHAT_ERROR_RECEIVED, chatAddError);
     APP.xmpp.addListener(XMPPEvents.ETHERPAD, initEtherpad);
     APP.xmpp.addListener(XMPPEvents.AUTHENTICATION_REQUIRED,
         onAuthenticationRequired);
+    APP.xmpp.addListener(XMPPEvents.PARTICIPANT_VIDEO_TYPE_CHANGED,
+        onPeerVideoTypeChanged);
     APP.xmpp.addListener(XMPPEvents.DEVICE_AVAILABLE,
         function (resource, devices) {
             VideoLayout.setDeviceAvailabilityIcons(resource, devices);
         });
 
+    APP.xmpp.addListener(XMPPEvents.PARTICIPANT_AUDIO_MUTED,
+        VideoLayout.onAudioMute);
+    APP.xmpp.addListener(XMPPEvents.PARTICIPANT_VIDEO_MUTED,
+        VideoLayout.onVideoMute);
+    APP.xmpp.addListener(XMPPEvents.AUDIO_MUTED_BY_FOCUS, function (doMuteAudio) {
+        UI.setAudioMuted(doMuteAudio);
+    });
     APP.members.addListener(MemberEvents.DTMF_SUPPORT_CHANGED,
-                            onDtmfSupportChanged);
-    APP.xmpp.addListener(XMPPEvents.START_MUTED, function (audio, video) {
+        onDtmfSupportChanged);
+    APP.xmpp.addListener(XMPPEvents.START_MUTED_SETTING_CHANGED, function (audio, video) {
         SettingsMenu.setStartMuted(audio, video);
     });
+    APP.xmpp.addListener(XMPPEvents.START_MUTED_FROM_FOCUS, function (audio, video) {
+        UI.setInitialMuteFromFocus(audio, video);
+    });
+
+    APP.xmpp.addListener(XMPPEvents.JINGLE_FATAL_ERROR, function (session, error) {
+        UI.messageHandler.showError("dialog.sorry",
+            "dialog.internalError");
+    });
+
+    APP.xmpp.addListener(XMPPEvents.SET_LOCAL_DESCRIPTION_ERROR, function () {
+        messageHandler.showError("dialog.error",
+            "dialog.SLDFailure");
+    });
+    APP.xmpp.addListener(XMPPEvents.SET_REMOTE_DESCRIPTION_ERROR, function () {
+        messageHandler.showError("dialog.error",
+            "dialog.SRDFailure");
+    });
+    APP.xmpp.addListener(XMPPEvents.CREATE_ANSWER_ERROR, function () {
+        messageHandler.showError();
+    });
+    APP.xmpp.addListener(XMPPEvents.PROMPT_FOR_LOGIN, function () {
+        // FIXME: re-use LoginDialog which supports retries
+        UI.showLoginPopup(connect);
+    });
+
+    APP.xmpp.addListener(XMPPEvents.FOCUS_DISCONNECTED, function (focusComponent, retrySec) {
+        UI.messageHandler.notify(
+            null, "notify.focus",
+            'disconnected', "notify.focusFail",
+            {component: focusComponent, ms: retrySec});
+    });
+
+    APP.xmpp.addListener(XMPPEvents.ROOM_JOIN_ERROR, function (pres) {
+        UI.messageHandler.openReportDialog(null,
+            "dialog.joinError", pres);
+    });
+    APP.xmpp.addListener(XMPPEvents.ROOM_CONNECT_ERROR, function (pres) {
+        UI.messageHandler.openReportDialog(null,
+            "dialog.connectError", pres);
+    });
+
+    APP.xmpp.addListener(XMPPEvents.READY_TO_JOIN, function () {
+        var roomName = UI.generateRoomName();
+        APP.xmpp.allocateConferenceFocus(roomName, UI.checkForNicknameAndJoin);
+    });
+
+    //NicknameHandler emits this event
+    UI.addListener(UIEvents.NICKNAME_CHANGED, function (nickname) {
+        APP.xmpp.addToPresence("displayName", nickname);
+    });
+
+    UI.addListener(UIEvents.LARGEVIDEO_INIT, function () {
+        AudioLevels.init();
+    });
+
+    if (!interfaceConfig.filmStripOnly) {
+        APP.xmpp.addListener(XMPPEvents.MESSAGE_RECEIVED, updateChatConversation);
+        APP.xmpp.addListener(XMPPEvents.CHAT_ERROR_RECEIVED, chatAddError);
+        // Listens for video interruption events.
+        APP.xmpp.addListener(XMPPEvents.CONNECTION_INTERRUPTED, VideoLayout.onVideoInterrupted);
+        // Listens for video restores events.
+        APP.xmpp.addListener(XMPPEvents.CONNECTION_RESTORED, VideoLayout.onVideoRestored);
+    }
 }
 
 
@@ -1753,14 +3624,12 @@ function setVideoMute(mute, options) {
         options);
 }
 
-function onResize()
-{
+function onResize() {
     Chat.resizeChat();
     VideoLayout.resizeLargeVideoContainer();
 }
 
-function bindEvents()
-{
+function bindEvents() {
     /**
      * Resizes and repositions videos in full screen mode.
      */
@@ -1772,131 +3641,111 @@ function bindEvents()
 
 UI.start = function (init) {
     document.title = interfaceConfig.APP_NAME;
+    var setupWelcomePage = null;
     if(config.enableWelcomePage && window.location.pathname == "/" &&
-        (!window.localStorage.welcomePageDisabled || window.localStorage.welcomePageDisabled == "false"))
-    {
+        (!window.localStorage.welcomePageDisabled ||
+            window.localStorage.welcomePageDisabled == "false")) {
         $("#videoconference_page").hide();
-        var setupWelcomePage = require("./welcome_page/WelcomePage");
+        if (!setupWelcomePage)
+            setupWelcomePage = require("./welcome_page/WelcomePage");
         setupWelcomePage();
 
         return;
     }
 
-    if (interfaceConfig.SHOW_JITSI_WATERMARK) {
-        var leftWatermarkDiv
-            = $("#largeVideoContainer div[class='watermark leftwatermark']");
-
-        leftWatermarkDiv.css({display: 'block'});
-        leftWatermarkDiv.parent().get(0).href
-            = interfaceConfig.JITSI_WATERMARK_LINK;
-    }
-
-    if (interfaceConfig.SHOW_BRAND_WATERMARK) {
-        var rightWatermarkDiv
-            = $("#largeVideoContainer div[class='watermark rightwatermark']");
-
-        rightWatermarkDiv.css({display: 'block'});
-        rightWatermarkDiv.parent().get(0).href
-            = interfaceConfig.BRAND_WATERMARK_LINK;
-        rightWatermarkDiv.get(0).style.backgroundImage
-            = "url(images/rightwatermark.png)";
-    }
-
-    if (interfaceConfig.SHOW_POWERED_BY) {
-        $("#largeVideoContainer>a[class='poweredby']").css({display: 'block'});
-    }
-
     $("#welcome_page").hide();
 
-    $("#videospace").mousemove(function () {
-        return ToolbarToggler.showToolbar();
-    });
     // Set the defaults for prompt dialogs.
-    jQuery.prompt.setDefaults({persistent: false});
+    $.prompt.setDefaults({persistent: false});
+
+
+    registerListeners();
 
     VideoLayout.init(eventEmitter);
-    AudioLevels.init();
     NicknameHandler.init(eventEmitter);
-    registerListeners();
+
     bindEvents();
     setupPrezi();
-    setupToolbars();
-    setupChat();
-
+    if (!interfaceConfig.filmStripOnly) {
+        $("#videospace").mousemove(function () {
+            return ToolbarToggler.showToolbar();
+        });
+        setupToolbars();
+        setupChat();
+        // Display notice message at the top of the toolbar
+        if (config.noticeMessage) {
+            $('#noticeText').text(config.noticeMessage);
+            $('#notice').css({display: 'block'});
+        }
+        $("#downloadlog").click(function (event) {
+            dump(event.target);
+        });
+    }
+    else
+    {
+        $("#header").css("display", "none");
+        $("#bottomToolbar").css("display", "none");
+        $("#downloadlog").css("display", "none");
+        $("#remoteVideos").css("padding", "0px 0px 18px 0px");
+        $("#remoteVideos").css("right", "0px");
+        messageHandler.disableNotifications();
+        $('body').popover("disable");
+//        $("[data-toggle=popover]").popover("disable");
+        JitsiPopover.enabled = false;
+    }
 
     document.title = interfaceConfig.APP_NAME;
 
-    $("#downloadlog").click(function (event) {
-        dump(event.target);
-    });
 
-    if(config.enableWelcomePage && window.location.pathname == "/" &&
-        (!window.localStorage.welcomePageDisabled || window.localStorage.welcomePageDisabled == "false"))
-    {
-        $("#videoconference_page").hide();
-        var setupWelcomePage = require("./welcome_page/WelcomePage");
-        setupWelcomePage();
 
-        return;
+
+
+    if(config.requireDisplayName) {
+        var currentSettings = Settings.getSettings();
+        if (!currentSettings.displayName) {
+            promptDisplayName();
+        }
     }
 
-    $("#welcome_page").hide();
+    init();
 
-    // Display notice message at the top of the toolbar
-    if (config.noticeMessage) {
-        $('#noticeText').text(config.noticeMessage);
-        $('#notice').css({display: 'block'});
-    }
-
-    document.getElementById('largeVideo').volume = 0;
-
-    if (!$('#settings').is(':visible')) {
-        console.log('init');
-        init();
-    } else {
-        loginInfo.onsubmit = function (e) {
-            if (e.preventDefault) e.preventDefault();
-            $('#settings').hide();
-            init();
+    if (!interfaceConfig.filmStripOnly) {
+        toastr.options = {
+            "closeButton": true,
+            "debug": false,
+            "positionClass": "notification-bottom-right",
+            "onclick": null,
+            "showDuration": "300",
+            "hideDuration": "1000",
+            "timeOut": "2000",
+            "extendedTimeOut": "1000",
+            "showEasing": "swing",
+            "hideEasing": "linear",
+            "showMethod": "fadeIn",
+            "hideMethod": "fadeOut",
+            "reposition": function () {
+                if (PanelToggler.isVisible()) {
+                    $("#toast-container").addClass("notification-bottom-right-center");
+                } else {
+                    $("#toast-container").removeClass("notification-bottom-right-center");
+                }
+            },
+            "newestOnTop": false
         };
+
+
+        SettingsMenu.init();
     }
 
-    toastr.options = {
-        "closeButton": true,
-        "debug": false,
-        "positionClass": "notification-bottom-right",
-        "onclick": null,
-        "showDuration": "300",
-        "hideDuration": "1000",
-        "timeOut": "2000",
-        "extendedTimeOut": "1000",
-        "showEasing": "swing",
-        "hideEasing": "linear",
-        "showMethod": "fadeIn",
-        "hideMethod": "fadeOut",
-        "reposition": function() {
-            if(PanelToggler.isVisible()) {
-                $("#toast-container").addClass("notification-bottom-right-center");
-            } else {
-                $("#toast-container").removeClass("notification-bottom-right-center");
-            }
-        },
-        "newestOnTop": false
-    };
-
-    SettingsMenu.init();
-
 };
 
-function chatAddError(errorMessage, originalText)
-{
+function chatAddError(errorMessage, originalText) {
     return Chat.chatAddError(errorMessage, originalText);
-};
+}
 
-function chatSetSubject(text)
-{
+function chatSetSubject(text) {
     return Chat.chatSetSubject(text);
-};
+}
 
 function updateChatConversation(from, displayName, message, myjid, stamp) {
     return Chat.updateChatConversation(from, displayName, message, myjid, stamp);
@@ -1904,18 +3753,22 @@ function updateChatConversation(from, displayName, message, myjid, stamp) {
 
 function onMucJoined(jid, info) {
     Toolbar.updateRoomUrl(window.location.href);
-    var meHTML = APP.translation.generateTranslatonHTML("me");
+    var meHTML = APP.translation.generateTranslationHTML("me");
     $("#localNick").html(Strophe.getResourceFromJid(jid) + " (" + meHTML + ")");
 
     var settings = Settings.getSettings();
+
+    // Make sure we configure our avatar id, before creating avatar for us
+    Avatar.setUserAvatar(jid, settings.email || settings.uid);
+
     // Add myself to the contact list.
-    ContactList.addContact(jid, settings.email || settings.uid);
+    ContactList.addContact(jid);
 
     // Once we've joined the muc show the toolbar
     ToolbarToggler.showToolbar();
 
-    var displayName = !config.displayJids
-        ? info.displayName : Strophe.getResourceFromJid(jid);
+    var displayName =
+        config.displayJids ? Strophe.getResourceFromJid(jid) : info.displayName;
 
     if (displayName)
         onDisplayNameChanged('localVideoContainer', displayName);
@@ -1935,32 +3788,17 @@ function onMucMemberLeft(jid) {
     messageHandler.notify(displayName,'notify.somebody',
         'disconnected',
         'notify.disconnected');
-    if(!config.startAudioMuted ||
-        config.startAudioMuted > APP.members.size())
+    if (!config.startAudioMuted ||
+        config.startAudioMuted > APP.members.size()) {
         UIUtil.playSoundNotification('userLeft');
-    // Need to call this with a slight delay, otherwise the element couldn't be
-    // found for some reason.
-    // XXX(gp) it works fine without the timeout for me (with Chrome 38).
-    window.setTimeout(function () {
-        var container = document.getElementById(
-                'participant_' + Strophe.getResourceFromJid(jid));
-        if (container) {
-            ContactList.removeContact(jid);
-            VideoLayout.removeConnectionIndicator(jid);
-            // hide here, wait for video to close before removing
-            $(container).hide();
-            VideoLayout.resizeThumbnails();
-        }
-    }, 10);
+    }
+
+    ContactList.removeContact(jid);
 
     VideoLayout.participantLeft(jid);
+}
 
-};
-
-
-function onLocalRoleChanged(jid, info, pres, isModerator)
-{
-
+function onLocalRoleChanged(jid, info, pres, isModerator) {
     console.info("My role changed, new role: " + info.role);
     onModeratorStatusChanged(isModerator);
     VideoLayout.showModeratorIndicator();
@@ -1970,11 +3808,12 @@ function onLocalRoleChanged(jid, info, pres, isModerator)
         Authentication.closeAuthenticationWindow();
         messageHandler.notify(null, "notify.me",
             'connected', "notify.moderator");
+
+        Toolbar.checkAutoRecord();
     }
 }
 
 function onModeratorStatusChanged(isModerator) {
-
     Toolbar.showSipCallButton(isModerator);
     Toolbar.showRecordingButton(
         isModerator); //&&
@@ -2028,15 +3867,23 @@ function onMucMemberJoined(jid, id, displayName) {
         'connected',
         'notify.connected');
 
-    if(!config.startAudioMuted ||
+    if (!config.startAudioMuted ||
         config.startAudioMuted > APP.members.size())
         UIUtil.playSoundNotification('userJoined');
+
+    // Configure avatar
+    Avatar.setUserAvatar(jid, id);
+
     // Add Peer's container
-    VideoLayout.ensurePeerContainerExists(jid,id);
+    VideoLayout.ensurePeerContainerExists(jid);
 }
 
 function onMucPresenceStatus(jid, info) {
     VideoLayout.setPresenceStatus(Strophe.getResourceFromJid(jid), info.status);
+}
+
+function onPeerVideoTypeChanged(resourceJid, newVideoType) {
+    VideoLayout.onVideoTypeChanged(resourceJid, newVideoType);
 }
 
 function onMucRoleChanged(role, displayName) {
@@ -2047,8 +3894,7 @@ function onMucRoleChanged(role, displayName) {
         if (!displayName) {
             messageKey = "notify.grantedToUnknown";
         }
-        else
-        {
+        else {
             messageKey = "notify.grantedTo";
             messageOptions = {to: displayName};
         }
@@ -2064,7 +3910,7 @@ function onAuthenticationRequired(intervalCallback) {
         roomName, intervalCallback, function () {
             Toolbar.authenticateClicked();
         });
-};
+}
 
 
 function onLastNChanged(oldValue, newValue) {
@@ -2098,23 +3944,20 @@ UI.inputDisplayNameHandler = function (value) {
     VideoLayout.inputDisplayNameHandler(value);
 };
 
-
-UI.getLargeVideoJid = function()
-{
-    return VideoLayout.getLargeVideoJid();
+UI.getLargeVideoResource = function () {
+    return VideoLayout.getLargeVideoResource();
 };
 
-UI.generateRoomName = function() {
-    if(roomName)
-        return roomName;
-    var roomnode = null;
+UI.getRoomNode = function () {
+    if (roomNode)
+        return roomNode;
     var path = window.location.pathname;
 
     // determinde the room node from the url
     // TODO: just the roomnode or the whole bare jid?
     if (config.getroomnode && typeof config.getroomnode === 'function') {
         // custom function might be responsible for doing the pushstate
-        roomnode = config.getroomnode(path);
+        roomNode = config.getroomnode(path);
     } else {
         /* fall back to default strategy
          * this is making assumptions about how the URL->room mapping happens.
@@ -2125,28 +3968,31 @@ UI.generateRoomName = function() {
          }
          */
         if (path.length > 1) {
-            roomnode = path.substr(1).toLowerCase();
+            roomNode = path.substr(1).toLowerCase();
         } else {
             var word = RoomNameGenerator.generateRoomWithoutSeparator();
-            roomnode = word.toLowerCase();
-
+            roomNode = word.toLowerCase();
             window.history.pushState('VideoChat',
-                    'Room: ' + word, window.location.pathname + word);
+                'Room: ' + word, window.location.pathname + word);
         }
     }
+    return roomNode;
+};
 
-    roomName = roomnode + '@' + config.hosts.muc;
+UI.generateRoomName = function () {
+    if (roomName)
+        return roomName;
+    var roomNode = UI.getRoomNode();
+    roomName = roomNode + '@' + config.hosts.muc;
     return roomName;
 };
 
 
-UI.connectionIndicatorShowMore = function(jid)
-{
+UI.connectionIndicatorShowMore = function(jid) {
     return VideoLayout.showMore(jid);
 };
 
-UI.showLoginPopup = function(callback)
-{
+UI.showLoginPopup = function(callback) {
     console.log('password is required');
     var message = '<h2 data-i18n="dialog.passwordRequired">';
     message += APP.translation.translateString(
@@ -2170,7 +4016,7 @@ UI.showLoginPopup = function(callback)
         null, null, ':input:first'
 
     );
-}
+};
 
 UI.checkForNicknameAndJoin = function () {
 
@@ -2189,12 +4035,12 @@ function dump(elem, filename) {
     elem = elem.parentNode;
     elem.download = filename || 'meetlog.json';
     elem.href = 'data:application/json;charset=utf-8,\n';
-    var data = APP.xmpp.populateData();
+    var data = APP.xmpp.getJingleLog();
     var metadata = {};
     metadata.time = new Date();
     metadata.url = window.location.href;
     metadata.ua = navigator.userAgent;
-    var log = APP.xmpp.getLogger();
+    var log = APP.xmpp.getXmppLog();
     if (log) {
         metadata.xmpp = log;
     }
@@ -2208,10 +4054,13 @@ UI.getRoomName = function () {
 };
 
 UI.setInitialMuteFromFocus = function (muteAudio, muteVideo) {
-    if(muteAudio || muteVideo) notifyForInitialMute();
-    if(muteAudio) UI.setAudioMuted(true);
-    if(muteVideo) UI.setVideoMute(true);
-}
+    if (muteAudio || muteVideo)
+        notifyForInitialMute();
+    if (muteAudio)
+        UI.setAudioMuted(true);
+    if (muteVideo)
+        UI.setVideoMute(true);
+};
 
 /**
  * Mutes/unmutes the local video.
@@ -2232,50 +4081,48 @@ UI.toggleAudio = function() {
  */
 UI.setAudioMuted = function (mute, earlyMute) {
     var audioMute = null;
-    if(earlyMute)
+    if (earlyMute)
         audioMute = function (mute, cb) {
             return APP.xmpp.sendAudioInfoPresence(mute, cb);
         };
     else
         audioMute = function (mute, cb) {
             return APP.xmpp.setAudioMute(mute, cb);
-        }
-    if(!audioMute(mute, function () {
-        VideoLayout.showLocalAudioIndicator(mute);
+        };
+    if (!audioMute(mute, function () {
+            VideoLayout.showLocalAudioIndicator(mute);
 
-        UIUtil.buttonClick("#mute", "icon-microphone icon-mic-disabled");
-    }))
-    {
+            UIUtil.buttonClick("#toolbar_button_mute", "icon-microphone icon-mic-disabled");
+        })) {
         // We still click the button.
-        UIUtil.buttonClick("#mute", "icon-microphone icon-mic-disabled");
+        UIUtil.buttonClick("#toolbar_button_mute", "icon-microphone icon-mic-disabled");
         return;
     }
-
-}
+};
 
 UI.addListener = function (type, listener) {
     eventEmitter.on(type, listener);
-}
+};
 
 UI.clickOnVideo = function (videoNumber) {
     var remoteVideos = $(".videocontainer:not(#mixedstream)");
     if (remoteVideos.length > videoNumber) {
         remoteVideos[videoNumber].click();
     }
-}
+};
 
 //Used by torture
 UI.showToolbar = function () {
     return ToolbarToggler.showToolbar();
-}
+};
 
 //Used by torture
 UI.dockToolbar = function (isDock) {
     return ToolbarToggler.dockToolbar(isDock);
-}
+};
 
 UI.setVideoMuteButtonsState = function (mute) {
-    var video = $('#video');
+    var video = $('#toolbar_button_camera');
     var communicativeClass = "icon-camera";
     var muteClass = "icon-camera icon-camera-disabled";
 
@@ -2286,27 +4133,34 @@ UI.setVideoMuteButtonsState = function (mute) {
         video.removeClass(muteClass);
         video.addClass(communicativeClass);
     }
-}
+};
 
+UI.userAvatarChanged = function (resourceJid, thumbUrl, contactListUrl) {
+    VideoLayout.userAvatarChanged(resourceJid, thumbUrl);
+    ContactList.userAvatarChanged(resourceJid, contactListUrl);
+    if(resourceJid === APP.xmpp.myResource())
+        SettingsMenu.changeAvatar(thumbUrl);
+};
 
 UI.setVideoMute = setVideoMute;
 
 module.exports = UI;
 
 
-},{"../../service/RTC/RTCEvents":97,"../../service/RTC/StreamEventTypes":99,"../../service/connectionquality/CQEvents":102,"../../service/desktopsharing/DesktopSharingEventTypes":103,"../../service/members/Events":104,"../../service/xmpp/XMPPEvents":106,"./../settings/Settings":45,"./audio_levels/AudioLevels.js":10,"./authentication/Authentication":12,"./avatar/Avatar":14,"./etherpad/Etherpad.js":15,"./prezi/Prezi.js":16,"./side_pannels/SidePanelToggler":18,"./side_pannels/chat/Chat.js":19,"./side_pannels/contactlist/ContactList":23,"./side_pannels/settings/SettingsMenu":24,"./toolbars/BottomToolbar":25,"./toolbars/Toolbar":26,"./toolbars/ToolbarToggler":27,"./util/MessageHandler":29,"./util/NicknameHandler":30,"./util/UIUtil":31,"./videolayout/VideoLayout.js":37,"./welcome_page/RoomnameGenerator":38,"./welcome_page/WelcomePage":39,"events":107}],10:[function(require,module,exports){
+},{"../../service/RTC/RTCEvents":168,"../../service/RTC/StreamEventTypes":170,"../../service/UI/UIEvents":171,"../../service/connectionquality/CQEvents":173,"../../service/desktopsharing/DesktopSharingEventTypes":174,"../../service/members/Events":175,"../../service/xmpp/XMPPEvents":177,"../RTC/RTCBrowserType":10,"./../settings/Settings":51,"./audio_levels/AudioLevels.js":14,"./authentication/Authentication":16,"./avatar/Avatar":18,"./etherpad/Etherpad.js":19,"./prezi/Prezi.js":20,"./side_pannels/SidePanelToggler":22,"./side_pannels/chat/Chat.js":23,"./side_pannels/contactlist/ContactList":27,"./side_pannels/settings/SettingsMenu":28,"./toolbars/BottomToolbar":29,"./toolbars/Toolbar":30,"./toolbars/ToolbarToggler":31,"./util/JitsiPopover":32,"./util/MessageHandler":33,"./util/NicknameHandler":34,"./util/UIUtil":35,"./videolayout/VideoLayout.js":41,"./welcome_page/RoomnameGenerator":42,"./welcome_page/WelcomePage":43,"events":1}],14:[function(require,module,exports){
+/* global APP, interfaceConfig, $, Strophe */
 var CanvasUtil = require("./CanvasUtils");
 
-var ASDrawContext = $('#activeSpeakerAudioLevel')[0].getContext('2d');
+var ASDrawContext = null;
 
 function initActiveSpeakerAudioLevels() {
     var ASRadius = interfaceConfig.ACTIVE_SPEAKER_AVATAR_SIZE / 2;
     var ASCenter = (interfaceConfig.ACTIVE_SPEAKER_AVATAR_SIZE + ASRadius) / 2;
 
-// Draw a circle.
+    // Draw a circle.
     ASDrawContext.arc(ASCenter, ASCenter, ASRadius, 0, 2 * Math.PI);
 
-// Add a shadow around the circle
+    // Add a shadow around the circle
     ASDrawContext.shadowColor = interfaceConfig.SHADOW_COLOR;
     ASDrawContext.shadowOffsetX = 0;
     ASDrawContext.shadowOffsetY = 0;
@@ -2321,8 +4175,9 @@ var AudioLevels = (function(my) {
     my.LOCAL_LEVEL = 'local';
 
     my.init = function () {
+        ASDrawContext = $('#activeSpeakerAudioLevel')[0].getContext('2d');
         initActiveSpeakerAudioLevels();
-    }
+    };
 
     /**
      * Updates the audio level canvas for the given peerJid. If the canvas
@@ -2409,7 +4264,7 @@ var AudioLevels = (function(my) {
             resourceJid = APP.xmpp.myResource();
         }
 
-        if(resourceJid  === largeVideoResourceJid) {
+        if(resourceJid === largeVideoResourceJid) {
             window.requestAnimationFrame(function () {
                 AudioLevels.updateActiveSpeakerAudioLevel(audioLevel);
             });
@@ -2417,9 +4272,8 @@ var AudioLevels = (function(my) {
     };
 
     my.updateActiveSpeakerAudioLevel = function(audioLevel) {
-        if($("#activeSpeaker").css("visibility") == "hidden")
+        if($("#activeSpeaker").css("visibility") == "hidden" || ASDrawContext === null)
             return;
-
 
         ASDrawContext.clearRect(0, 0, 300, 300);
         if(audioLevel == 0)
@@ -2462,10 +4316,9 @@ var AudioLevels = (function(my) {
              * error. Since audio levels are frequently updated, the errors have
              * been observed to pile into the console, strain the CPU.
              */
-            if (audioLevelCanvasOrig)
-            {
-                audioLevelCanvasCache[resourceJid]
-                    = CanvasUtil.cloneCanvas(audioLevelCanvasOrig);
+            if (audioLevelCanvasOrig) {
+                audioLevelCanvasCache[resourceJid] =
+                    CanvasUtil.cloneCanvas(audioLevelCanvasOrig);
             }
         }
 
@@ -2480,15 +4333,16 @@ var AudioLevels = (function(my) {
 
         var shadowLevel = getShadowLevel(audioLevel);
 
-        if (shadowLevel > 0)
+        if (shadowLevel > 0) {
             // drawContext, x, y, w, h, r, shadowColor, shadowLevel
-            CanvasUtil.drawRoundRectGlow(   drawContext,
-                interfaceConfig.CANVAS_EXTRA/2, interfaceConfig.CANVAS_EXTRA/2,
+            CanvasUtil.drawRoundRectGlow(drawContext,
+                interfaceConfig.CANVAS_EXTRA / 2, interfaceConfig.CANVAS_EXTRA / 2,
                 canvas.width - interfaceConfig.CANVAS_EXTRA,
                 canvas.height - interfaceConfig.CANVAS_EXTRA,
                 interfaceConfig.CANVAS_RADIUS,
                 interfaceConfig.SHADOW_COLOR,
                 shadowLevel);
+        }
     }
 
     /**
@@ -2518,9 +4372,8 @@ var AudioLevels = (function(my) {
      */
     function getVideoSpanId(resourceJid) {
         var videoSpanId = null;
-        if (resourceJid === AudioLevels.LOCAL_LEVEL
-                || (APP.xmpp.myResource() && resourceJid
-                    === APP.xmpp.myResource()))
+        if (resourceJid === AudioLevels.LOCAL_LEVEL ||
+            (APP.xmpp.myResource() && resourceJid === APP.xmpp.myResource()))
             videoSpanId = 'localVideoContainer';
         else
             videoSpanId = 'participant_' + resourceJid;
@@ -2548,10 +4401,10 @@ var AudioLevels = (function(my) {
 
         if (resized)
             Object.keys(audioLevelCanvasCache).forEach(function (resourceJid) {
-                audioLevelCanvasCache[resourceJid].width
-                    = width + interfaceConfig.CANVAS_EXTRA;
-                audioLevelCanvasCache[resourceJid].height
-                    = height + interfaceConfig.CANVAS_EXTRA;
+                audioLevelCanvasCache[resourceJid].width =
+                    width + interfaceConfig.CANVAS_EXTRA;
+                audioLevelCanvasCache[resourceJid].height =
+                    height + interfaceConfig.CANVAS_EXTRA;
             });
     });
 
@@ -2560,7 +4413,7 @@ var AudioLevels = (function(my) {
 })(AudioLevels || {});
 
 module.exports = AudioLevels;
-},{"./CanvasUtils":11}],11:[function(require,module,exports){
+},{"./CanvasUtils":15}],15:[function(require,module,exports){
 /**
  * Utility class for drawing canvas shapes.
  */
@@ -2672,7 +4525,7 @@ var CanvasUtil = (function(my) {
 })(CanvasUtil || {});
 
 module.exports = CanvasUtil;
-},{}],12:[function(require,module,exports){
+},{}],16:[function(require,module,exports){
 /* global $, APP*/
 
 var LoginDialog = require('./LoginDialog');
@@ -2697,13 +4550,13 @@ var Authentication = {
         var room = roomName.substr(0, roomName.indexOf('@'));
 
         var title
-            = APP.translation.generateTranslatonHTML("dialog.WaitingForHost");
+            = APP.translation.generateTranslationHTML("dialog.WaitingForHost");
         var msg
-            = APP.translation.generateTranslatonHTML(
+            = APP.translation.generateTranslationHTML(
                     "dialog.WaitForHostMsg", {room: room});
 
         var buttonTxt
-            = APP.translation.generateTranslatonHTML("dialog.IamHost");
+            = APP.translation.generateTranslationHTML("dialog.IamHost");
         var buttons = [];
         buttons.push({title: buttonTxt, value: "authNow"});
 
@@ -2754,7 +4607,7 @@ var Authentication = {
                     Moderator.allocateConferenceFocus(roomName, function () {
                         // If it's not "on the fly" authentication now join
                         // the conference room
-                        if (!APP.xmpp.getMUCJoined()) {
+                        if (!APP.xmpp.isMUCJoined()) {
                             APP.UI.checkForNicknameAndJoin();
                         }
                     });
@@ -2797,7 +4650,7 @@ var Authentication = {
 };
 
 module.exports = Authentication;
-},{"../../xmpp/moderator":55,"./LoginDialog":13}],13:[function(require,module,exports){
+},{"../../xmpp/moderator":64,"./LoginDialog":17}],17:[function(require,module,exports){
 /* global $, APP, config*/
 
 var XMPP = require('../../xmpp/xmpp');
@@ -2831,9 +4684,9 @@ function Dialog(callback, obtainSession) {
         'type="password" data-i18n="[placeholder]dialog.userPassword"' +
         ' placeholder="user password">';
 
-    var okButton = APP.translation.generateTranslatonHTML("dialog.Ok");
+    var okButton = APP.translation.generateTranslationHTML("dialog.Ok");
 
-    var cancelButton = APP.translation.generateTranslatonHTML("dialog.Cancel");
+    var cancelButton = APP.translation.generateTranslationHTML("dialog.Cancel");
 
     var states = {
         login: {
@@ -3026,48 +4879,10 @@ var LoginDialog = {
 };
 
 module.exports = LoginDialog;
-},{"../../xmpp/moderator":55,"../../xmpp/xmpp":63}],14:[function(require,module,exports){
+},{"../../xmpp/moderator":64,"../../xmpp/xmpp":73}],18:[function(require,module,exports){
 var Settings = require("../../settings/Settings");
-var MediaStreamType = require("../../../service/RTC/MediaStreamTypes");
 
 var users = {};
-var activeSpeakerJid;
-
-function setVisibility(selector, show) {
-    if (selector && selector.length > 0) {
-        selector.css("visibility", show ? "visible" : "hidden");
-    }
-}
-
-function isUserMuted(jid) {
-    // XXX(gp) we may want to rename this method to something like
-    // isUserStreaming, for example.
-    if (jid != APP.xmpp.myJid()) {
-        var resource = Strophe.getResourceFromJid(jid);
-        if (!require("../videolayout/VideoLayout").isInLastN(resource)) {
-            return true;
-        }
-    }
-    else
-    {
-        var localVideo = APP.RTC.localVideo;
-        return (!localVideo || localVideo.isMuted());
-    }
-
-    if (!APP.RTC.remoteStreams[jid] || !APP.RTC.remoteStreams[jid][MediaStreamType.VIDEO_TYPE]) {
-        return null;
-    }
-    return APP.RTC.remoteStreams[jid][MediaStreamType.VIDEO_TYPE].muted;
-}
-
-function getGravatarUrl(id, size) {
-    if(id === APP.xmpp.myJid() || !id) {
-        id = Settings.getSettings().uid;
-    }
-    return 'https://www.gravatar.com/avatar/' +
-        MD5.hexdigest(id.trim().toLowerCase()) +
-        "?d=wavatar&size=" + (size || "30");
-}
 
 var Avatar = {
 
@@ -3084,107 +4899,55 @@ var Avatar = {
             }
             users[jid] = id;
         }
-        var thumbUrl = getGravatarUrl(users[jid] || jid, 100);
-        var contactListUrl = getGravatarUrl(users[jid] || jid);
+        var thumbUrl = this.getThumbUrl(jid);
+        var contactListUrl = this.getContactListUrl(jid);
         var resourceJid = Strophe.getResourceFromJid(jid);
-        var thumbnail = $('#participant_' + resourceJid);
-        var avatar = $('#avatar_' + resourceJid);
 
-        // set the avatar in the settings menu if it is local user and get the
-        // local video container
-        if (jid === APP.xmpp.myJid()) {
-            $('#avatar').get(0).src = thumbUrl;
-            thumbnail = $('#localVideoContainer');
-        }
-
-        // set the avatar in the contact list
-        var contact = $('#' + resourceJid + '>img');
-        if (contact && contact.length > 0) {
-            contact.get(0).src = contactListUrl;
-        }
-
-        // set the avatar in the thumbnail
-        if (avatar && avatar.length > 0) {
-            avatar[0].src = thumbUrl;
-        } else {
-            if (thumbnail && thumbnail.length > 0) {
-                avatar = document.createElement('img');
-                avatar.id = 'avatar_' + resourceJid;
-                avatar.className = 'userAvatar';
-                avatar.src = thumbUrl;
-                thumbnail.append(avatar);
-            }
-        }
-
-        //if the user is the current active speaker - update the active speaker
-        // avatar
-        if (jid === activeSpeakerJid) {
-            this.updateActiveSpeakerAvatarSrc(jid);
-        }
+        APP.UI.userAvatarChanged(resourceJid, thumbUrl, contactListUrl);
     },
-
     /**
-     * Hides or shows the user's avatar
-     * @param jid jid of the user
-     * @param show whether we should show the avatar or not
-     * video because there is no dominant speaker and no focused speaker
+     * Returns image URL for the avatar to be displayed on large video area
+     * where current active speaker is presented.
+     * @param jid full MUC jid of the user for whom we want to obtain avatar URL
      */
-    showUserAvatar: function (jid, show) {
-        if (users[jid]) {
-            var resourceJid = Strophe.getResourceFromJid(jid);
-            var video = $('#participant_' + resourceJid + '>video');
-            var avatar = $('#avatar_' + resourceJid);
-
-            if (jid === APP.xmpp.myJid()) {
-                video = $('#localVideoWrapper>video');
-            }
-            if (show === undefined || show === null) {
-                show = isUserMuted(jid);
-            }
-
-            //if the user is the currently focused, the dominant speaker or if
-            //there is no focused and no dominant speaker and the large video is
-            //currently shown
-            if (activeSpeakerJid === jid && require("../videolayout/LargeVideo").isLargeVideoOnTop()) {
-                setVisibility($("#largeVideo"), !show);
-                setVisibility($('#activeSpeaker'), show);
-                setVisibility(avatar, false);
-                setVisibility(video, false);
-            } else {
-                if (video && video.length > 0) {
-                    setVisibility(video, !show);
-                }
-                setVisibility(avatar, show);
-
-            }
-        }
+    getActiveSpeakerUrl: function (jid) {
+        return this.getGravatarUrl(jid, 100);
     },
-
     /**
-     * Updates the src of the active speaker avatar
-     * @param jid of the current active speaker
+     * Returns image URL for the avatar to be displayed on small video thumbnail
+     * @param jid full MUC jid of the user for whom we want to obtain avatar URL
      */
-    updateActiveSpeakerAvatarSrc: function (jid) {
-        var avatar = $("#activeSpeakerAvatar")[0];
-        var url = getGravatarUrl(users[jid],
-            interfaceConfig.ACTIVE_SPEAKER_AVATAR_SIZE);
-        if (jid === activeSpeakerJid && avatar.src === url) {
-            return;
+    getThumbUrl: function (jid) {
+        return this.getGravatarUrl(jid, 100);
+    },
+    /**
+     * Returns the URL for the avatar to be displayed as contactlist item
+     * @param jid full MUC jid of the user for whom we want to obtain avatar URL
+     */
+    getContactListUrl: function (jid) {
+        return this.getGravatarUrl(jid, 30);
+    },
+    getGravatarUrl: function (jid, size) {
+        if (!jid) {
+            console.error("Get gravatar - jid is undefined");
+            return null;
         }
-        activeSpeakerJid = jid;
-        var isMuted = isUserMuted(jid);
-        if (jid && isMuted !== null) {
-            avatar.src = url;
-            setVisibility($("#largeVideo"), !isMuted);
-            Avatar.showUserAvatar(jid, isMuted);
+        var id = users[jid];
+        if (!id) {
+            console.warn(
+                "No avatar stored yet for " + jid + " - using JID as ID");
+            id = jid;
         }
+        return 'https://www.gravatar.com/avatar/' +
+            MD5.hexdigest(id.trim().toLowerCase()) +
+            "?d=wavatar&size=" + (size || "30");
     }
 
 };
 
 
 module.exports = Avatar;
-},{"../../../service/RTC/MediaStreamTypes":95,"../../settings/Settings":45,"../videolayout/LargeVideo":33,"../videolayout/VideoLayout":37}],15:[function(require,module,exports){
+},{"../../settings/Settings":51}],19:[function(require,module,exports){
 /* global $, config,
    setLargeVideoVisible, Util */
 
@@ -3217,39 +4980,30 @@ function resize() {
  * Creates the Etherpad button and adds it to the toolbar.
  */
 function enableEtherpadButton() {
-    if (!$('#etherpadButton').is(":visible"))
-        $('#etherpadButton').css({display: 'inline-block'});
+    if (!$('#toolbar_button_etherpad').is(":visible"))
+        $('#toolbar_button_etherpad').css({display: 'inline-block'});
 }
 
 /**
  * Creates the IFrame for the etherpad.
  */
 function createIFrame() {
-    etherpadIFrame = document.createElement('iframe');
-    etherpadIFrame.src = domain + etherpadName + options;
-    etherpadIFrame.frameBorder = 0;
-    etherpadIFrame.scrolling = "no";
-    etherpadIFrame.width = $('#largeVideoContainer').width() || 640;
-    etherpadIFrame.height = $('#largeVideoContainer').height() || 480;
-    etherpadIFrame.setAttribute('style', 'visibility: hidden;');
+    etherpadIFrame = VideoLayout.createEtherpadIframe(
+            domain + etherpadName + options, function() {
 
-    document.getElementById('etherpad').appendChild(etherpadIFrame);
-
-    etherpadIFrame.onload = function() {
-
-        document.domain = document.domain;
-        bubbleIframeMouseMove(etherpadIFrame);
-        setTimeout(function() {
-            // the iframes inside of the etherpad are
-            // not yet loaded when the etherpad iframe is loaded
-            var outer = etherpadIFrame.
-                contentDocument.getElementsByName("ace_outer")[0];
-            bubbleIframeMouseMove(outer);
-            var inner = outer.
-                contentDocument.getElementsByName("ace_inner")[0];
-            bubbleIframeMouseMove(inner);
-        }, 2000);
-    };
+                document.domain = document.domain;
+                bubbleIframeMouseMove(etherpadIFrame);
+                setTimeout(function() {
+                    // the iframes inside of the etherpad are
+                    // not yet loaded when the etherpad iframe is loaded
+                    var outer = etherpadIFrame.
+                        contentDocument.getElementsByName("ace_outer")[0];
+                    bubbleIframeMouseMove(outer);
+                    var inner = outer.
+                        contentDocument.getElementsByName("ace_inner")[0];
+                    bubbleIframeMouseMove(inner);
+                }, 2000);
+            });
 }
 
 function bubbleIframeMouseMove(iframe){
@@ -3278,15 +5032,6 @@ function bubbleIframeMouseMove(iframe){
         iframe.dispatchEvent(evt);
     };
 }
-
-
-/**
- * On video selected event.
- */
-$(document).bind('video.selected', function (event, isPresentation) {
-    if (config.etherpad_base && etherpadIFrame && etherpadIFrame.style.visibility !== 'hidden')
-        Etherpad.toggleEtherpad(isPresentation);
-});
 
 
 var Etherpad = {
@@ -3319,54 +5064,22 @@ var Etherpad = {
         if (!etherpadIFrame)
             createIFrame();
 
-        var largeVideo = null;
-        if (Prezi.isPresentationVisible())
-            largeVideo = $('#presentation>iframe');
-        else
-            largeVideo = $('#largeVideo');
 
-        if ($('#etherpad>iframe').css('visibility') === 'hidden') {
-            $('#activeSpeaker').css('visibility', 'hidden');
-            largeVideo.fadeOut(300, function () {
-                if (Prezi.isPresentationVisible()) {
-                    largeVideo.css({opacity: '0'});
-                } else {
-                    VideoLayout.setLargeVideoVisible(false);
-                }
-            });
-
-            $('#etherpad>iframe').fadeIn(300, function () {
-                document.body.style.background = '#eeeeee';
-                $('#etherpad>iframe').css({visibility: 'visible'});
-                $('#etherpad').css({zIndex: 2});
-            });
+        if(VideoLayout.getLargeVideoState() === "etherpad")
+        {
+            VideoLayout.setLargeVideoState("video");
         }
-        else if ($('#etherpad>iframe')) {
-            $('#etherpad>iframe').fadeOut(300, function () {
-                $('#etherpad>iframe').css({visibility: 'hidden'});
-                $('#etherpad').css({zIndex: 0});
-                document.body.style.background = 'black';
-            });
-
-            if (!isPresentation) {
-                $('#largeVideo').fadeIn(300, function () {
-                    VideoLayout.setLargeVideoVisible(true);
-                });
-            }
+        else
+        {
+            VideoLayout.setLargeVideoState("etherpad");
         }
         resize();
-    },
-
-    isVisible: function() {
-        var etherpadIframe = $('#etherpad>iframe');
-        return etherpadIframe && etherpadIframe.is(':visible');
     }
-
 };
 
 module.exports = Etherpad;
 
-},{"../prezi/Prezi":16,"../util/UIUtil":31,"../videolayout/VideoLayout":37}],16:[function(require,module,exports){
+},{"../prezi/Prezi":20,"../util/UIUtil":35,"../videolayout/VideoLayout":41}],20:[function(require,module,exports){
 var ToolbarToggler = require("../toolbars/ToolbarToggler");
 var UIUtil = require("../util/UIUtil");
 var VideoLayout = require("../videolayout/VideoLayout");
@@ -3374,6 +5087,20 @@ var messageHandler = require("../util/MessageHandler");
 var PreziPlayer = require("./PreziPlayer");
 
 var preziPlayer = null;
+
+
+/**
+ * Shows/hides a presentation.
+ */
+function setPresentationVisible(visible) {
+
+    if (visible) {
+        VideoLayout.setLargeVideoState("prezi");
+    }
+    else {
+        VideoLayout.setLargeVideoState("video");
+    }
+}
 
 var Prezi = {
 
@@ -3427,13 +5154,13 @@ var Prezi = {
             );
         }
         else {
-            var html = APP.translation.generateTranslatonHTML(
+            var html = APP.translation.generateTranslationHTML(
                 "dialog.sharePreziTitle");
-            var cancelButton = APP.translation.generateTranslatonHTML(
+            var cancelButton = APP.translation.generateTranslationHTML(
                 "dialog.Cancel");
-            var shareButton = APP.translation.generateTranslatonHTML(
+            var shareButton = APP.translation.generateTranslationHTML(
                 "dialog.Share");
-            var backButton = APP.translation.generateTranslatonHTML(
+            var backButton = APP.translation.generateTranslationHTML(
                 "dialog.Back");
             var buttons = [];
             var buttons1 = [];
@@ -3444,7 +5171,7 @@ var Prezi = {
             buttons.push({title: shareButton, value: true});
             // Back button
             buttons1.push({title: backButton, value: true});
-            var linkError = APP.translation.generateTranslatonHTML(
+            var linkError = APP.translation.generateTranslationHTML(
                 "dialog.preziLinkError");
             var defaultUrl = APP.translation.translateString("defaultPreziLink",
                 {url: "http://prezi.com/wz7vhjycl7e6/my-prezi"});
@@ -3534,18 +5261,14 @@ function presentationAdded(event, jid, presUrl, currentSlide) {
         + Strophe.getResourceFromJid(jid)
         + '_' + presId;
 
-
-
-
     VideoLayout.addPreziContainer(elementId);
-    VideoLayout.resizeThumbnails();
 
     var controlsEnabled = false;
     if (jid === APP.xmpp.myJid())
         controlsEnabled = true;
 
     setPresentationVisible(true);
-    $('#largeVideoContainer').hover(
+    VideoLayout.setLargeVideoHover(
         function (event) {
             if (Prezi.isPresentationVisible()) {
                 var reloadButtonRight = window.innerWidth
@@ -3672,38 +5395,6 @@ function resize() {
 }
 
 /**
- * Shows/hides a presentation.
- */
-function setPresentationVisible(visible) {
-    var prezi = $('#presentation>iframe');
-    if (visible) {
-        // Trigger the video.selected event to indicate a change in the
-        // large video.
-        $(document).trigger("video.selected", [true]);
-
-        $('#largeVideo').fadeOut(300);
-        prezi.fadeIn(300, function() {
-            prezi.css({opacity:'1'});
-            ToolbarToggler.dockToolbar(true);
-            VideoLayout.setLargeVideoVisible(false);
-        });
-        $('#activeSpeaker').css('visibility', 'hidden');
-    }
-    else {
-        if (prezi.css('opacity') == '1') {
-            prezi.fadeOut(300, function () {
-                prezi.css({opacity:'0'});
-                $('#reloadPresentation').css({display:'none'});
-                $('#largeVideo').fadeIn(300, function() {
-                    VideoLayout.setLargeVideoVisible(true);
-                    ToolbarToggler.dockToolbar(false);
-                });
-            });
-        }
-    }
-}
-
-/**
  * Presentation has been removed.
  */
 $(document).bind('presentationremoved.muc', presentationRemoved);
@@ -3727,22 +5418,13 @@ $(document).bind('gotoslide.muc', function (event, jid, presUrl, current) {
     }
 });
 
-/**
- * On video selected event.
- */
-$(document).bind('video.selected', function (event, isPresentation) {
-    if (!isPresentation && $('#presentation>iframe')) {
-        setPresentationVisible(false);
-    }
-});
-
 $(window).resize(function () {
     resize();
 });
 
 module.exports = Prezi;
 
-},{"../toolbars/ToolbarToggler":27,"../util/MessageHandler":29,"../util/UIUtil":31,"../videolayout/VideoLayout":37,"./PreziPlayer":17}],17:[function(require,module,exports){
+},{"../toolbars/ToolbarToggler":31,"../util/MessageHandler":33,"../util/UIUtil":35,"../videolayout/VideoLayout":41,"./PreziPlayer":21}],21:[function(require,module,exports){
 (function() {
     "use strict";
     var __bind = function(fn, me){ return function(){ return fn.apply(me, arguments); }; };
@@ -4038,7 +5720,8 @@ module.exports = Prezi;
 
 module.exports = PreziPlayer;
 
-},{}],18:[function(require,module,exports){
+},{}],22:[function(require,module,exports){
+/* global require, $ */
 var Chat = require("./chat/Chat");
 var ContactList = require("./contactlist/ContactList");
 var Settings = require("./../../settings/Settings");
@@ -4057,7 +5740,7 @@ var PanelToggler = (function(my) {
     var buttons = {
         '#chatspace': '#chatBottomButton',
         '#contactlist': '#contactListButton',
-        '#settingsmenu': '#settingsButton'
+        '#settingsmenu': '#toolbar_button_settings'
     };
 
     /**
@@ -4212,8 +5895,8 @@ var PanelToggler = (function(my) {
 }(PanelToggler || {}));
 
 module.exports = PanelToggler;
-},{"../toolbars/ToolbarToggler":27,"../util/UIUtil":31,"../videolayout/LargeVideo":33,"../videolayout/VideoLayout":37,"./../../settings/Settings":45,"./chat/Chat":19,"./contactlist/ContactList":23,"./settings/SettingsMenu":24}],19:[function(require,module,exports){
-/* global $, Util, nickname:true */
+},{"../toolbars/ToolbarToggler":31,"../util/UIUtil":35,"../videolayout/LargeVideo":37,"../videolayout/VideoLayout":41,"./../../settings/Settings":51,"./chat/Chat":23,"./contactlist/ContactList":27,"./settings/SettingsMenu":28}],23:[function(require,module,exports){
+/* global APP, $, Util, nickname:true */
 var Replacement = require("./Replacement");
 var CommandsProcessor = require("./Commands");
 var ToolbarToggler = require("../../toolbars/ToolbarToggler");
@@ -4234,7 +5917,7 @@ function setVisualNotification(show) {
     var unreadMsgBottomElement
         = document.getElementById('bottomUnreadMessages');
 
-    var glower = $('#chatButton');
+    var glower = $('#toolbar_button_chat');
     var bottomGlower = $('#chatBottomButton');
 
     if (unreadMessages) {
@@ -4244,7 +5927,7 @@ function setVisualNotification(show) {
         ToolbarToggler.dockToolbar(true);
 
         var chatButtonElement
-            = document.getElementById('chatButton').parentNode;
+            = document.getElementById('toolbar_button_chat');
         var leftIndent = (UIUtil.getTextWidth(chatButtonElement) -
             UIUtil.getTextWidth(unreadMsgElement)) / 2;
         var topIndent = (UIUtil.getTextHeight(chatButtonElement) -
@@ -4317,8 +6000,7 @@ function getCurrentTime(stamp) {
     return hour+':'+minute+':'+second;
 }
 
-function toggleSmileys()
-{
+function toggleSmileys() {
     var smileys = $('#smileysContainer');
     if(!smileys.is(':visible')) {
         smileys.show("slide", { direction: "down", duration: 300});
@@ -4406,19 +6088,18 @@ var Chat = (function (my) {
             }
         });
 
-        $('#usermsg').keydown(function (event) {
+        var usermsg = $('#usermsg');
+        usermsg.keydown(function (event) {
             if (event.keyCode === 13) {
                 event.preventDefault();
                 var value = this.value;
-                $('#usermsg').val('').trigger('autosize.resize');
+                usermsg.val('').trigger('autosize.resize');
                 this.focus();
                 var command = new CommandsProcessor(value);
-                if(command.isCommand())
-                {
+                if(command.isCommand()) {
                     command.processCommand();
                 }
-                else
-                {
+                else {
                     var message = UIUtil.escapeHtml(value);
                     APP.xmpp.sendChatMessage(message, NicknameHandler.getNickname());
                 }
@@ -4429,7 +6110,7 @@ var Chat = (function (my) {
             resizeChatConversation();
             Chat.scrollChatToBottom();
         };
-        $('#usermsg').autosize({callback: onTextAreaResize});
+        usermsg.autosize({callback: onTextAreaResize});
 
         $("#chatspace").bind("shown",
             function () {
@@ -4443,7 +6124,8 @@ var Chat = (function (my) {
     /**
      * Appends the given message to the chat conversation.
      */
-    my.updateChatConversation = function (from, displayName, message, myjid, stamp) {
+    my.updateChatConversation =
+        function (from, displayName, message, myjid, stamp) {
         var divClassName = '';
 
         if (APP.xmpp.myJid() === from) {
@@ -4485,8 +6167,7 @@ var Chat = (function (my) {
      * @param errorMessage the received error message.
      * @param originalText the original message.
      */
-    my.chatAddError = function(errorMessage, originalText)
-    {
+    my.chatAddError = function(errorMessage, originalText) {
         errorMessage = UIUtil.escapeHtml(errorMessage);
         originalText = UIUtil.escapeHtml(originalText);
 
@@ -4503,22 +6184,17 @@ var Chat = (function (my) {
      * Sets the subject to the UI
      * @param subject the subject
      */
-    my.chatSetSubject = function(subject)
-    {
-        if(subject)
+    my.chatSetSubject = function(subject) {
+        if (subject)
             subject = subject.trim();
         $('#subject').html(Replacement.linkify(UIUtil.escapeHtml(subject)));
-        if(subject === "")
-        {
+        if(subject === "") {
             $("#subject").css({display: "none"});
         }
-        else
-        {
+        else {
             $("#subject").css({display: "block"});
         }
     };
-
-
 
     /**
      * Sets the chat conversation mode.
@@ -4570,7 +6246,8 @@ var Chat = (function (my) {
     return my;
 }(Chat || {}));
 module.exports = Chat;
-},{"../../../../service/UI/UIEvents":100,"../../toolbars/ToolbarToggler":27,"../../util/NicknameHandler":30,"../../util/UIUtil":31,"../SidePanelToggler":18,"./Commands":20,"./Replacement":21,"./smileys.json":22}],20:[function(require,module,exports){
+},{"../../../../service/UI/UIEvents":171,"../../toolbars/ToolbarToggler":31,"../../util/NicknameHandler":34,"../../util/UIUtil":35,"../SidePanelToggler":22,"./Commands":24,"./Replacement":25,"./smileys.json":26}],24:[function(require,module,exports){
+/* global APP, require */
 var UIUtil = require("../../util/UIUtil");
 
 /**
@@ -4587,47 +6264,39 @@ var commands = {
  * @param message the received message
  * @returns {string} the command
  */
-function getCommand(message)
-{
-    if(message)
-    {
-        for(var command in commands)
-        {
+function getCommand(message) {
+    if(message) {
+        for(var command in commands) {
             if(message.indexOf("/" + command) == 0)
                 return command;
         }
     }
     return "";
-};
+}
 
 /**
  * Processes the data for topic command.
  * @param commandArguments the arguments of the topic command.
  */
-function processTopic(commandArguments)
-{
+function processTopic(commandArguments) {
     var topic = UIUtil.escapeHtml(commandArguments);
     APP.xmpp.setSubject(topic);
 }
 
 /**
- * Constructs new CommandProccessor instance from a message that
+ * Constructs a new CommandProccessor instance from a message that
  * handles commands received via chat messages.
  * @param message the message
  * @constructor
  */
-function CommandsProcessor(message)
-{
-
-
+function CommandsProcessor(message) {
     var command = getCommand(message);
 
     /**
      * Returns the name of the command.
      * @returns {String} the command
      */
-    this.getCommand = function()
-    {
+    this.getCommand = function() {
         return command;
     };
 
@@ -4638,8 +6307,7 @@ function CommandsProcessor(message)
      * Returns the arguments of the command.
      * @returns {string}
      */
-    this.getArgument = function()
-    {
+    this.getArgument = function() {
         return messageArgument;
     };
 }
@@ -4648,9 +6316,8 @@ function CommandsProcessor(message)
  * Checks whether this instance is valid command or not.
  * @returns {boolean}
  */
-CommandsProcessor.prototype.isCommand = function()
-{
-    if(this.getCommand())
+CommandsProcessor.prototype.isCommand = function() {
+    if (this.getCommand())
         return true;
     return false;
 };
@@ -4658,17 +6325,15 @@ CommandsProcessor.prototype.isCommand = function()
 /**
  * Processes the command.
  */
-CommandsProcessor.prototype.processCommand = function()
-{
+CommandsProcessor.prototype.processCommand = function() {
     if(!this.isCommand())
         return;
 
     commands[this.getCommand()](this.getArgument());
-
 };
 
 module.exports = CommandsProcessor;
-},{"../../util/UIUtil":31}],21:[function(require,module,exports){
+},{"../../util/UIUtil":35}],25:[function(require,module,exports){
 var Smileys = require("./smileys.json");
 /**
  * Processes links and smileys in "body"
@@ -4732,7 +6397,7 @@ module.exports = {
     linkify: linkify
 };
 
-},{"./smileys.json":22}],22:[function(require,module,exports){
+},{"./smileys.json":26}],26:[function(require,module,exports){
 module.exports={
     "smileys": {
         "smiley1": ":)",
@@ -4782,7 +6447,9 @@ module.exports={
     }
 }
 
-},{}],23:[function(require,module,exports){
+},{}],27:[function(require,module,exports){
+/* global $, APP, Strophe */
+var Avatar = require('../../avatar/Avatar');
 
 var numberOfContacts = 0;
 var notificationInterval;
@@ -4794,26 +6461,28 @@ var notificationInterval;
  * left(-1)
  */
 function updateNumberOfParticipants(delta) {
-    //when the user is alone we don't show the number of participants
-    if(numberOfContacts === 0) {
+    numberOfContacts += delta;
+    if (numberOfContacts === 1) {
+        // when the user is alone we don't show the number of participants
         $("#numberOfParticipants").text('');
-        numberOfContacts += delta;
-    } else if(numberOfContacts !== 0 && !ContactList.isVisible()) {
-        ContactList.setVisualNotification(true);
-        numberOfContacts += delta;
+        ContactList.setVisualNotification(false);
+    } else if (numberOfContacts > 1) {
+        ContactList.setVisualNotification(!ContactList.isVisible());
         $("#numberOfParticipants").text(numberOfContacts);
+    } else {
+        console.error("Invalid number of participants: " + numberOfContacts);
     }
 }
 
 /**
  * Creates the avatar element.
  *
- * @return the newly created avatar element
+ * @return {object} the newly created avatar element
  */
-function createAvatar(id) {
+function createAvatar(jid) {
     var avatar = document.createElement('img');
     avatar.className = "icon-avatar avatar";
-    avatar.src = "https://www.gravatar.com/avatar/" + id + "?d=wavatar&size=30";
+    avatar.src = Avatar.getContactListUrl(jid);
 
     return avatar;
 }
@@ -4827,8 +6496,7 @@ function createDisplayNameParagraph(key, displayName) {
     var p = document.createElement('p');
     if(displayName)
         p.innerText = displayName;
-    else if(key)
-    {
+    else if(key) {
         p.setAttribute("data-i18n",key);
         p.innerText = APP.translation.translateString(key);
     }
@@ -4845,7 +6513,6 @@ function stopGlowing(glower) {
         glower.removeClass('active');
     }
 }
-
 
 /**
  * Contact list.
@@ -4865,24 +6532,22 @@ var ContactList = {
      * Adds a contact for the given peerJid if such doesn't yet exist.
      *
      * @param peerJid the peerJid corresponding to the contact
-     * @param id the user's email or userId used to get the user's avatar
      */
-    ensureAddContact: function (peerJid, id) {
+    ensureAddContact: function (peerJid) {
         var resourceJid = Strophe.getResourceFromJid(peerJid);
 
         var contact = $('#contacts>li[id="' + resourceJid + '"]');
 
         if (!contact || contact.length <= 0)
-            ContactList.addContact(peerJid, id);
+            ContactList.addContact(peerJid);
     },
 
     /**
      * Adds a contact for the given peer jid.
      *
      * @param peerJid the jid of the contact to add
-     * @param id the email or userId of the user
      */
-    addContact: function (peerJid, id) {
+    addContact: function (peerJid) {
         var resourceJid = Strophe.getResourceFromJid(peerJid);
 
         var contactlist = $('#contacts');
@@ -4896,7 +6561,7 @@ var ContactList = {
             }
         };
 
-        newContact.appendChild(createAvatar(id));
+        newContact.appendChild(createAvatar(peerJid));
         newContact.appendChild(createDisplayNameParagraph("participant"));
 
         if (resourceJid === APP.xmpp.myResource()) {
@@ -4964,23 +6629,31 @@ var ContactList = {
 
         if (contactName && displayName && displayName.length > 0)
             contactName.html(displayName);
+    },
+
+    userAvatarChanged: function (resourceJid, contactListUrl) {
+        // set the avatar in the contact list
+        var contact = $('#' + resourceJid + '>img');
+        if (contact && contact.length > 0) {
+            contact.get(0).src = contactListUrl;
+        }
+
     }
 };
 
 module.exports = ContactList;
-},{}],24:[function(require,module,exports){
+},{"../../avatar/Avatar":18}],28:[function(require,module,exports){
+/* global APP, $ */
 var Avatar = require("../../avatar/Avatar");
 var Settings = require("./../../../settings/Settings");
 var UIUtil = require("../../util/UIUtil");
 var languages = require("../../../../service/translation/languages");
 
-function generateLanguagesSelectBox()
-{
+function generateLanguagesSelectBox() {
     var currentLang = APP.translation.getCurrentLanguage();
     var html = "<select id=\"languages_selectbox\">";
     var langArray = languages.getLanguages();
-    for(var i = 0; i < langArray.length; i++)
-    {
+    for(var i = 0; i < langArray.length; i++) {
         var lang = langArray[i];
         html += "<option ";
         if(lang === currentLang)
@@ -4997,7 +6670,8 @@ function generateLanguagesSelectBox()
 var SettingsMenu = {
 
     init: function () {
-        $("#startMutedOptions").before(generateLanguagesSelectBox());
+        var startMutedSelector = $("#startMutedOptions");
+        startMutedSelector.before(generateLanguagesSelectBox());
         APP.translation.translateElement($("#languages_selectbox"));
         $('#settingsmenu>input').keyup(function(event){
             if(event.keyCode === 13) {//enter
@@ -5005,13 +6679,11 @@ var SettingsMenu = {
             }
         });
 
-        if(APP.xmpp.isModerator())
-        {
-            $("#startMutedOptions").css("display", "block");
+        if (APP.xmpp.isModerator()) {
+            startMutedSelector.css("display", "block");
         }
-        else
-        {
-            $("#startMutedOptions").css("display", "none");
+        else {
+            startMutedSelector.css("display", "none");
         }
 
         $("#updateSettings").click(function () {
@@ -5020,12 +6692,10 @@ var SettingsMenu = {
     },
 
     onRoleChanged: function () {
-        if(APP.xmpp.isModerator())
-        {
+        if(APP.xmpp.isModerator()) {
             $("#startMutedOptions").css("display", "block");
         }
-        else
-        {
+        else {
             $("#startMutedOptions").css("display", "none");
         }
     },
@@ -5073,12 +6743,16 @@ var SettingsMenu = {
             peerJid === APP.xmpp.myJid()) {
             this.setDisplayName(newDisplayName);
         }
+    },
+    changeAvatar: function (thumbUrl) {
+        $('#avatar').get(0).src = thumbUrl;
     }
 };
 
 
 module.exports = SettingsMenu;
-},{"../../../../service/translation/languages":105,"../../avatar/Avatar":14,"../../util/UIUtil":31,"./../../../settings/Settings":45}],25:[function(require,module,exports){
+},{"../../../../service/translation/languages":176,"../../avatar/Avatar":18,"../../util/UIUtil":35,"./../../../settings/Settings":51}],29:[function(require,module,exports){
+/* global $ */
 var PanelToggler = require("../side_pannels/SidePanelToggler");
 
 var buttonHandlers = {
@@ -5123,9 +6797,9 @@ var BottomToolbar = (function (my) {
 
 module.exports = BottomToolbar;
 
-},{"../side_pannels/SidePanelToggler":18}],26:[function(require,module,exports){
-/* global APP,$, buttonClick, config, lockRoom,
-   setSharedKey, Util */
+},{"../side_pannels/SidePanelToggler":22}],30:[function(require,module,exports){
+/* global APP, $, buttonClick, config, lockRoom, interfaceConfig, setSharedKey,
+ Util */
 var messageHandler = require("../util/MessageHandler");
 var BottomToolbar = require("./BottomToolbar");
 var Prezi = require("../prezi/Prezi");
@@ -5139,9 +6813,9 @@ var AuthenticationEvents
 var roomUrl = null;
 var sharedKey = '';
 var UI = null;
+var recordingToaster = null;
 
-var buttonHandlers =
-{
+var buttonHandlers = {
     "toolbar_button_mute": function () {
         return APP.UI.toggleAudio();
     },
@@ -5172,9 +6846,8 @@ var buttonHandlers =
     "toolbar_button_desktopsharing": function () {
         return APP.desktopsharing.toggleScreenSharing();
     },
-    "toolbar_button_fullScreen": function()
-    {
-        UIUtil.buttonClick("#fullScreen", "icon-full-screen icon-exit-full-screen");
+    "toolbar_button_fullScreen": function() {
+        UIUtil.buttonClick("#toolbar_button_fullScreen", "icon-full-screen icon-exit-full-screen");
         return Toolbar.toggleFullScreen();
     },
     "toolbar_button_sip": function () {
@@ -5217,21 +6890,19 @@ var buttonHandlers =
 
 function hangup() {
     APP.xmpp.disposeConference();
-    if(config.enableWelcomePage)
-    {
-        setTimeout(function()
-        {
+    if(config.enableWelcomePage) {
+        setTimeout(function() {
             window.localStorage.welcomePageDisabled = false;
             window.location.pathname = "/";
         }, 10000);
 
     }
 
-    var title = APP.translation.generateTranslatonHTML(
+    var title = APP.translation.generateTranslationHTML(
         "dialog.sessTerminated");
-    var msg = APP.translation.generateTranslatonHTML(
+    var msg = APP.translation.generateTranslationHTML(
         "dialog.hungUp");
-    var button = APP.translation.generateTranslatonHTML(
+    var button = APP.translation.generateTranslationHTML(
         "dialog.joinAgain");
     var buttons = [];
     buttons.push({title: button, value: true});
@@ -5241,8 +6912,7 @@ function hangup() {
         msg,
         true,
         buttons,
-        function(event, value, message, formVals)
-        {
+        function(event, value, message, formVals) {
             window.location.reload();
             return false;
         }
@@ -5253,9 +6923,14 @@ function hangup() {
  * Starts or stops the recording for the conference.
  */
 
-function toggleRecording() {
+function toggleRecording(predefinedToken) {
     APP.xmpp.toggleRecording(function (callback) {
-        var msg = APP.translation.generateTranslatonHTML(
+        if (predefinedToken) {
+            callback(UIUtil.escapeHtml(predefinedToken));
+            return;
+        }
+
+        var msg = APP.translation.generateTranslationHTML(
             "dialog.recordingToken");
         var token = APP.translation.translateString("dialog.token");
         APP.UI.messageHandler.openTwoButtonDialog(null, null, null,
@@ -5278,7 +6953,7 @@ function toggleRecording() {
             function () { },
             ':input:first'
         );
-    }, Toolbar.setRecordingButtonState, Toolbar.setRecordingButtonState);
+    }, Toolbar.setRecordingButtonState);
 }
 
 /**
@@ -5291,13 +6966,11 @@ function lockRoom(lock) {
 
     APP.xmpp.lockRoom(currentSharedKey, function (res) {
         // password is required
-        if (sharedKey)
-        {
+        if (sharedKey) {
             console.log('set room password');
             Toolbar.lockLockButton();
         }
-        else
-        {
+        else {
             console.log('removed room password');
             Toolbar.unlockLockButton();
         }
@@ -5312,7 +6985,7 @@ function lockRoom(lock) {
             "dialog.passwordNotSupported");
         Toolbar.setSharedKey('');
     });
-};
+}
 
 /**
  * Invite participants to conference.
@@ -5350,17 +7023,15 @@ function inviteParticipants() {
     window.open("mailto:?subject=" + subject + "&body=" + body, '_blank');
 }
 
-function dialpadButtonClicked()
-{
-    //TODO show the dialpad window
+function dialpadButtonClicked() {
+    //TODO show the dialpad box
 }
 
-function callSipButtonClicked()
-{
+function callSipButtonClicked() {
     var defaultNumber
         = config.defaultSipNumber ? config.defaultSipNumber : '';
 
-    var sipMsg = APP.translation.generateTranslatonHTML(
+    var sipMsg = APP.translation.generateTranslationHTML(
         "dialog.sipMsg");
     messageHandler.openTwoButtonDialog(null, null, null,
         '<h2>' + sipMsg + '</h2>' +
@@ -5407,7 +7078,7 @@ var Toolbar = (function (my) {
                 }
             }
         );
-    },
+    };
 
     /**
      * Sets shared key
@@ -5424,7 +7095,7 @@ var Toolbar = (function (my) {
             return;
         }
         // Get authentication URL
-        if (!APP.xmpp.getMUCJoined()) {
+        if (!APP.xmpp.isMUCJoined()) {
             APP.xmpp.getLoginUrl(UI.getRoomName(), function (url) {
                 // If conference has not been started yet - redirect to login page
                 window.location.href = url;
@@ -5468,9 +7139,8 @@ var Toolbar = (function (my) {
      * Disables and enables some of the buttons.
      */
     my.setupButtonsFromConfig = function () {
-        if (config.disablePrezi)
-        {
-            $("#prezi_button").css({display: "none"});
+        if (config.disablePrezi) {
+            $("#toolbar_button_prezi").css({display: "none"});
         }
     };
 
@@ -5500,7 +7170,7 @@ var Toolbar = (function (my) {
                         }
                     });
             } else {
-                var msg = APP.translation.generateTranslatonHTML(
+                var msg = APP.translation.generateTranslationHTML(
                     "dialog.passwordMsg");
                 var yourPassword = APP.translation.translateString(
                     "dialog.yourPassword");
@@ -5570,11 +7240,11 @@ var Toolbar = (function (my) {
      * FIXME: not used ?
      */
     my.openSettingsDialog = function () {
-        var settings1 = APP.translation.generateTranslatonHTML(
+        var settings1 = APP.translation.generateTranslationHTML(
             "dialog.settings1");
-        var settings2 = APP.translation.generateTranslatonHTML(
+        var settings2 = APP.translation.generateTranslationHTML(
             "dialog.settings2");
-        var settings3 = APP.translation.generateTranslatonHTML(
+        var settings3 = APP.translation.generateTranslationHTML(
             "dialog.settings3");
 
         var yourPassword = APP.translation.translateString(
@@ -5645,15 +7315,15 @@ var Toolbar = (function (my) {
      * Unlocks the lock button state.
      */
     my.unlockLockButton = function () {
-        if ($("#lockIcon").hasClass("icon-security-locked"))
-            UIUtil.buttonClick("#lockIcon", "icon-security icon-security-locked");
+        if ($("#toolbar_button_security").hasClass("icon-security-locked"))
+            UIUtil.buttonClick("#toolbar_button_security", "icon-security icon-security-locked");
     };
     /**
      * Updates the lock button state to locked.
      */
     my.lockLockButton = function () {
-        if ($("#lockIcon").hasClass("icon-security"))
-            UIUtil.buttonClick("#lockIcon", "icon-security icon-security-locked");
+        if ($("#toolbar_button_security").hasClass("icon-security"))
+            UIUtil.buttonClick("#toolbar_button_security", "icon-security icon-security-locked");
     };
 
     /**
@@ -5676,40 +7346,77 @@ var Toolbar = (function (my) {
         }
 
         if (show) {
-            $('#recording').css({display: "inline"});
+            $('#toolbar_button_record').css({display: "inline-block"});
         }
         else {
-            $('#recording').css({display: "none"});
+            $('#toolbar_button_record').css({display: "none"});
         }
     };
 
     // Sets the state of the recording button
-    my.setRecordingButtonState = function (isRecording) {
-        var selector = $('#recordButton');
-        if (isRecording) {
+    my.setRecordingButtonState = function (recordingState) {
+        var selector = $('#toolbar_button_record');
+
+        if (recordingState === 'on') {
             selector.removeClass("icon-recEnable");
             selector.addClass("icon-recEnable active");
-        } else {
+
+            $("#largeVideo").toggleClass("videoMessageFilter", true);
+            var recordOnKey = "recording.on";
+            $('#videoConnectionMessage').attr("data-i18n", recordOnKey);
+            $('#videoConnectionMessage').text(APP.translation.translateString(recordOnKey));
+
+            setTimeout(function(){
+                $("#largeVideo").toggleClass("videoMessageFilter", false);
+                $('#videoConnectionMessage').css({display: "none"});
+            }, 1500);
+
+            recordingToaster = messageHandler.notify(null, "recording.toaster", null,
+                null, null, {timeOut: 0, closeButton: null, tapToDismiss: false});
+        } else if (recordingState === 'off') {
             selector.removeClass("icon-recEnable active");
             selector.addClass("icon-recEnable");
+
+            $("#largeVideo").toggleClass("videoMessageFilter", false);
+            $('#videoConnectionMessage').css({display: "none"});
+
+            if (recordingToaster)
+                messageHandler.remove(recordingToaster);
+
+        } else if (recordingState === 'pending') {
+            selector.removeClass("icon-recEnable active");
+            selector.addClass("icon-recEnable");
+
+            $("#largeVideo").toggleClass("videoMessageFilter", true);
+            var recordPendingKey = "recording.pending";
+            $('#videoConnectionMessage').attr("data-i18n", recordPendingKey);
+            $('#videoConnectionMessage').text(APP.translation.translateString(recordPendingKey));
+            $('#videoConnectionMessage').css({display: "block"});
         }
     };
+
+    // checks whether recording is enabled and whether we have params to start automatically recording
+    my.checkAutoRecord = function () {
+        if (config.enableRecording && config.autoRecord) {
+            toggleRecording(config.autoRecordToken);
+        }
+    }
 
     // Shows or hides SIP calls button
     my.showSipCallButton = function (show) {
         if (APP.xmpp.isSipGatewayEnabled() && show) {
-            $('#sipCallButton').css({display: "inline-block"});
+            $('#toolbar_button_sip').css({display: "inline-block"});
         } else {
-            $('#sipCallButton').css({display: "none"});
+            $('#toolbar_button_sip').css({display: "none"});
         }
     };
 
     // Shows or hides the dialpad button
     my.showDialPadButton = function (show) {
         if (show) {
-            $('#dialPadButton').css({display: "inline-block"});
+            $('#toolbar_button_dialpad').css({display: "inline-block"});
         } else {
-            $('#dialPadButton').css({display: "none"});
+            $('#toolbar_button_dialpad').css({display: "none"});
         }
     };
 
@@ -5757,13 +7464,10 @@ var Toolbar = (function (my) {
      * @param active the state of the desktop streaming.
      */
     my.changeDesktopSharingButtonState = function (active) {
-        var button = $("#desktopsharing > a");
-        if (active)
-        {
+        var button = $("#toolbar_button_desktopsharing");
+        if (active) {
             button.addClass("glow");
-        }
-        else
-        {
+        } else {
             button.removeClass("glow");
         }
     };
@@ -5772,17 +7476,18 @@ var Toolbar = (function (my) {
 }(Toolbar || {}));
 
 module.exports = Toolbar;
-},{"../../../service/authentication/AuthenticationEvents":101,"../authentication/Authentication":12,"../etherpad/Etherpad":15,"../prezi/Prezi":16,"../side_pannels/SidePanelToggler":18,"../util/MessageHandler":29,"../util/UIUtil":31,"./BottomToolbar":25}],27:[function(require,module,exports){
-/* global $, interfaceConfig, Moderator, DesktopStreaming.showDesktopSharingButton */
+},{"../../../service/authentication/AuthenticationEvents":172,"../authentication/Authentication":16,"../etherpad/Etherpad":19,"../prezi/Prezi":20,"../side_pannels/SidePanelToggler":22,"../util/MessageHandler":33,"../util/UIUtil":35,"./BottomToolbar":29}],31:[function(require,module,exports){
+/* global APP, config, $, interfaceConfig, Moderator,
+ DesktopStreaming.showDesktopSharingButton */
 
 var toolbarTimeoutObject,
     toolbarTimeout = interfaceConfig.INITIAL_TOOLBAR_TIMEOUT;
 
 function showDesktopSharingButton() {
     if (APP.desktopsharing.isDesktopSharingEnabled()) {
-        $('#desktopsharing').css({display: "inline"});
+        $('#toolbar_button_desktopsharing').css({display: "inline-block"});
     } else {
-        $('#desktopsharing').css({display: "none"});
+        $('#toolbar_button_desktopsharing').css({display: "none"});
     }
 }
 
@@ -5827,6 +7532,8 @@ var ToolbarToggler = {
      * Shows the main toolbar.
      */
     showToolbar: function () {
+        if (interfaceConfig.filmStripOnly)
+            return;
         var header = $("#header"),
             bottomToolbar = $("#bottomToolbar");
         if (!header.is(':visible') || !bottomToolbar.is(":visible")) {
@@ -5856,13 +7563,15 @@ var ToolbarToggler = {
         showDesktopSharingButton();
     },
 
-
     /**
      * Docks/undocks the toolbar.
      *
      * @param isDock indicates what operation to perform
      */
     dockToolbar: function (isDock) {
+        if (interfaceConfig.filmStripOnly)
+            return;
+
         if (isDock) {
             // First make sure the toolbar is shown.
             if (!$('#header').is(':visible')) {
@@ -5886,11 +7595,11 @@ var ToolbarToggler = {
     },
 
     showDesktopSharingButton: showDesktopSharingButton
-
 };
 
 module.exports = ToolbarToggler;
-},{}],28:[function(require,module,exports){
+},{}],32:[function(require,module,exports){
+/* global $ */
 var JitsiPopover = (function () {
     /**
      * Constructs new JitsiPopover and attaches it to the element
@@ -5938,23 +7647,24 @@ var JitsiPopover = (function () {
      * Shows the popover
      */
     JitsiPopover.prototype.show = function () {
+        if(!JitsiPopover.enabled)
+            return;
         this.createPopover();
         this.popoverShown = true;
-
     };
 
     /**
      * Hides the popover
      */
     JitsiPopover.prototype.hide = function () {
-        if(!this.elementIsHovered && !this.popoverIsHovered && this.popoverShown)
-        {
+        if(!this.elementIsHovered && !this.popoverIsHovered &&
+            this.popoverShown) {
             this.forceHide();
         }
     };
 
     /**
-     * Hides the popover
+     * Hides the popover.
      */
     JitsiPopover.prototype.forceHide = function () {
         $(".jitsipopover").remove();
@@ -5962,7 +7672,7 @@ var JitsiPopover = (function () {
     };
 
     /**
-     * Creates the popover html
+     * Creates the popover html.
      */
     JitsiPopover.prototype.createPopover = function () {
         $("body").append(this.template);
@@ -5979,7 +7689,7 @@ var JitsiPopover = (function () {
     };
 
     /**
-     * Refreshes the position of the popover
+     * Refreshes the position of the popover.
      */
     JitsiPopover.prototype.refreshPosition = function () {
         $(".jitsipopover").position({
@@ -5988,10 +7698,13 @@ var JitsiPopover = (function () {
             collision: "fit",
             of: this.element,
             using: function (position, elements) {
-                var calcLeft = elements.target.left - elements.element.left + elements.target.width/2;
-                $(".jitsipopover").css({top: position.top, left: position.left, display: "table"});
+                var calcLeft = elements.target.left - elements.element.left +
+                    elements.target.width/2;
+                $(".jitsipopover").css(
+                    {top: position.top, left: position.left, display: "table"});
                 $(".jitsipopover > .arrow").css({left: calcLeft});
-                $(".jitsipopover > .jitsiPopupmenuPadding").css({left: calcLeft - 50});
+                $(".jitsipopover > .jitsiPopupmenuPadding").css(
+                    {left: calcLeft - 50});
             }
         });
     };
@@ -6008,46 +7721,52 @@ var JitsiPopover = (function () {
         this.createPopover();
     };
 
+    JitsiPopover.enabled = true;
+
     return JitsiPopover;
-
-
 })();
 
 module.exports = JitsiPopover;
-},{}],29:[function(require,module,exports){
+},{}],33:[function(require,module,exports){
 /* global $, APP, jQuery, toastr */
+
+/**
+ * Flag for enable/disable of the notifications.
+ * @type {boolean}
+ */
+var notificationsEnabled = true;
+
 var messageHandler = (function(my) {
 
     /**
      * Shows a message to the user.
      *
-     * @param titleString the title of the message
-     * @param messageString the text of the message
+     * @param titleKey the title of the message
+     * @param messageKey the text of the message
      */
     my.openMessageDialog = function(titleKey, messageKey) {
         var title = null;
-        if(titleKey)
-        {
-            title = APP.translation.generateTranslatonHTML(titleKey);
+        if(titleKey) {
+            title = APP.translation.generateTranslationHTML(titleKey);
         }
-        var message = APP.translation.generateTranslatonHTML(messageKey);
+        var message = APP.translation.generateTranslationHTML(messageKey);
         $.prompt(message,
-            {
-                title: title,
-                persistent: false
-            }
+            {title: title, persistent: false}
         );
     };
 
     /**
-     * Shows a message to the user with two buttons: first is given as a parameter and the second is Cancel.
+     * Shows a message to the user with two buttons: first is given as a
+     * parameter and the second is Cancel.
      *
      * @param titleString the title of the message
      * @param msgString the text of the message
-     * @param persistent boolean value which determines whether the message is persistent or not
+     * @param persistent boolean value which determines whether the message is
+     *        persistent or not
      * @param leftButton the fist button's text
      * @param submitFunction function to be called on submit
-     * @param loadedFunction function to be called after the prompt is fully loaded
+     * @param loadedFunction function to be called after the prompt is fully
+     *        loaded
      * @param closeFunction function to be called after the prompt is closed
      * @param focus optional focus selector or button index to be focused after
      *        the dialog is opened
@@ -6056,24 +7775,22 @@ var messageHandler = (function(my) {
      */
     my.openTwoButtonDialog = function(titleKey, titleString, msgKey, msgString,
         persistent, leftButtonKey, submitFunction, loadedFunction,
-        closeFunction, focus, defaultButton)
-    {
+        closeFunction, focus, defaultButton) {
         var buttons = [];
 
-        var leftButton = APP.translation.generateTranslatonHTML(leftButtonKey);
+        var leftButton = APP.translation.generateTranslationHTML(leftButtonKey);
         buttons.push({ title: leftButton, value: true});
 
         var cancelButton
-            = APP.translation.generateTranslatonHTML("dialog.Cancel");
+            = APP.translation.generateTranslationHTML("dialog.Cancel");
         buttons.push({title: cancelButton, value: false});
 
         var message = msgString, title = titleString;
-        if (titleKey)
-        {
-            title = APP.translation.generateTranslatonHTML(titleKey);
+        if (titleKey) {
+            title = APP.translation.generateTranslationHTML(titleKey);
         }
         if (msgKey) {
-            message = APP.translation.generateTranslatonHTML(msgKey);
+            message = APP.translation.generateTranslationHTML(msgKey);
         }
         $.prompt(message, {
             title: title,
@@ -6092,11 +7809,14 @@ var messageHandler = (function(my) {
      *
      * @param titleString the title of the message
      * @param msgString the text of the message
-     * @param persistent boolean value which determines whether the message is persistent or not
-     * @param buttons object with the buttons. The keys must be the name of the button and value is the value
-     * that will be passed to submitFunction
+     * @param persistent boolean value which determines whether the message is
+     *        persistent or not
+     * @param buttons object with the buttons. The keys must be the name of the
+     *        button and value is the value that will be passed to
+     *        submitFunction
      * @param submitFunction function to be called on submit
-     * @param loadedFunction function to be called after the prompt is fully loaded
+     * @param loadedFunction function to be called after the prompt is fully
+     *        loaded
      */
     my.openDialog = function (titleString, msgString, persistent, buttons,
                               submitFunction, loadedFunction) {
@@ -6124,10 +7844,9 @@ var messageHandler = (function(my) {
     /**
      * Shows a dialog with different states to the user.
      *
-     * @param statesObject object containing all the states of the dialog
+     * @param statesObject object containing all the states of the dialog.
      */
     my.openDialogWithStates = function (statesObject, options) {
-
         return new Impromptu(statesObject, options);
     };
 
@@ -6141,7 +7860,7 @@ var messageHandler = (function(my) {
      * @param onPopupClosed optional callback function called when popup window
      *        has been closed.
      *
-     * @returns popup window object if opened successfully or undefined
+     * @returns {object} popup window object if opened successfully or undefined
      *          in case we failed to open it(popup blocked)
      */
     my.openCenteredPopup = function (url, w, h, onPopupClosed) {
@@ -6164,8 +7883,8 @@ var messageHandler = (function(my) {
     /**
      * Shows a dialog prompting the user to send an error report.
      *
-     * @param titleString the title of the message
-     * @param msgString the text of the message
+     * @param titleKey the title of the message
+     * @param msgKey the text of the message
      * @param error the error that is being reported
      */
     my.openReportDialog = function(titleKey, msgKey, error) {
@@ -6176,35 +7895,42 @@ var messageHandler = (function(my) {
 
     /**
      *  Shows an error dialog to the user.
-     * @param title the title of the message
-     * @param message the text of the messafe
+     * @param titleKey the title of the message.
+     * @param msgKey the text of the message.
      */
     my.showError = function(titleKey, msgKey) {
 
-        if(!titleKey) {
+        if (!titleKey) {
             titleKey = "dialog.oops";
         }
-        if(!msgKey)
-        {
+        if (!msgKey) {
             msgKey = "dialog.defaultError";
         }
         messageHandler.openMessageDialog(titleKey, msgKey);
     };
 
+    /**
+     * Displayes notification.
+     * @param displayName display name of the participant that is associated with the notification.
+     * @param displayNameKey the key from the language file for the display name.
+     * @param cls css class for the notification
+     * @param messageKey the key from the language file for the text of the message.
+     * @param messageArguments object with the arguments for the message.
+     * @param options object with language options.
+     */
     my.notify = function(displayName, displayNameKey,
                          cls, messageKey, messageArguments, options) {
+        if(!notificationsEnabled)
+            return;
         var displayNameSpan = '<span class="nickname" ';
-        if(displayName)
-        {
+        if (displayName) {
             displayNameSpan += ">" + displayName;
-        }
-        else
-        {
+        } else {
             displayNameSpan += "data-i18n='" + displayNameKey +
                 "'>" + APP.translation.translateString(displayNameKey);
         }
         displayNameSpan += "</span>";
-        toastr.info(
+        return toastr.info(
             displayNameSpan + '<br>' +
             '<span class=' + cls + ' data-i18n="' + messageKey + '"' +
                 (messageArguments?
@@ -6215,6 +7941,28 @@ var messageHandler = (function(my) {
             '</span>', null, options);
     };
 
+    /**
+     * Removes the toaster.
+     * @param toasterElement
+     */
+    my.remove = function(toasterElement) {
+        toasterElement.remove();
+    };
+
+    /**
+     * Disables notifications.
+     */
+    my.disableNotifications = function () {
+        notificationsEnabled = false;
+    };
+
+    /**
+     * Enables notifications.
+     */
+    my.enableNotifications = function () {
+        notificationsEnabled = true;
+    };
+
     return my;
 }(messageHandler || {}));
 
@@ -6222,13 +7970,13 @@ module.exports = messageHandler;
 
 
 
-},{}],30:[function(require,module,exports){
+},{}],34:[function(require,module,exports){
 var UIEvents = require("../../../service/UI/UIEvents");
 
 var nickname = null;
 var eventEmitter = null;
 
-var NickanameHandler = {
+var NicknameHandler = {
     init: function (emitter) {
         eventEmitter = emitter;
         var storedDisplayName = window.localStorage.displayname;
@@ -6252,8 +8000,9 @@ var NickanameHandler = {
     }
 };
 
-module.exports = NickanameHandler;
-},{"../../../service/UI/UIEvents":100}],31:[function(require,module,exports){
+module.exports = NicknameHandler;
+},{"../../../service/UI/UIEvents":171}],35:[function(require,module,exports){
+/* global $ */
 /**
  * Created by hristo on 12/22/14.
  */
@@ -6317,7 +8066,7 @@ module.exports = {
 
         for (var i = 0, n = pixels.length; i < n; i += 4) {
             var grayscale
-                = pixels[i] * .3 + pixels[i+1] * .59 + pixels[i+2] * .11;
+                = pixels[i] * 0.3 + pixels[i+1] * 0.59 + pixels[i+2] * 0.11;
             pixels[i  ] = grayscale;        // red
             pixels[i+1] = grayscale;        // green
             pixels[i+2] = grayscale;        // blue
@@ -6333,11 +8082,24 @@ module.exports = {
         element.setAttribute("data-placement", position);
         element.setAttribute("data-html", true);
         element.setAttribute("data-container", "body");
+    },
+
+    /**
+     * Inserts given child element as the first one into the container.
+     * @param container the container to which new child element will be added
+     * @param newChild the new element that will be inserted into the container
+     */
+    prependChild: function (container, newChild) {
+        var firstChild = container.childNodes[0];
+        if (firstChild) {
+            container.insertBefore(newChild, firstChild);
+        } else {
+            container.appendChild(newChild);
+        }
     }
-
-
 };
-},{"../side_pannels/SidePanelToggler":18}],32:[function(require,module,exports){
+},{"../side_pannels/SidePanelToggler":22}],36:[function(require,module,exports){
+/* global APP, $ */
 var JitsiPopover = require("../util/JitsiPopover");
 
 /**
@@ -6345,8 +8107,7 @@ var JitsiPopover = require("../util/JitsiPopover");
  * @param videoContainer the video container associated with the indicator.
  * @constructor
  */
-function ConnectionIndicator(videoContainer, jid)
-{
+function ConnectionIndicator(videoContainer, jid) {
     this.videoContainer = videoContainer;
     this.bandwidth = null;
     this.packetLoss = null;
@@ -6377,20 +8138,17 @@ ConnectionIndicator.connectionQualityValues = {
     0: "0px"//empty
 };
 
-ConnectionIndicator.getIP = function(value)
-{
+ConnectionIndicator.getIP = function(value) {
     return value.substring(0, value.lastIndexOf(":"));
 };
 
-ConnectionIndicator.getPort = function(value)
-{
+ConnectionIndicator.getPort = function(value) {
     return value.substring(value.lastIndexOf(":") + 1, value.length);
 };
 
 ConnectionIndicator.getStringFromArray = function (array) {
     var res = "";
-    for(var i = 0; i < array.length; i++)
-    {
+    for(var i = 0; i < array.length; i++) {
         res += (i === 0? "" : ", ") + array[i];
     }
     return res;
@@ -6405,74 +8163,60 @@ ConnectionIndicator.prototype.generateText = function () {
 
     var translate = APP.translation.translateString;
 
-    if(this.bitrate === null)
-    {
+    if(this.bitrate === null) {
         downloadBitrate = "N/A";
         uploadBitrate = "N/A";
     }
-    else
-    {
+    else {
         downloadBitrate =
             this.bitrate.download? this.bitrate.download + " Kbps" : "N/A";
         uploadBitrate =
             this.bitrate.upload? this.bitrate.upload + " Kbps" : "N/A";
     }
 
-    if(this.packetLoss === null)
-    {
+    if(this.packetLoss === null) {
         packetLoss = "N/A";
-    }
-    else
-    {
+    } else {
 
         packetLoss = "<span class='jitsipopover_green'>&darr;</span>" +
-            (this.packetLoss.download !== null? this.packetLoss.download : "N/A") +
+            (this.packetLoss.download !== null ?
+                this.packetLoss.download : "N/A") +
             "% <span class='jitsipopover_orange'>&uarr;</span>" +
-            (this.packetLoss.upload !== null? this.packetLoss.upload : "N/A") + "%";
+            (this.packetLoss.upload !== null? this.packetLoss.upload : "N/A") +
+            "%";
     }
 
     var resolutionValue = null;
-    if(this.resolution && this.jid != null)
-    {
+    if(this.resolution && this.jid != null) {
         var keys = Object.keys(this.resolution);
-        for(var ssrc in this.resolution)
-        {
+        for(var ssrc in this.resolution) {
             resolutionValue = this.resolution[ssrc];
         }
     }
 
-    if(this.jid === null)
-    {
+    if(this.jid === null) {
         resolution = "";
         if(this.resolution === null || !Object.keys(this.resolution) ||
-            Object.keys(this.resolution).length === 0)
-        {
+            Object.keys(this.resolution).length === 0) {
             resolution = "N/A";
-        }
-        else
-            for(i in this.resolution)
-            {
+        } else {
+            for (i in this.resolution) {
                 resolutionValue = this.resolution[i];
-                if(resolutionValue)
-                {
-                    if(resolutionValue.height &&
-                        resolutionValue.width)
-                    {
-                        resolution += (resolution === ""? "" : ", ") +
-                            resolutionValue.width + "x" +
-                            resolutionValue.height;
+                if (resolutionValue) {
+                    if (resolutionValue.height &&
+                        resolutionValue.width) {
+                        resolution += (resolution === "" ? "" : ", ") +
+                        resolutionValue.width + "x" +
+                        resolutionValue.height;
                     }
                 }
             }
-    }
-    else if(!resolutionValue ||
+        }
+    } else if(!resolutionValue ||
         !resolutionValue.height ||
-        !resolutionValue.width)
-    {
+        !resolutionValue.width) {
         resolution = "N/A";
-    }
-    else
-    {
+    } else {
         resolution = resolutionValue.width + "x" + resolutionValue.height;
     }
 
@@ -6495,22 +8239,20 @@ ConnectionIndicator.prototype.generateText = function () {
     if(this.videoContainer.videoSpanId == "localVideoContainer") {
         result += "<div class=\"jitsipopover_showmore\" " +
             "onclick = \"APP.UI.connectionIndicatorShowMore('" +
-            this.jid + "')\"  data-i18n='connectionindicator." +
+            // FIXME: we do not know local jid when this text is generated
+            //this.jid + "')\"  data-i18n='connectionindicator." +
+            "local')\"  data-i18n='connectionindicator." +
                 (this.showMoreValue ? "less" : "more") + "'>" +
             translate("connectionindicator." + (this.showMoreValue ? "less" : "more")) +
             "</div><br />";
     }
 
-    if(this.showMoreValue)
-    {
+    if (this.showMoreValue) {
         var downloadBandwidth, uploadBandwidth, transport;
-        if(this.bandwidth === null)
-        {
+        if (this.bandwidth === null) {
             downloadBandwidth = "N/A";
             uploadBandwidth = "N/A";
-        }
-        else
-        {
+        } else {
             downloadBandwidth = this.bandwidth.download?
                 this.bandwidth.download + " Kbps" :
                 "N/A";
@@ -6519,45 +8261,36 @@ ConnectionIndicator.prototype.generateText = function () {
                 "N/A";
         }
 
-        if(!this.transport || this.transport.length === 0)
-        {
+        if (!this.transport || this.transport.length === 0) {
             transport = "<tr>" +
                 "<td><span class='jitsipopover_blue' " +
                 "data-i18n='connectionindicator.address'>" +
                 translate("connectionindicator.address") + "</span></td>" +
                 "<td> N/A</td></tr>";
-        }
-        else
-        {
+        } else {
             var data = {remoteIP: [], localIP:[], remotePort:[], localPort:[]};
-            for(i = 0; i < this.transport.length; i++)
-            {
+            for(i = 0; i < this.transport.length; i++) {
                 var ip =  ConnectionIndicator.getIP(this.transport[i].ip);
                 var port = ConnectionIndicator.getPort(this.transport[i].ip);
                 var localIP =
                     ConnectionIndicator.getIP(this.transport[i].localip);
                 var localPort =
                     ConnectionIndicator.getPort(this.transport[i].localip);
-                if(data.remoteIP.indexOf(ip) == -1)
-                {
+                if(data.remoteIP.indexOf(ip) == -1) {
                     data.remoteIP.push(ip);
                 }
 
-                if(data.remotePort.indexOf(port) == -1)
-                {
+                if(data.remotePort.indexOf(port) == -1) {
                     data.remotePort.push(port);
                 }
 
-                if(data.localIP.indexOf(localIP) == -1)
-                {
+                if(data.localIP.indexOf(localIP) == -1) {
                     data.localIP.push(localIP);
                 }
 
-                if(data.localPort.indexOf(localPort) == -1)
-                {
+                if(data.localPort.indexOf(localPort) == -1) {
                     data.localPort.push(localPort);
                 }
-
             }
 
             var local_address_key = "connectionindicator.localaddress";
@@ -6623,7 +8356,6 @@ ConnectionIndicator.prototype.generateText = function () {
             uploadBandwidth + "</td></tr>";
 
         result += transport + "</table>";
-
     }
 
     return result;
@@ -6638,11 +8370,9 @@ ConnectionIndicator.prototype.showMore = function () {
 };
 
 
-function createIcon(classes)
-{
+function createIcon(classes) {
     var icon = document.createElement("span");
-    for(var i in classes)
-    {
+    for(var i in classes) {
         icon.classList.add(classes[i]);
     }
     icon.appendChild(
@@ -6657,7 +8387,8 @@ ConnectionIndicator.prototype.create = function () {
     this.connectionIndicatorContainer = document.createElement("div");
     this.connectionIndicatorContainer.className = "connectionindicator";
     this.connectionIndicatorContainer.style.display = "none";
-    this.videoContainer.container.appendChild(this.connectionIndicatorContainer);
+    this.videoContainer.container.appendChild(
+        this.connectionIndicatorContainer);
     this.popover = new JitsiPopover(
         $("#" + this.videoContainer.videoSpanId + " > .connectionindicator"),
         {content: "<div class=\"connection_info\" data-i18n='connectionindicator.na'>" +
@@ -6668,17 +8399,17 @@ ConnectionIndicator.prototype.create = function () {
         createIcon(["connection", "connection_empty"]));
     this.fullIcon = this.connectionIndicatorContainer.appendChild(
         createIcon(["connection", "connection_full"]));
-
 };
 
 /**
  * Removes the indicator
  */
-ConnectionIndicator.prototype.remove = function()
-{
-    this.connectionIndicatorContainer.remove();
+ConnectionIndicator.prototype.remove = function() {
+    if (this.connectionIndicatorContainer.parentNode) {
+        this.connectionIndicatorContainer.parentNode.removeChild(
+            this.connectionIndicatorContainer);
+    }
     this.popover.forceHide();
-
 };
 
 /**
@@ -6687,16 +8418,13 @@ ConnectionIndicator.prototype.remove = function()
  * @param object the statistics data.
  */
 ConnectionIndicator.prototype.updateConnectionQuality =
-function (percent, object) {
+    function (percent, object) {
 
-    if(percent === null)
-    {
+    if (percent === null) {
         this.connectionIndicatorContainer.style.display = "none";
         this.popover.forceHide();
         return;
-    }
-    else
-    {
+    } else {
         if(this.connectionIndicatorContainer.style.display == "none") {
             this.connectionIndicatorContainer.style.display = "block";
             this.videoContainer.updateIconPositions();
@@ -6706,14 +8434,11 @@ function (percent, object) {
     this.bitrate = object.bitrate;
     this.packetLoss = object.packetLoss;
     this.transport = object.transport;
-    if(object.resolution)
-    {
+    if (object.resolution) {
         this.resolution = object.resolution;
     }
-    for(var quality in ConnectionIndicator.connectionQualityValues)
-    {
-        if(percent >= quality)
-        {
+    for (var quality in ConnectionIndicator.connectionQualityValues) {
+        if (percent >= quality) {
             this.fullIcon.style.width =
                 ConnectionIndicator.connectionQualityValues[quality];
         }
@@ -6756,23 +8481,62 @@ ConnectionIndicator.prototype.hideIndicator = function () {
 };
 
 module.exports = ConnectionIndicator;
-},{"../util/JitsiPopover":28}],33:[function(require,module,exports){
+},{"../util/JitsiPopover":32}],37:[function(require,module,exports){
+/* global $, APP, Strophe, interfaceConfig */
 var Avatar = require("../avatar/Avatar");
+var RTCBrowserType = require("../../RTC/RTCBrowserType");
 var UIUtil = require("../util/UIUtil");
 var UIEvents = require("../../../service/UI/UIEvents");
 var xmpp = require("../../xmpp/xmpp");
+var ToolbarToggler = require("../toolbars/ToolbarToggler");
 
-var video = $('#largeVideo');
+// FIXME: With Temasys we have to re-select everytime
+//var video = $('#largeVideo');
 
 var currentVideoWidth = null;
 var currentVideoHeight = null;
 // By default we use camera
 var getVideoSize = getCameraVideoSize;
 var getVideoPosition = getCameraVideoPosition;
+/**
+ * The small video instance that is displayed in the large video
+ * @type {SmallVideo}
+ */
 var currentSmallVideo = null;
-var oldSmallVideo = null;
+/**
+ * Indicates whether the large video is enabled.
+ * @type {boolean}
+ */
+var isEnabled = true;
+/**
+ * Current large video state.
+ * Possible values - video, prezi or etherpad.
+ * @type {string}
+ */
+var state = "video";
 
-
+/**
+ * Returns the html element associated with the passed state of large video
+ * @param state the state.
+ * @returns {JQuery|*|jQuery|HTMLElement} the container.
+ */
+function getContainerByState(state)
+{
+    var selector = null;
+    switch (state)
+    {
+        case "video":
+            selector = "#largeVideoWrapper";
+            break;
+        case "etherpad":
+            selector = "#etherpad>iframe";
+            break;
+        case "prezi":
+            selector = "#presentation>iframe";
+            break;
+    }
+    return (selector !== null)? $(selector) : null;
+}
 
 /**
  * Sets the size and position of the given video element.
@@ -6789,8 +8553,7 @@ function positionVideo(video,
                        horizontalIndent,
                        verticalIndent,
                        animate) {
-    if(animate)
-    {
+    if (animate) {
         video.animate({
                 width: width,
                 height: height,
@@ -6803,9 +8566,7 @@ function positionVideo(video,
                 queue: false,
                 duration: 500
             });
-    }
-    else
-    {
+    } else {
         video.width(width);
         video.height(height);
         video.css({  top: verticalIndent + 'px',
@@ -6815,7 +8576,6 @@ function positionVideo(video,
     }
 
 }
-
 
 /**
  * Returns an array of the video dimensions, so that it keeps it's aspect
@@ -6935,9 +8695,34 @@ function getCameraVideoSize(videoWidth,
     return [availableWidth, availableHeight];
 }
 
+/**
+ * Updates the src of the active speaker avatar
+ * @param jid of the current active speaker
+ */
+function updateActiveSpeakerAvatarSrc() {
+    var avatar = $("#activeSpeakerAvatar")[0];
+    var jid = currentSmallVideo.peerJid;
+    var url = Avatar.getActiveSpeakerUrl(jid);
+    if (avatar.src === url)
+        return;
+    if (jid) {
+        avatar.src = url;
+        currentSmallVideo.showAvatar();
+    }
+}
 
+/**
+ * Change the video source of the large video.
+ * @param isVisible
+ */
 function changeVideo(isVisible) {
-    Avatar.updateActiveSpeakerAvatarSrc(currentSmallVideo.peerJid);
+
+    if (!currentSmallVideo) {
+        console.error("Unable to change large video - no 'currentSmallVideo'");
+        return;
+    }
+
+    updateActiveSpeakerAvatarSrc();
 
     APP.RTC.setVideoSrc($('#largeVideo')[0], currentSmallVideo.getSrc());
 
@@ -6947,59 +8732,104 @@ function changeVideo(isVisible) {
     var flipX = currentSmallVideo.flipX;
 
     if (flipX && videoTransform !== 'scaleX(-1)') {
-        document.getElementById('largeVideo').style.webkitTransform
-            = "scaleX(-1)";
-    }
-    else if (!flipX && videoTransform === 'scaleX(-1)') {
-        document.getElementById('largeVideo').style.webkitTransform
-            = "none";
+        document.getElementById('largeVideo').style.webkitTransform =
+            "scaleX(-1)";
+    } else if (!flipX && videoTransform === 'scaleX(-1)') {
+        document.getElementById('largeVideo').style.webkitTransform =
+            "none";
     }
 
-    var isDesktop = APP.RTC.isVideoSrcDesktop(currentSmallVideo.peerJid);
+    var isDesktop = currentSmallVideo.getVideoType() === 'screen';
     // Change the way we'll be measuring and positioning large video
 
-    getVideoSize = isDesktop
-        ? getDesktopVideoSize
-        : getCameraVideoSize;
-    getVideoPosition = isDesktop
-        ? getDesktopVideoPosition
-        : getCameraVideoPosition;
+    getVideoSize = isDesktop ? getDesktopVideoSize : getCameraVideoSize;
+    getVideoPosition = isDesktop ? getDesktopVideoPosition :
+        getCameraVideoPosition;
 
 
     // Only if the large video is currently visible.
-    // Disable previous dominant speaker video.
-    if (oldSmallVideo) {
-        oldSmallVideo.enableDominantSpeaker(false);
-    }
-
-    // Enable new dominant speaker in the remote videos section.
-    if (currentSmallVideo) {
-        currentSmallVideo.enableDominantSpeaker(true);
-    }
-
     if (isVisible) {
-        // using "this" should be ok because we're called
-        // from within the fadeOut event.
-        $(this).fadeIn(300);
+        LargeVideo.VideoLayout.largeVideoUpdated(currentSmallVideo);
+
+        $('#largeVideoWrapper').fadeTo(300, 1);
+    }
+}
+
+/**
+ * Creates the html elements for the large video.
+ */
+function createLargeVideoHTML()
+{
+    var html = '<div id="largeVideoContainer" class="videocontainer">';
+    html += '<div id="presentation"></div>' +
+            '<div id="etherpad"></div>' +
+            '<a target="_new"><div class="watermark leftwatermark"></div></a>' +
+            '<a target="_new"><div class="watermark rightwatermark"></div></a>' +
+            '<a class="poweredby" href="http://jitsi.org" target="_new" >' +
+                '<span data-i18n="poweredby"></span> jitsi.org' +
+            '</a>'+
+            '<div id="activeSpeaker">' +
+                '<img id="activeSpeakerAvatar" src=""/>' +
+                '<canvas id="activeSpeakerAudioLevel"></canvas>' +
+            '</div>' +
+            '<div id="largeVideoWrapper">' +
+                '<video id="largeVideo" autoplay oncontextmenu="return false;"></video>' +
+            '</div id="largeVideoWrapper">' +
+            '<span id="videoConnectionMessage"></span>';
+    html += '</div>';
+    $(html).prependTo("#videospace");
+
+    if (interfaceConfig.SHOW_JITSI_WATERMARK) {
+        var leftWatermarkDiv
+            = $("#largeVideoContainer div[class='watermark leftwatermark']");
+
+        leftWatermarkDiv.css({display: 'block'});
+        leftWatermarkDiv.parent().get(0).href
+            = interfaceConfig.JITSI_WATERMARK_LINK;
     }
 
-    if(oldSmallVideo)
-        Avatar.showUserAvatar(oldSmallVideo.peerJid);
+    if (interfaceConfig.SHOW_BRAND_WATERMARK) {
+        var rightWatermarkDiv
+            = $("#largeVideoContainer div[class='watermark rightwatermark']");
+
+        rightWatermarkDiv.css({display: 'block'});
+        rightWatermarkDiv.parent().get(0).href
+            = interfaceConfig.BRAND_WATERMARK_LINK;
+        rightWatermarkDiv.get(0).style.backgroundImage
+            = "url(images/rightwatermark.png)";
+    }
+
+    if (interfaceConfig.SHOW_POWERED_BY) {
+        $("#largeVideoContainer>a[class='poweredby']").css({display: 'block'});
+    }
+
+    if (!RTCBrowserType.isIExplorer()) {
+        $('#largeVideo').volume = 0;
+    }
 }
 
 var LargeVideo = {
 
     init: function (VideoLayout, emitter) {
+        if(!isEnabled)
+            return;
+        createLargeVideoHTML();
+
         this.VideoLayout = VideoLayout;
         this.eventEmitter = emitter;
+        this.eventEmitter.emit(UIEvents.LARGEVIDEO_INIT);
         var self = this;
         // Listen for large video size updates
-        document.getElementById('largeVideo')
-            .addEventListener('loadedmetadata', function (e) {
-                currentVideoWidth = this.videoWidth;
-                currentVideoHeight = this.videoHeight;
-                self.position(currentVideoWidth, currentVideoHeight);
-            });
+        var largeVideo = $('#largeVideo')[0];
+        var onplaying = function (arg1, arg2, arg3) {
+            // re-select
+            if (RTCBrowserType.isTemasysPluginUsed())
+                largeVideo = $('#largeVideo')[0];
+            currentVideoWidth = largeVideo.videoWidth;
+            currentVideoHeight = largeVideo.videoHeight;
+            self.position(currentVideoWidth, currentVideoHeight);
+        };
+        largeVideo.onplaying = onplaying;
     },
     /**
      * Indicates if the large video is currently visible.
@@ -7007,43 +8837,61 @@ var LargeVideo = {
      * @return <tt>true</tt> if visible, <tt>false</tt> - otherwise
      */
     isLargeVideoVisible: function() {
-        return video.is(':visible');
+        return $('#largeVideoWrapper').is(':visible');
+    },
+    /**
+     * Returns <tt>true</tt> if the user is currently displayed on large video.
+     */
+    isCurrentlyOnLarge: function (resourceJid) {
+        return currentSmallVideo && resourceJid &&
+            currentSmallVideo.getResourceJid() === resourceJid;
     },
     /**
      * Updates the large video with the given new video source.
      */
-    updateLargeVideo: function(resourceJid, forceUpdate) {
-        console.log('hover in', resourceJid);
+    updateLargeVideo: function (resourceJid, forceUpdate) {
+        if(!isEnabled)
+            return;
         var newSmallVideo = this.VideoLayout.getSmallVideo(resourceJid);
+        console.log('hover in ' + resourceJid + ', video: ', newSmallVideo);
 
-        if ((currentSmallVideo && currentSmallVideo.resourceJid !== resourceJid)
-            || forceUpdate) {
+        if (!newSmallVideo) {
+            console.error("Small video not found for: " + resourceJid);
+            return;
+        }
+
+        if (!LargeVideo.isCurrentlyOnLarge(resourceJid) || forceUpdate) {
             $('#activeSpeaker').css('visibility', 'hidden');
 
-            if(currentSmallVideo) {
+            var oldSmallVideo = null;
+            if (currentSmallVideo) {
                 oldSmallVideo = currentSmallVideo;
-            } else {
-                oldSmallVideo = null;
             }
-
             currentSmallVideo = newSmallVideo;
-            var oldJid = null;
-            if(oldSmallVideo)
-                oldJid = oldSmallVideo.peerJid;
 
+            var oldJid = null;
+            if (oldSmallVideo)
+                oldJid = oldSmallVideo.peerJid;
             if (oldJid !== resourceJid) {
                 // we want the notification to trigger even if userJid is undefined,
                 // or null.
-                this.eventEmitter.emit(UIEvents.SELECTED_ENDPOINT,
-                    resourceJid);
+                this.eventEmitter.emit(UIEvents.SELECTED_ENDPOINT, resourceJid);
             }
-
-            video.fadeOut(300, changeVideo.bind(video, this.isLargeVideoVisible()));
+            // We are doing fadeOut/fadeIn animations on parent div which wraps
+            // largeVideo, because when Temasys plugin is in use it replaces
+            // <video> elements with plugin <object> tag. In Safari jQuery is
+            // unable to store values on this plugin object which breaks all
+            // animation effects performed on it directly.
+            //
+            // If for any reason large video was hidden before calling fadeOut
+            // changeVideo will never be called, so we call show() in chain just
+            // to be sure
+            $('#largeVideoWrapper').show().fadeTo(300, 0,
+                changeVideo.bind($('#largeVideo'), this.isLargeVideoVisible()));
         } else {
-            var jid = null;
-            if(currentSmallVideo)
-                jid = currentSmallVideo.peerJid;
-            Avatar.showUserAvatar(jid);
+            if (currentSmallVideo) {
+                currentSmallVideo.showAvatar();
+            }
         }
 
     },
@@ -7052,31 +8900,32 @@ var LargeVideo = {
      * Shows/hides the large video.
      */
     setLargeVideoVisible: function(isVisible) {
+        if(!isEnabled)
+            return;
         if (isVisible) {
-            $('#largeVideo').css({visibility: 'visible'});
+            $('#largeVideoWrapper').css({visibility: 'visible'});
             $('.watermark').css({visibility: 'visible'});
             if(currentSmallVideo)
                 currentSmallVideo.enableDominantSpeaker(true);
         }
         else {
-            $('#largeVideo').css({visibility: 'hidden'});
+            $('#largeVideoWrapper').css({visibility: 'hidden'});
             $('#activeSpeaker').css('visibility', 'hidden');
             $('.watermark').css({visibility: 'hidden'});
             if(currentSmallVideo)
                 currentSmallVideo.enableDominantSpeaker(false);
         }
     },
-    onVideoTypeChanged: function (jid) {
-        if(jid && currentSmallVideo && jid === currentSmallVideo.peerJid)
+    onVideoTypeChanged: function (resourceJid, newVideoType) {
+        if (!isEnabled)
+            return;
+        if (LargeVideo.isCurrentlyOnLarge(resourceJid))
         {
-            var isDesktop = APP.RTC.isVideoSrcDesktop(jid);
-            getVideoSize = isDesktop
-                ? getDesktopVideoSize
-                : getCameraVideoSize;
-            getVideoPosition = isDesktop
-                ? getDesktopVideoPosition
+            var isDesktop = newVideoType === 'screen';
+            getVideoSize = isDesktop ? getDesktopVideoSize : getCameraVideoSize;
+            getVideoPosition = isDesktop ? getDesktopVideoPosition
                 : getCameraVideoPosition;
-            this.position(null, null);
+            this.position(null, null, null, null, true);
         }
     },
     /**
@@ -7087,6 +8936,8 @@ var LargeVideo = {
      */
     position: function (videoWidth, videoHeight,
                         videoSpaceWidth, videoSpaceHeight, animate) {
+        if(!isEnabled)
+            return;
         if(!videoSpaceWidth)
             videoSpaceWidth = $('#videospace').width();
         if(!videoSpaceHeight)
@@ -7108,18 +8959,22 @@ var LargeVideo = {
         var horizontalIndent = videoPosition[0];
         var verticalIndent = videoPosition[1];
 
-        positionVideo($('#largeVideo'),
+        positionVideo($('#largeVideoWrapper'),
             largeVideoWidth,
             largeVideoHeight,
             horizontalIndent, verticalIndent, animate);
     },
-
-    isLargeVideoOnTop: function () {
-        var Etherpad = require("../etherpad/Etherpad");
-        var Prezi = require("../prezi/Prezi");
-        return !Prezi.isPresentationVisible() && !Etherpad.isVisible();
-    },
+    /**
+     * Resizes the large html elements.
+     * @param animate boolean property that indicates whether the resize should be animated or not.
+     * @param isChatVisible boolean property that indicates whether the chat area is displayed or not.
+     * If that parameter is null the method will check the chat pannel visibility.
+     * @param completeFunction a function to be called when the video space is resized
+     * @returns {*[]} array with the current width and height values of the largeVideo html element.
+     */
     resize: function (animate, isVisible, completeFunction) {
+        if(!isEnabled)
+            return;
         var availableHeight = window.innerHeight;
         var availableWidth = UIUtil.getAvailableVideoWidth(isVisible);
 
@@ -7129,19 +8984,8 @@ var LargeVideo = {
         var top = availableHeight / 2 - avatarSize / 4 * 3;
         $('#activeSpeaker').css('top', top);
 
-        if(animate)
-        {
-            $('#videospace').animate({
-                    right: window.innerWidth - availableWidth,
-                    width: availableWidth,
-                    height: availableHeight
-                },
-                {
-                    queue: false,
-                    duration: 500,
-                    complete: completeFunction
-                });
-
+        this.VideoLayout.resizeVideoSpace(animate, isVisible, completeFunction);
+        if(animate) {
             $('#largeVideoContainer').animate({
                     width: availableWidth,
                     height: availableHeight
@@ -7150,48 +8994,195 @@ var LargeVideo = {
                     queue: false,
                     duration: 500
                 });
-
-
-        }
-        else
-        {
-            $('#videospace').width(availableWidth);
-            $('#videospace').height(availableHeight);
+        } else {
             $('#largeVideoContainer').width(availableWidth);
             $('#largeVideoContainer').height(availableHeight);
         }
         return [availableWidth, availableHeight];
-
     },
     resizeVideoAreaAnimated: function (isVisible, completeFunction) {
+        if(!isEnabled)
+            return;
         var size = this.resize(true, isVisible, completeFunction);
         this.position(null, null, size[0], size[1], true);
     },
     getResourceJid: function () {
-        if(!currentSmallVideo)
-            return null;
-        return currentSmallVideo.peerJid;
+        return currentSmallVideo ? currentSmallVideo.getResourceJid() : null;
+    },
+    updateAvatar: function (resourceJid) {
+        if(!isEnabled)
+            return;
+        if (resourceJid === this.getResourceJid()) {
+            updateActiveSpeakerAvatarSrc();
+        }
+    },
+    showAvatar: function (resourceJid, show) {
+        if (!isEnabled)
+            return;
+        if (this.getResourceJid() === resourceJid && state === "video") {
+            $("#largeVideoWrapper")
+                .css("visibility", show ? "hidden" : "visible");
+            $('#activeSpeaker').css("visibility", show ? "visible" : "hidden");
+            return true;
+        }
+        return false;
+    },
+    /**
+     * Disables the large video
+     */
+    disable: function () {
+        isEnabled = false;
+    },
+    /**
+     * Enables the large video
+     */
+    enable: function () {
+        isEnabled = true;
+    },
+    /**
+     * Returns true if the video is enabled.
+     */
+    isEnabled: function () {
+        return isEnabled;
+    },
+    /**
+     * Creates the iframe used by the etherpad
+     * @param src the value for src attribute
+     * @param onloadHandler handler executed when the iframe loads it content
+     * @returns {HTMLElement} the iframe
+     */
+    createEtherpadIframe: function (src, onloadHandler) {
+        if(!isEnabled)
+            return;
+
+        var etherpadIFrame = document.createElement('iframe');
+        etherpadIFrame.src = src;
+        etherpadIFrame.frameBorder = 0;
+        etherpadIFrame.scrolling = "no";
+        etherpadIFrame.width = $('#largeVideoContainer').width() || 640;
+        etherpadIFrame.height = $('#largeVideoContainer').height() || 480;
+        etherpadIFrame.setAttribute('style', 'visibility: hidden;');
+
+        document.getElementById('etherpad').appendChild(etherpadIFrame);
+
+        etherpadIFrame.onload = onloadHandler;
+
+        return etherpadIFrame;
+    },
+    /**
+     * Changes the state of the large video.
+     * Possible values - video, prezi, etherpad.
+     * @param newState - the new state
+     */
+    setState: function (newState) {
+        if(state === newState)
+            return;
+        var currentContainer = getContainerByState(state);
+        if(!currentContainer)
+            return;
+
+        var self = this;
+        var oldState = state;
+
+        switch (newState)
+        {
+            case "etherpad":
+                $('#activeSpeaker').css('visibility', 'hidden');
+                currentContainer.fadeOut(300, function () {
+                    if (oldState === "prezi") {
+                        currentContainer.css({opacity: '0'});
+                        $('#reloadPresentation').css({display: 'none'});
+                    }
+                    else {
+                        self.setLargeVideoVisible(false);
+                    }
+                });
+
+                $('#etherpad>iframe').fadeIn(300, function () {
+                    document.body.style.background = '#eeeeee';
+                    $('#etherpad>iframe').css({visibility: 'visible'});
+                    $('#etherpad').css({zIndex: 2});
+                });
+                break;
+            case "prezi":
+                var prezi = $('#presentation>iframe');
+                currentContainer.fadeOut(300, function() {
+                    document.body.style.background = 'black';
+                });
+                prezi.fadeIn(300, function() {
+                    prezi.css({opacity:'1'});
+                    ToolbarToggler.dockToolbar(true);//fix that
+                    self.setLargeVideoVisible(false);
+                    $('#etherpad>iframe').css({visibility: 'hidden'});
+                    $('#etherpad').css({zIndex: 0});
+                });
+                $('#activeSpeaker').css('visibility', 'hidden');
+                break;
+
+            case "video":
+                currentContainer.fadeOut(300, function () {
+                    $('#presentation>iframe').css({opacity:'0'});
+                    $('#reloadPresentation').css({display:'none'});
+                    $('#etherpad>iframe').css({visibility: 'hidden'});
+                    $('#etherpad').css({zIndex: 0});
+                    document.body.style.background = 'black';
+                    ToolbarToggler.dockToolbar(false);//fix that
+                });
+                $('#largeVideoWrapper').fadeIn(300, function () {
+                    self.setLargeVideoVisible(true);
+                });
+                break;
+        }
+
+        state = newState;
+
+    },
+    /**
+     * Returns the current state of the large video.
+     * @returns {string} the current state - video, prezi or etherpad.
+     */
+    getState: function () {
+        return state;
+    },
+    /**
+     * Sets hover handlers for the large video container div.
+     *
+     * @param inHandler
+     * @param outHandler
+     */
+    setHover: function(inHandler, outHandler)
+    {
+        $('#largeVideoContainer').hover(inHandler, outHandler);
+    },
+
+    /**
+     * Enables/disables the filter indicating a video problem to the user.
+     *
+     * @param enable <tt>true</tt> to enable, <tt>false</tt> to disable
+     */
+    enableVideoProblemFilter: function (enable) {
+        $("#largeVideo").toggleClass("videoProblemFilter", enable);
     }
-
-}
-
+};
 
 module.exports = LargeVideo;
-},{"../../../service/UI/UIEvents":100,"../../xmpp/xmpp":63,"../avatar/Avatar":14,"../etherpad/Etherpad":15,"../prezi/Prezi":16,"../util/UIUtil":31}],34:[function(require,module,exports){
+},{"../../../service/UI/UIEvents":171,"../../RTC/RTCBrowserType":10,"../../xmpp/xmpp":73,"../avatar/Avatar":18,"../toolbars/ToolbarToggler":31,"../util/UIUtil":35}],38:[function(require,module,exports){
+/* global $, interfaceConfig, APP */
 var SmallVideo = require("./SmallVideo");
 var ConnectionIndicator = require("./ConnectionIndicator");
 var NicknameHandler = require("../util/NicknameHandler");
 var UIUtil = require("../util/UIUtil");
 var LargeVideo = require("./LargeVideo");
+var RTCBrowserType = require("../../RTC/RTCBrowserType");
 
-function LocalVideo(VideoLayout)
-{
+function LocalVideo(VideoLayout) {
     this.videoSpanId = "localVideoContainer";
     this.container = $("#localVideoContainer").get(0);
+    this.bindHoverHandler();
     this.VideoLayout = VideoLayout;
     this.flipX = true;
+    this.isLocal = true;
     this.peerJid = null;
-    this.resourceJid = null;
 }
 
 LocalVideo.prototype = Object.create(SmallVideo.prototype);
@@ -7200,7 +9191,7 @@ LocalVideo.prototype.constructor = LocalVideo;
 /**
  * Creates the edit display name button.
  *
- * @returns the edit button
+ * @returns {object} the edit button
  */
 function createEditDisplayNameButton() {
     var editButton = document.createElement('a');
@@ -7213,33 +9204,31 @@ function createEditDisplayNameButton() {
     return editButton;
 }
 
-
 /**
  * Sets the display name for the given video span id.
  */
 LocalVideo.prototype.setDisplayName = function(displayName, key) {
-
     if (!this.container) {
         console.warn(
-                "Unable to set displayName - " + this.videoSpanId + " does not exist");
+                "Unable to set displayName - " + this.videoSpanId +
+                " does not exist");
         return;
     }
 
     var nameSpan = $('#' + this.videoSpanId + '>span.displayname');
-    var defaultLocalDisplayName = APP.translation.generateTranslatonHTML(
+    var defaultLocalDisplayName = APP.translation.generateTranslationHTML(
         interfaceConfig.DEFAULT_LOCAL_DISPLAY_NAME);
 
+    var meHTML;
     // If we already have a display name for this video.
     if (nameSpan.length > 0) {
-
         if (nameSpan.text() !== displayName) {
-            if (displayName && displayName.length > 0)
-            {
-                var meHTML = APP.translation.generateTranslatonHTML("me");
+            if (displayName && displayName.length > 0) {
+                meHTML = APP.translation.generateTranslationHTML("me");
                 $('#localDisplayName').html(displayName + ' (' + meHTML + ')');
-            }
-            else
+            } else {
                 $('#localDisplayName').html(defaultLocalDisplayName);
+            }
         }
     } else {
         var editButton = createEditDisplayNameButton();
@@ -7250,7 +9239,7 @@ LocalVideo.prototype.setDisplayName = function(displayName, key) {
 
 
         if (displayName && displayName.length > 0) {
-            var meHTML = APP.translation.generateTranslatonHTML("me");
+            meHTML = APP.translation.generateTranslationHTML("me");
             nameSpan.innerHTML = displayName + meHTML;
         }
         else {
@@ -7287,18 +9276,19 @@ LocalVideo.prototype.setDisplayName = function(displayName, key) {
         $('#localVideoContainer .displayname')
             .bind("click", function (e) {
 
+                var editDisplayName = $('#editDisplayName');
                 e.preventDefault();
                 e.stopPropagation();
                 $('#localDisplayName').hide();
-                $('#editDisplayName').show();
-                $('#editDisplayName').focus();
-                $('#editDisplayName').select();
+                editDisplayName.show();
+                editDisplayName.focus();
+                editDisplayName.select();
 
-                $('#editDisplayName').one("focusout", function (e) {
+                editDisplayName.one("focusout", function (e) {
                     self.VideoLayout.inputDisplayNameHandler(this.value);
                 });
 
-                $('#editDisplayName').on('keydown', function (e) {
+                editDisplayName.on('keydown', function (e) {
                     if (e.keyCode === 13) {
                         e.preventDefault();
                         self.VideoLayout.inputDisplayNameHandler(this.value);
@@ -7306,84 +9296,78 @@ LocalVideo.prototype.setDisplayName = function(displayName, key) {
                 });
             });
     }
-}
+};
 
 LocalVideo.prototype.inputDisplayNameHandler = function (name) {
     NicknameHandler.setNickname(name);
 
-    if (!$('#localDisplayName').is(":visible")) {
-        if (NicknameHandler.getNickname())
-        {
-            var meHTML = APP.translation.generateTranslatonHTML("me");
-            $('#localDisplayName').html(NicknameHandler.getNickname() + " (" + meHTML + ")");
-        }
-        else
-        {
-            var defaultHTML = APP.translation.generateTranslatonHTML(
+    var localDisplayName = $('#localDisplayName');
+    if (!localDisplayName.is(":visible")) {
+        if (NicknameHandler.getNickname()) {
+            var meHTML = APP.translation.generateTranslationHTML("me");
+            localDisplayName.html(NicknameHandler.getNickname() + " (" +
+            meHTML + ")");
+        } else {
+            var defaultHTML = APP.translation.generateTranslationHTML(
                 interfaceConfig.DEFAULT_LOCAL_DISPLAY_NAME);
-            $('#localDisplayName')
-                .html(defaultHTML);
+            localDisplayName .html(defaultHTML);
         }
-        $('#localDisplayName').show();
+        localDisplayName.show();
     }
 
     $('#editDisplayName').hide();
-}
+};
 
-LocalVideo.prototype.createConnectionIndicator = function()
-{
+LocalVideo.prototype.createConnectionIndicator = function() {
     if(this.connectionIndicator)
         return;
 
-    this.connectionIndicator
-        = new ConnectionIndicator(this, null);
-}
+    this.connectionIndicator = new ConnectionIndicator(this, null);
+};
 
 LocalVideo.prototype.changeVideo = function (stream, isMuted) {
     var self = this;
 
     function localVideoClick(event) {
-        event.stopPropagation();
+        // FIXME: with Temasys plugin event arg is not an event, but
+        // the clicked object itself, so we have to skip this call
+        if (event.stopPropagation) {
+            event.stopPropagation();
+        }
         self.VideoLayout.handleVideoThumbClicked(
-            false,
+            true,
             APP.xmpp.myResource());
     }
 
-    $('#localVideoContainer').click(localVideoClick);
+    var localVideoContainerSelector = $('#localVideoContainer');
+    localVideoContainerSelector.off('click');
+    localVideoContainerSelector.on('click', localVideoClick);
 
-    // Add hover handler
-    $('#localVideoContainer').hover(
-        function() {
-            self.showDisplayName(true);
-        },
-        function() {
-            if (!LargeVideo.isLargeVideoVisible()
-                || APP.xmpp.myResource() !== LargeVideo.getResourceJid())
-                self.showDisplayName(false);
-        }
-    );
-
-    if(isMuted)
-    {
+    if(isMuted) {
         APP.UI.setVideoMute(true);
         return;
     }
-    this.flipX = (stream.videoType == "screen")? false : true;
+    this.flipX = stream.videoType != "screen";
     var localVideo = document.createElement('video');
     localVideo.id = 'localVideo_' +
         APP.RTC.getStreamID(stream.getOriginalStream());
-    localVideo.autoplay = true;
-    localVideo.volume = 0; // is it required if audio is separated ?
+    if (!RTCBrowserType.isIExplorer()) {
+        localVideo.autoplay = true;
+        localVideo.volume = 0; // is it required if audio is separated ?
+    }
     localVideo.oncontextmenu = function () { return false; };
 
     var localVideoContainer = document.getElementById('localVideoWrapper');
-    localVideoContainer.appendChild(localVideo);
+    // Put the new video always in front
+    UIUtil.prependChild(localVideoContainer, localVideo);
 
     var localVideoSelector = $('#' + localVideo.id);
 
     // Add click handler to both video and video wrapper elements in case
     // there's no video.
-    localVideoSelector.click(localVideoClick);
+
+    // onclick has to be used with Temasys plugin
+    localVideo.onclick = localVideoClick;
 
     if (this.flipX) {
         localVideoSelector.addClass("flipVideoX");
@@ -7394,26 +9378,38 @@ LocalVideo.prototype.changeVideo = function (stream, isMuted) {
 
     // Add stream ended handler
     stream.getOriginalStream().onended = function () {
+        // We have to re-select after attach when Temasys plugin is used,
+        // because <video> element is replaced with <object>
+        localVideo = $('#' + localVideo.id)[0];
         localVideoContainer.removeChild(localVideo);
-        self.VideoLayout.updateRemovedVideo(APP.RTC.getVideoSrc(localVideo));
+        self.VideoLayout.updateRemovedVideo(APP.xmpp.myResource());
     };
-}
+};
 
 LocalVideo.prototype.joined = function (jid) {
     this.peerJid = jid;
-    this.resourceJid = Strophe.getResourceFromJid(jid);
-}
+};
+
+LocalVideo.prototype.getResourceJid = function () {
+    var myResource = APP.xmpp.myResource();
+    if (!myResource) {
+        console.error("Requested local resource before we're in the MUC");
+    }
+    return myResource;
+};
 
 module.exports = LocalVideo;
-},{"../util/NicknameHandler":30,"../util/UIUtil":31,"./ConnectionIndicator":32,"./LargeVideo":33,"./SmallVideo":36}],35:[function(require,module,exports){
+},{"../../RTC/RTCBrowserType":10,"../util/NicknameHandler":34,"../util/UIUtil":35,"./ConnectionIndicator":36,"./LargeVideo":37,"./SmallVideo":40}],39:[function(require,module,exports){
+/* global $, APP, require, Strophe, interfaceConfig */
 var ConnectionIndicator = require("./ConnectionIndicator");
 var SmallVideo = require("./SmallVideo");
 var AudioLevels = require("../audio_levels/AudioLevels");
 var LargeVideo = require("./LargeVideo");
 var Avatar = require("../avatar/Avatar");
+var RTCBrowserType = require("../../RTC/RTCBrowserType");
+var UIUtils = require("../util/UIUtil");
 
-function RemoteVideo(peerJid, VideoLayout)
-{
+function RemoteVideo(peerJid, VideoLayout) {
     this.peerJid = peerJid;
     this.resourceJid = Strophe.getResourceFromJid(peerJid);
     this.videoSpanId = 'participant_' + this.resourceJid;
@@ -7426,7 +9422,9 @@ function RemoteVideo(peerJid, VideoLayout)
     nickfield.className = "nick";
     nickfield.appendChild(document.createTextNode(this.resourceJid));
     this.container.appendChild(nickfield);
+    this.bindHoverHandler();
     this.flipX = false;
+    this.isLocal = false;
 }
 
 RemoteVideo.prototype = Object.create(SmallVideo.prototype);
@@ -7448,85 +9446,96 @@ RemoteVideo.prototype.addRemoteVideoContainer = function() {
  * @param jid the jid indicating the video for which we're adding a menu.
  * @param parentElement the parent element where this menu will be added
  */
-RemoteVideo.prototype.addRemoteVideoMenu = function () {
-    var spanElement = document.createElement('span');
-    spanElement.className = 'remotevideomenu';
 
-    this.container.appendChild(spanElement);
+if (!interfaceConfig.filmStripOnly) {
+    RemoteVideo.prototype.addRemoteVideoMenu = function () {
+        var spanElement = document.createElement('span');
+        spanElement.className = 'remotevideomenu';
 
-    var menuElement = document.createElement('i');
-    menuElement.className = 'fa fa-angle-down';
-    menuElement.title = 'Remote user controls';
-    spanElement.appendChild(menuElement);
+        this.container.appendChild(spanElement);
+
+        var menuElement = document.createElement('i');
+        menuElement.className = 'fa fa-angle-down';
+        menuElement.title = 'Remote user controls';
+        spanElement.appendChild(menuElement);
 
 
-    var popupmenuElement = document.createElement('ul');
-    popupmenuElement.className = 'popupmenu';
-    popupmenuElement.id
-        = 'remote_popupmenu_' + this.resourceJid;
-    spanElement.appendChild(popupmenuElement);
+        var popupmenuElement = document.createElement('ul');
+        popupmenuElement.className = 'popupmenu';
+        popupmenuElement.id = 'remote_popupmenu_' + this.getResourceJid();
+        spanElement.appendChild(popupmenuElement);
 
-    var muteMenuItem = document.createElement('li');
-    var muteLinkItem = document.createElement('a');
+        var muteMenuItem = document.createElement('li');
+        var muteLinkItem = document.createElement('a');
 
-    var mutedIndicator = "<i style='float:left;' class='icon-mic-disabled'></i>";
+        var mutedIndicator = "<i style='float:left;' " +
+            "class='icon-mic-disabled'></i>";
 
-    if (!this.isMuted) {
-        muteLinkItem.innerHTML = mutedIndicator +
-            " <div style='width: 90px;margin-left: 20px;' data-i18n='videothumbnail.domute'></div>";
-        muteLinkItem.className = 'mutelink';
-    }
-    else {
-        muteLinkItem.innerHTML = mutedIndicator +
-            " <div style='width: 90px;margin-left: 20px;' data-i18n='videothumbnail.muted'></div>";
-        muteLinkItem.className = 'mutelink disabled';
-    }
-
-    var self = this;
-    muteLinkItem.onclick = function(){
-        if ($(this).attr('disabled') != undefined) {
-            event.preventDefault();
-        }
-        var isMute = self.isMuted == true;
-        APP.xmpp.setMute(self.peerJid, !isMute);
-
-        popupmenuElement.setAttribute('style', 'display:none;');
-
-        if (isMute) {
-            this.innerHTML = mutedIndicator +
-                " <div style='width: 90px;margin-left: 20px;' data-i18n='videothumbnail.muted'></div>";
-            this.className = 'mutelink disabled';
+        if (!this.isMuted) {
+            muteLinkItem.innerHTML = mutedIndicator +
+                " <div style='width: 90px;margin-left: 20px;' " +
+                "data-i18n='videothumbnail.domute'></div>";
+            muteLinkItem.className = 'mutelink';
         }
         else {
-            this.innerHTML = mutedIndicator +
-                " <div style='width: 90px;margin-left: 20px;' data-i18n='videothumbnail.domute'></div>";
-            this.className = 'mutelink';
+            muteLinkItem.innerHTML = mutedIndicator +
+                " <div style='width: 90px;margin-left: 20px;' " +
+                "data-i18n='videothumbnail.muted'></div>";
+            muteLinkItem.className = 'mutelink disabled';
         }
+
+        var self = this;
+        muteLinkItem.onclick = function(){
+            if ($(this).attr('disabled') != undefined) {
+                event.preventDefault();
+            }
+            var isMute = self.isMuted == true;
+            APP.xmpp.setMute(self.peerJid, !isMute);
+
+            popupmenuElement.setAttribute('style', 'display:none;');
+
+            if (isMute) {
+                this.innerHTML = mutedIndicator +
+                    " <div style='width: 90px;margin-left: 20px;' " +
+                    "data-i18n='videothumbnail.muted'></div>";
+                this.className = 'mutelink disabled';
+            }
+            else {
+                this.innerHTML = mutedIndicator +
+                    " <div style='width: 90px;margin-left: 20px;' " +
+                    "data-i18n='videothumbnail.domute'></div>";
+                this.className = 'mutelink';
+            }
+        };
+
+        muteMenuItem.appendChild(muteLinkItem);
+        popupmenuElement.appendChild(muteMenuItem);
+
+        var ejectIndicator = "<i style='float:left;' class='fa fa-eject'></i>";
+
+        var ejectMenuItem = document.createElement('li');
+        var ejectLinkItem = document.createElement('a');
+        var ejectText = "<div style='width: 90px;margin-left: 20px;' " +
+            "data-i18n='videothumbnail.kick'>&nbsp;</div>";
+        ejectLinkItem.innerHTML = ejectIndicator + ' ' + ejectText;
+        ejectLinkItem.onclick = function(){
+            APP.xmpp.eject(self.peerJid);
+            popupmenuElement.setAttribute('style', 'display:none;');
+        };
+
+        ejectMenuItem.appendChild(ejectLinkItem);
+        popupmenuElement.appendChild(ejectMenuItem);
+
+        var paddingSpan = document.createElement('span');
+        paddingSpan.className = 'popupmenuPadding';
+        popupmenuElement.appendChild(paddingSpan);
+        APP.translation.translateElement(
+            $("#" + popupmenuElement.id + " > li > a > div"));
     };
 
-    muteMenuItem.appendChild(muteLinkItem);
-    popupmenuElement.appendChild(muteMenuItem);
-
-    var ejectIndicator = "<i style='float:left;' class='fa fa-eject'></i>";
-
-    var ejectMenuItem = document.createElement('li');
-    var ejectLinkItem = document.createElement('a');
-    var ejectText = "<div style='width: 90px;margin-left: 20px;' data-i18n='videothumbnail.kick'>&nbsp;</div>";
-    ejectLinkItem.innerHTML = ejectIndicator + ' ' + ejectText;
-    ejectLinkItem.onclick = function(){
-        APP.xmpp.eject(self.peerJid);
-        popupmenuElement.setAttribute('style', 'display:none;');
-    };
-
-    ejectMenuItem.appendChild(ejectLinkItem);
-    popupmenuElement.appendChild(ejectMenuItem);
-
-    var paddingSpan = document.createElement('span');
-    paddingSpan.className = 'popupmenuPadding';
-    popupmenuElement.appendChild(paddingSpan);
-    APP.translation.translateElement($("#" + popupmenuElement.id + " > li > a > div"));
+} else {
+    RemoteVideo.prototype.addRemoteVideoMenu = function() {}
 }
-
 
 /**
  * Removes the remote stream element corresponding to the given stream and
@@ -7534,67 +9543,92 @@ RemoteVideo.prototype.addRemoteVideoMenu = function () {
  *
  * @param stream the stream
  * @param isVideo <tt>true</tt> if given <tt>stream</tt> is a video one.
- * @param container
  */
-RemoteVideo.prototype.removeRemoteStreamElement = function (stream, isVideo, id) {
+RemoteVideo.prototype.removeRemoteStreamElement =
+    function (stream, isVideo, id) {
     if (!this.container)
         return false;
 
     var select = null;
-    var removedVideoSrc = null;
     if (isVideo) {
         select = $('#' + id);
-        removedVideoSrc = APP.RTC.getVideoSrc(select.get(0));
     }
     else
         select = $('#' + this.videoSpanId + '>audio');
 
-
-    // Mark video as removed to cancel waiting loop(if video is removed
-    // before has started)
-    select.removed = true;
     select.remove();
 
-    var audioCount = $('#' + this.videoSpanId + '>audio').length;
-    var videoCount = $('#' + this.videoSpanId + '>video').length;
+    console.info((isVideo ? "Video" : "Audio") +
+                 " removed " + this.getResourceJid(), select);
 
-    if (!audioCount && !videoCount) {
-        console.log("Remove whole user", this.videoSpanId);
-        if(this.connectionIndicator)
-            this.connectionIndicator.remove();
-        // Remove whole container
-        this.container.remove();
+    if (isVideo)
+        this.VideoLayout.updateRemovedVideo(this.getResourceJid());
+};
 
-        this.VideoLayout.resizeThumbnails();
+/**
+ * Removes RemoteVideo from the page.
+ */
+RemoteVideo.prototype.remove = function () {
+    console.log("Remove thumbnail", this.peerJid);
+    this.removeConnectionIndicator();
+    // Remove whole container
+    if (this.container.parentNode)
+        this.container.parentNode.removeChild(this.container);
+};
+
+RemoteVideo.prototype.waitForPlayback = function (sel, stream) {
+
+    var isVideo = stream.getVideoTracks().length > 0;
+    if (!isVideo || stream.id === 'mixedmslabel') {
+        return;
     }
 
-    if (removedVideoSrc)
-        this.VideoLayout.updateRemovedVideo(removedVideoSrc);
+    var self = this;
+    var resourceJid = this.getResourceJid();
+
+    // Register 'onplaying' listener to trigger 'videoactive' on VideoLayout
+    // when video playback starts
+    var onPlayingHandler = function () {
+        // FIXME: why do i have to do this for FF?
+        if (RTCBrowserType.isFirefox()) {
+            APP.RTC.attachMediaStream(sel, stream);
+        }
+        if (RTCBrowserType.isTemasysPluginUsed()) {
+            sel = self.selectVideoElement();
+        }
+        self.VideoLayout.videoactive(sel, resourceJid);
+        sel[0].onplaying = null;
+        if (RTCBrowserType.isTemasysPluginUsed()) {
+            // 'currentTime' is used to check if the video has started
+            // and the value is not set by the plugin, so we do it
+            sel[0].currentTime = 1;
+        }
+    };
+    sel[0].onplaying = onPlayingHandler;
 };
 
 RemoteVideo.prototype.addRemoteStreamElement = function (sid, stream, thessrc) {
-    var isVideo = stream.getVideoTracks().length > 0;
-    if(!this.container)
+    if (!this.container)
         return;
 
+    var self = this;
+    var isVideo = stream.getVideoTracks().length > 0;
     var streamElement = SmallVideo.createStreamElement(sid, stream);
     var newElementId = streamElement.id;
 
-    this.container.appendChild(streamElement);
+    // Put new stream element always in front
+    UIUtils.prependChild(this.container, streamElement);
 
     var sel = $('#' + newElementId);
     sel.hide();
 
     // If the container is currently visible we attach the stream.
-    if (!isVideo
-        || (this.container.offsetParent !== null && isVideo)) {
-        APP.RTC.attachMediaStream(sel, stream);
+    if (!isVideo || (this.container.offsetParent !== null && isVideo)) {
+        this.waitForPlayback(sel, stream);
 
-        if (isVideo)
-            this.waitForRemoteVideo(sel, thessrc, stream);
+        APP.RTC.attachMediaStream(sel, stream);
     }
 
-    var self = this;
     stream.onended = function () {
         console.log('stream ended', this);
 
@@ -7603,64 +9637,25 @@ RemoteVideo.prototype.addRemoteStreamElement = function (sid, stream, thessrc) {
     };
 
     // Add click handler.
-    this.container.onclick = function (event) {
-        /*
-         * FIXME It turns out that videoThumb may not exist (if there is
-         * no actual video).
-         */
-        var videoThumb = $('#' + self.videoSpanId + '>video').get(0);
-        if (videoThumb) {
-            self.VideoLayout.handleVideoThumbClicked(
-                false,
-                self.resourceJid);
-        }
+    var onClickHandler = function (event) {
 
-        event.stopPropagation();
-        event.preventDefault();
+        self.VideoLayout.handleVideoThumbClicked(false, self.getResourceJid());
+
+        // On IE we need to populate this handler on video <object>
+        // and it does not give event instance as an argument,
+        // so we check here for methods.
+        if (event.stopPropagation && event.preventDefault) {
+            event.stopPropagation();
+            event.preventDefault();
+        }
         return false;
     };
-
-    //FIXME
-    // Add hover handler
-    $(this.container).hover(
-        function() {
-            self.showDisplayName(true);
-        },
-        function() {
-            var videoSrc = null;
-            if ($('#' + self.videoSpanId + '>video')
-                && $('#' + self.videoSpanId + '>video').length > 0) {
-                videoSrc = APP.RTC.getVideoSrc($('#' + self.videoSpanId + '>video').get(0));
-            }
-
-            // If the video has been "pinned" by the user we want to
-            // keep the display name on place.
-            if (!LargeVideo.isLargeVideoVisible()
-                || videoSrc !== APP.RTC.getVideoSrc($('#largeVideo')[0]))
-                self.showDisplayName(false);
-        }
-    );
-}
-
-
-RemoteVideo.prototype.waitForRemoteVideo = function(selector, ssrc, stream) {
-    if (selector.removed || !selector.parent().is(":visible")) {
-        console.warn("Media removed before had started", selector);
-        return;
-    }
-
-    if (stream.id === 'mixedmslabel') return;
-
-    if (selector[0].currentTime > 0) {
-        APP.RTC.attachMediaStream(selector, stream); // FIXME: why do i have to do this for FF?
-        this.VideoLayout.videoactive(selector, this.resourceJid);
-    } else {
-        var self = this;
-        setTimeout(function () {
-            self.waitForRemoteVideo(selector, ssrc, stream);
-        }, 250);
-    }
-}
+    this.container.onclick = onClickHandler;
+    // reselect
+    if (RTCBrowserType.isTemasysPluginUsed())
+        sel = $('#' + newElementId);
+    sel[0].onclick = onClickHandler;
+},
 
 /**
  * Show/hide peer container for the given resourceJid.
@@ -7678,7 +9673,7 @@ RemoteVideo.prototype.showPeerContainer = function (state) {
             $(this.container).show();
         }
 
-        Avatar.showUserAvatar(this.peerJid, (state !== 'show'));
+        this.showAvatar(state !== 'show');
     }
     else if ($(this.container).is(':visible') && isHide)
     {
@@ -7699,14 +9694,14 @@ RemoteVideo.prototype.showPeerContainer = function (state) {
 };
 
 RemoteVideo.prototype.removeConnectionIndicator = function () {
-    if(this.connectionIndicator)
+    if (this.connectionIndicator)
         this.connectionIndicator.remove();
-}
+};
 
 RemoteVideo.prototype.hideConnectionIndicator = function () {
-    if(this.connectionIndicator)
+    if (this.connectionIndicator)
         this.connectionIndicator.hide();
-}
+};
 
 /**
  * Updates the remote video menu.
@@ -7716,9 +9711,7 @@ RemoteVideo.prototype.hideConnectionIndicator = function () {
  */
 RemoteVideo.prototype.updateRemoteVideoMenu = function (isMuted) {
     var muteMenuItem
-        = $('#remote_popupmenu_'
-        + this.resourceJid
-        + '>li>a.mutelink');
+        = $('#remote_popupmenu_' + this.getResourceJid() + '>li>a.mutelink');
 
     var mutedIndicator = "<i class='icon-mic-disabled'></i>";
 
@@ -7734,7 +9727,7 @@ RemoteVideo.prototype.updateRemoteVideoMenu = function (isMuted) {
             muteLink.className = 'mutelink';
         }
     }
-}
+};
 
 /**
  * Sets the display name for the given video span id.
@@ -7742,8 +9735,8 @@ RemoteVideo.prototype.updateRemoteVideoMenu = function (isMuted) {
 RemoteVideo.prototype.setDisplayName = function(displayName, key) {
 
     if (!this.container) {
-        console.warn(
-                "Unable to set displayName - " + this.videoSpanId + " does not exist");
+        console.warn( "Unable to set displayName - " + this.videoSpanId +
+                " does not exist");
         return;
     }
 
@@ -7751,13 +9744,11 @@ RemoteVideo.prototype.setDisplayName = function(displayName, key) {
 
     // If we already have a display name for this video.
     if (nameSpan.length > 0) {
-        if (displayName && displayName.length > 0)
-        {
+        if (displayName && displayName.length > 0) {
             $('#' + this.videoSpanId + '_name').html(displayName);
         }
-        else if (key && key.length > 0)
-        {
-            var nameHtml = APP.translation.generateTranslatonHTML(key);
+        else if (key && key.length > 0) {
+            var nameHtml = APP.translation.generateTranslationHTML(key);
             $('#' + this.videoSpanId + '_name').html(nameHtml);
         }
         else
@@ -7770,17 +9761,14 @@ RemoteVideo.prototype.setDisplayName = function(displayName, key) {
 
 
         if (displayName && displayName.length > 0) {
-
             nameSpan.innerText = displayName;
         }
         else
             nameSpan.innerText = interfaceConfig.DEFAULT_REMOTE_DISPLAY_NAME;
 
-
         nameSpan.id = this.videoSpanId + '_name';
-
     }
-}
+};
 
 /**
  * Removes remote video menu element from video element identified by
@@ -7793,7 +9781,14 @@ RemoteVideo.prototype.removeRemoteVideoMenu = function() {
     if (menuSpan.length) {
         menuSpan.remove();
     }
-}
+};
+
+RemoteVideo.prototype.getResourceJid = function () {
+    if (!this.resourceJid) {
+        console.error("Undefined resource jid");
+    }
+    return this.resourceJid;
+};
 
 RemoteVideo.createContainer = function (spanId) {
     var container = document.createElement('span');
@@ -7803,13 +9798,24 @@ RemoteVideo.createContainer = function (spanId) {
     return remotes.appendChild(container);
 };
 
+
 module.exports = RemoteVideo;
-},{"../audio_levels/AudioLevels":10,"../avatar/Avatar":14,"./ConnectionIndicator":32,"./LargeVideo":33,"./SmallVideo":36}],36:[function(require,module,exports){
+},{"../../RTC/RTCBrowserType":10,"../audio_levels/AudioLevels":14,"../avatar/Avatar":18,"../util/UIUtil":35,"./ConnectionIndicator":36,"./LargeVideo":37,"./SmallVideo":40}],40:[function(require,module,exports){
+/* global $, APP, require */
+var Avatar = require("../avatar/Avatar");
 var UIUtil = require("../util/UIUtil");
 var LargeVideo = require("./LargeVideo");
+var RTCBrowserType = require("../../RTC/RTCBrowserType");
 
-function SmallVideo(){
+function SmallVideo() {
     this.isMuted = false;
+    this.hasAvatar = false;
+}
+
+function setVisibility(selector, show) {
+    if (selector && selector.length > 0) {
+        selector.css("visibility", show ? "visible" : "hidden");
+    }
 }
 
 SmallVideo.prototype.showDisplayName = function(isShow) {
@@ -7828,33 +9834,48 @@ SmallVideo.prototype.setDeviceAvailabilityIcons = function (devices) {
     if(!this.container)
         return;
 
-    $("#" + this.videoSpanId + " > .noMic").remove();
-    $("#" + this.videoSpanId + " > .noVideo").remove();
-    if(!devices.audio)
-    {
+    var noMic = $("#" + this.videoSpanId + " > .noMic");
+    var noVideo =  $("#" + this.videoSpanId + " > .noVideo");
+
+    noMic.remove();
+    noVideo.remove();
+    if (!devices.audio) {
         this.container.appendChild(
-            document.createElement("div")).setAttribute("class","noMic");
+            document.createElement("div")).setAttribute("class", "noMic");
     }
 
-    if(!devices.video)
-    {
+    if (!devices.video) {
         this.container.appendChild(
-            document.createElement("div")).setAttribute("class","noVideo");
+            document.createElement("div")).setAttribute("class", "noVideo");
     }
 
-    if(!devices.audio && !devices.video)
-    {
-        $("#" + this.videoSpanId + " > .noMic").css("background-position", "75%");
-        $("#" + this.videoSpanId + " > .noVideo").css("background-position", "25%");
-        $("#" + this.videoSpanId + " > .noVideo").css("background-color", "transparent");
+    if (!devices.audio && !devices.video) {
+        noMic.css("background-position", "75%");
+        noVideo.css("background-position", "25%");
+        noVideo.css("background-color", "transparent");
     }
-}
+};
+
+/**
+ * Sets the type of the video displayed by this instance.
+ * @param videoType 'camera' or 'screen'
+ */
+SmallVideo.prototype.setVideoType = function (videoType) {
+    this.videoType = videoType;
+};
+
+/**
+ * Returns the type of the video displayed by this instance.
+ * @returns {String} 'camera', 'screen' or undefined.
+ */
+SmallVideo.prototype.getVideoType = function () {
+    return this.videoType;
+};
 
 /**
  * Shows the presence status message for the given video.
  */
 SmallVideo.prototype.setPresenceStatus = function (statusMsg) {
-
     if (!this.container) {
         // No container
         return;
@@ -7885,21 +9906,41 @@ SmallVideo.prototype.setPresenceStatus = function (statusMsg) {
 /**
  * Creates an audio or video stream element.
  */
-
 SmallVideo.createStreamElement = function (sid, stream) {
     var isVideo = stream.getVideoTracks().length > 0;
 
-    var element = isVideo
-        ? document.createElement('video')
+    var element = isVideo ? document.createElement('video')
         : document.createElement('audio');
-    var id = (isVideo ? 'remoteVideo_' : 'remoteAudio_')
-        + sid + '_' + APP.RTC.getStreamID(stream);
+    var id = (isVideo ? 'remoteVideo_' : 'remoteAudio_') + sid + '_' +
+        APP.RTC.getStreamID(stream);
 
     element.id = id;
-    element.autoplay = true;
+    if (!RTCBrowserType.isIExplorer()) {
+        element.autoplay = true;
+    }
     element.oncontextmenu = function () { return false; };
 
     return element;
+};
+
+/**
+ * Configures hoverIn/hoverOut handlers.
+ */
+SmallVideo.prototype.bindHoverHandler = function () {
+    // Add hover handler
+    var self = this;
+    $(this.container).hover(
+        function () {
+            self.showDisplayName(true);
+        },
+        function () {
+            // If the video has been "pinned" by the user we want to
+            // keep the display name on place.
+            if (!LargeVideo.isLargeVideoVisible() ||
+                !LargeVideo.isCurrentlyOnLarge(self.getResourceJid()))
+                self.showDisplayName(false);
+        }
+    );
 };
 
 /**
@@ -7911,12 +9952,12 @@ SmallVideo.createStreamElement = function (sid, stream) {
 SmallVideo.prototype.updateStatsIndicator = function (percent, object) {
     if(this.connectionIndicator)
         this.connectionIndicator.updateConnectionQuality(percent, object);
-}
+};
 
 SmallVideo.prototype.hideIndicator = function () {
     if(this.connectionIndicator)
         this.connectionIndicator.hideIndicator();
-}
+};
 
 
 /**
@@ -7926,7 +9967,7 @@ SmallVideo.prototype.hideIndicator = function () {
 SmallVideo.prototype.showAudioIndicator = function(isMuted) {
     var audioMutedSpan = $('#' + this.videoSpanId + '>span.audioMuted');
 
-    if (isMuted === 'false') {
+    if (!isMuted) {
         if (audioMutedSpan.length > 0) {
             audioMutedSpan.popover('hide');
             audioMutedSpan.remove();
@@ -7956,6 +9997,8 @@ SmallVideo.prototype.showAudioIndicator = function(isMuted) {
  * Shows video muted indicator over small videos.
  */
 SmallVideo.prototype.showVideoIndicator = function(isMuted) {
+    this.showAvatar(isMuted);
+
     var videoMutedSpan = $('#' + this.videoSpanId + '>span.videoMuted');
 
     if (isMuted === false) {
@@ -7985,16 +10028,16 @@ SmallVideo.prototype.showVideoIndicator = function(isMuted) {
     }
 };
 
-SmallVideo.prototype.enableDominantSpeaker = function (isEnable)
-{
-    var displayName = this.resourceJid;
+SmallVideo.prototype.enableDominantSpeaker = function (isEnable) {
+    var resourceJid = this.getResourceJid();
+    var displayName = resourceJid;
     var nameSpan = $('#' + this.videoSpanId + '>span.displayname');
     if (nameSpan.length > 0)
         displayName = nameSpan.html();
 
     console.log("UI enable dominant speaker",
         displayName,
-        this.resourceJid,
+        resourceJid,
         isEnable);
 
 
@@ -8002,40 +10045,35 @@ SmallVideo.prototype.enableDominantSpeaker = function (isEnable)
         return;
     }
 
-    var video = $('#' + this.videoSpanId + '>video');
+    if (isEnable) {
+        this.showDisplayName(LargeVideo.getState() === "video");
 
-    if (video && video.length > 0) {
-        if (isEnable) {
-            this.showDisplayName(LargeVideo.isLargeVideoOnTop());
-
-            if (!this.container.classList.contains("dominantspeaker"))
-                this.container.classList.add("dominantspeaker");
-        }
-        else {
-            this.showDisplayName(false);
-
-            if (this.container.classList.contains("dominantspeaker"))
-                this.container.classList.remove("dominantspeaker");
-        }
+        if (!this.container.classList.contains("dominantspeaker"))
+            this.container.classList.add("dominantspeaker");
     }
+    else {
+        this.showDisplayName(false);
+
+        if (this.container.classList.contains("dominantspeaker"))
+            this.container.classList.remove("dominantspeaker");
+    }
+
+    this.showAvatar();
 };
 
 SmallVideo.prototype.updateIconPositions = function () {
     var audioMutedSpan = $('#' + this.videoSpanId + '>span.audioMuted');
     var connectionIndicator = $('#' + this.videoSpanId + '>div.connectionindicator');
     var videoMutedSpan = $('#' + this.videoSpanId + '>span.videoMuted');
-    if(connectionIndicator.length > 0
-        && connectionIndicator[0].style.display != "none") {
+    if(connectionIndicator.length > 0 &&
+        connectionIndicator[0].style.display != "none") {
         audioMutedSpan.css({right: "23px"});
         videoMutedSpan.css({right: ((audioMutedSpan.length > 0? 23 : 0) + 30) + "px"});
-    }
-    else
-    {
+    } else {
         audioMutedSpan.css({right: "0px"});
         videoMutedSpan.css({right: (audioMutedSpan.length > 0? 30 : 0) + "px"});
     }
-}
-
+};
 
 /**
  * Creates the element indicating the moderator(owner) of the conference.
@@ -8067,44 +10105,119 @@ SmallVideo.prototype.createModeratorIndicatorElement = function () {
 
     //translates text in focus indicators
     APP.translation.translateElement($('#' + this.videoSpanId + ' .focusindicator'));
-}
+};
 
+SmallVideo.prototype.selectVideoElement = function () {
+    var videoElem = APP.RTC.getVideoElementName();
+    if (!RTCBrowserType.isTemasysPluginUsed()) {
+        return $('#' + this.videoSpanId).find(videoElem);
+    } else {
+        return $('#' + this.videoSpanId +
+               (this.isLocal ? '>>' : '>') +
+               videoElem + '>param[value="video"]').parent();
+    }
+};
 
 SmallVideo.prototype.getSrc = function () {
-    return APP.RTC.getVideoSrc($('#' + this.videoSpanId).find("video").get(0));
-}
+    var videoElement = this.selectVideoElement().get(0);
+    return APP.RTC.getVideoSrc(videoElement);
+};
 
-SmallVideo.prototype.focus = function(isFocused)
-{
+SmallVideo.prototype.focus = function(isFocused) {
     if(!isFocused) {
         this.container.classList.remove("videoContainerFocused");
-    }
-    else
-    {
+    } else {
         this.container.classList.add("videoContainerFocused");
     }
-}
+};
 
 SmallVideo.prototype.hasVideo = function () {
-    return $("#" + this.videoSpanId).find("video").length !== 0;
-}
+    return this.selectVideoElement().length !== 0;
+};
+
+/**
+ * Hides or shows the user's avatar
+ * @param show whether we should show the avatar or not
+ * video because there is no dominant speaker and no focused speaker
+ */
+SmallVideo.prototype.showAvatar = function (show) {
+    if (!this.hasAvatar) {
+        if (this.peerJid) {
+            // Init avatar
+            this.avatarChanged(Avatar.getThumbUrl(this.peerJid));
+        } else {
+            console.error("Unable to init avatar - no peerjid", this);
+            return;
+        }
+    }
+
+    var resourceJid = this.getResourceJid();
+    var video = this.selectVideoElement();
+
+    var avatar = $('#avatar_' + resourceJid);
+
+    if (show === undefined || show === null) {
+        if (!this.isLocal &&
+            !this.VideoLayout.isInLastN(resourceJid)) {
+            show = true;
+        } else {
+            // We want to show the avatar when the video is muted or not exists
+            // that is when 'true' or 'null' is returned
+            show = APP.RTC.isVideoMuted(this.peerJid) !== false;
+        }
+    }
+
+    if (LargeVideo.showAvatar(resourceJid, show)) {
+        setVisibility(avatar, false);
+        setVisibility(video, false);
+    } else {
+        if (video && video.length > 0) {
+            setVisibility(video, !show);
+        }
+        setVisibility(avatar, show);
+    }
+};
+
+SmallVideo.prototype.avatarChanged = function (thumbUrl) {
+    var thumbnail = $('#' + this.videoSpanId);
+    var resourceJid = this.getResourceJid();
+    var avatar = $('#avatar_' + resourceJid);
+    this.hasAvatar = true;
+
+    // set the avatar in the thumbnail
+    if (avatar && avatar.length > 0) {
+        avatar[0].src = thumbUrl;
+    } else {
+        if (thumbnail && thumbnail.length > 0) {
+            avatar = document.createElement('img');
+            avatar.id = 'avatar_' + resourceJid;
+            avatar.className = 'userAvatar';
+            avatar.src = thumbUrl;
+            thumbnail.append(avatar);
+        }
+    }
+};
 
 module.exports = SmallVideo;
-},{"../util/UIUtil":31,"./LargeVideo":33}],37:[function(require,module,exports){
+},{"../../RTC/RTCBrowserType":10,"../avatar/Avatar":18,"../util/UIUtil":35,"./LargeVideo":37}],41:[function(require,module,exports){
+/* global config, APP, $, Strophe, require, interfaceConfig */
 var AudioLevels = require("../audio_levels/AudioLevels");
-var Avatar = require("../avatar/Avatar");
 var ContactList = require("../side_pannels/contactlist/ContactList");
 var MediaStreamType = require("../../../service/RTC/MediaStreamTypes");
 var UIEvents = require("../../../service/UI/UIEvents");
+var UIUtil = require("../util/UIUtil");
+
+var RTC = require("../../RTC/RTC");
+var RTCBrowserType = require('../../RTC/RTCBrowserType');
+
 var RemoteVideo = require("./RemoteVideo");
 var LargeVideo = require("./LargeVideo");
 var LocalVideo = require("./LocalVideo");
 
+
 var remoteVideos = {};
+var remoteVideoTypes = {};
 var localVideoThumbnail = null;
-
-
-
 
 var currentDominantSpeaker = null;
 var lastNCount = config.channelLastN;
@@ -8114,7 +10227,6 @@ var lastNEndpointsCache = [];
 var lastNPickupJid = null;
 
 var eventEmitter = null;
-
 
 /**
  * Currently focused video jid
@@ -8126,14 +10238,22 @@ var VideoLayout = (function (my) {
     my.init = function (emitter) {
         eventEmitter = emitter;
         localVideoThumbnail = new LocalVideo(VideoLayout);
+        if (interfaceConfig.filmStripOnly) {
+            LargeVideo.disable();
+        } else {
+            LargeVideo.init(VideoLayout, emitter);
+        }
+
         VideoLayout.resizeLargeVideoContainer();
-        LargeVideo.init(VideoLayout, emitter);
+
     };
 
     my.isInLastN = function(resource) {
-        return lastNCount < 0 // lastN is disabled, return true
-            || (lastNCount > 0 && lastNEndpointsCache.length == 0) // lastNEndpoints cache not built yet, return true
-            || (lastNEndpointsCache && lastNEndpointsCache.indexOf(resource) !== -1);
+        return lastNCount < 0 || // lastN is disabled
+             // lastNEndpoints cache not built yet
+            (lastNCount > 0 && lastNEndpointsCache.length == 0) ||
+            (lastNEndpointsCache &&
+                lastNEndpointsCache.indexOf(resource) !== -1);
     };
 
     my.changeLocalStream = function (stream, isMuted) {
@@ -8141,11 +10261,25 @@ var VideoLayout = (function (my) {
     };
 
     my.changeLocalAudio = function(stream, isMuted) {
-        if(isMuted)
+        if (isMuted)
             APP.UI.setAudioMuted(true, true);
         APP.RTC.attachMediaStream($('#localAudio'), stream.getOriginalStream());
-        document.getElementById('localAudio').autoplay = true;
-        document.getElementById('localAudio').volume = 0;
+        var localAudio = document.getElementById('localAudio');
+        // Writing volume not allowed in IE
+        if (!RTCBrowserType.isIExplorer()) {
+            localAudio.autoplay = true;
+            localAudio.volume = 0;
+        }
+        // Now when Temasys plugin is converting also <audio> elements to
+        // plugin's <object>s, in current layout it will capture click events
+        // before it reaches the local video object. We hide it here in order
+        // to prevent that.
+        if (RTCBrowserType.isIExplorer()) {
+            // The issue is not present on Safari. Also if we hide it in Safari
+            // then the local audio track will have 'enabled' flag set to false
+            // which will result in audio mute issues
+            $('#localAudio').hide();
+        }
     };
 
     my.changeLocalVideo = function(stream, isMuted) {
@@ -8153,12 +10287,16 @@ var VideoLayout = (function (my) {
         localVideoThumbnail.setDisplayName();
         localVideoThumbnail.createConnectionIndicator();
 
+        this.onVideoTypeChanged(APP.xmpp.myResource(), stream.videoType);
+
         AudioLevels.updateAudioLevelCanvas(null, VideoLayout);
 
         localVideoThumbnail.changeVideo(stream, isMuted);
 
-        LargeVideo.updateLargeVideo(APP.xmpp.myResource());
-
+        /* force update if we're currently being displayed */
+        if (LargeVideo.isCurrentlyOnLarge(APP.xmpp.myResource())) {
+            LargeVideo.updateLargeVideo(APP.xmpp.myResource(), true);
+        }
     };
 
     my.mucJoined = function () {
@@ -8178,18 +10316,13 @@ var VideoLayout = (function (my) {
         if(!devices)
             return;
 
-        if(!resourceJid)
-        {
+        if(!resourceJid) {
             localVideoThumbnail.setDeviceAvailabilityIcons(devices);
-        }
-        else
-        {
+        } else {
             if(remoteVideos[resourceJid])
                 remoteVideos[resourceJid].setDeviceAvailabilityIcons(devices);
         }
-
-
-    }
+    };
 
     /**
      * Checks if removed video is currently displayed and tries to display
@@ -8197,51 +10330,44 @@ var VideoLayout = (function (my) {
      * @param removedVideoSrc src stream identifier of the video.
      */
     my.updateRemovedVideo = function(resourceJid) {
+
         if (resourceJid === LargeVideo.getResourceJid()) {
-            // this is currently displayed as large
-            // pick the last visible video in the row
-            // if nobody else is left, this picks the local video
-            var pick
-                = $('#remoteVideos>span[id!="mixedstream"]:visible:last>video')
-                    .get(0);
-
-            if (!pick) {
-                console.info("Last visible video no longer exists");
-                pick = $('#remoteVideos>span[id!="mixedstream"]>video').get(0);
-
-                if (!pick || !APP.RTC.getVideoSrc(pick)) {
-                    // Try local video
-                    console.info("Fallback to local video...");
-                    pick = $('#remoteVideos>span>span>video').get(0);
-                }
-            }
-
-            // mute if localvideo
-            if (pick) {
-                var container = pick.parentNode;
+            var newResourceJid;
+            // We'll show user's avatar if he is the dominant speaker or if
+            // his video thumbnail is pinned
+            if (remoteVideos[resourceJid] &&
+                resourceJid === focusedVideoResourceJid ||
+                resourceJid === currentDominantSpeaker) {
+                newResourceJid = resourceJid;
             } else {
-                console.warn("Failed to elect large video");
-                container = $('#remoteVideos>span[id!="mixedstream"]:visible:last').get(0);
-
+                // Otherwise select last visible video
+                newResourceJid = this.electLastVisibleVideo();
             }
-
-            var jid = null;
-            if(container)
-            {
-                if(container.id == "localVideoWrapper")
-                {
-                    jid = APP.xmpp.myResource();
-                }
-                else
-                {
-                    jid = VideoLayout.getPeerContainerResourceJid(container);
-                }
-            }
-            else
-                return;
-
-            LargeVideo.updateLargeVideo(jid);
+            LargeVideo.updateLargeVideo(newResourceJid);
         }
+    };
+
+    my.electLastVisibleVideo = function () {
+        // pick the last visible video in the row
+        // if nobody else is left, this picks the local video
+        var jid;
+        var pick = $('#remoteVideos>span[id!="mixedstream"]:visible:last');
+        if (pick.length) {
+            jid = VideoLayout.getPeerContainerResourceJid(pick[0]);
+        } else {
+            console.info("Last visible video no longer exists");
+            pick = $('#remoteVideos>span[id!="mixedstream"]');
+            if (pick.length) {
+                jid = VideoLayout.getPeerContainerResourceJid(pick[0]);
+            }
+            if (!jid) {
+                // Go with local video
+                console.info("Fallback to local video...");
+                jid = APP.xmpp.myResource();
+            }
+        }
+        console.info("electLastVisibleVideo: " + jid);
+        return jid;
     };
     
     my.onRemoteStreamAdded = function (stream) {
@@ -8256,15 +10382,35 @@ var VideoLayout = (function (my) {
         }
     };
 
-    my.getLargeVideoJid = function () {
+    my.getLargeVideoResource = function () {
         return LargeVideo.getResourceJid();
+    };
+
+    /**
+     * Called when large video update is finished
+     * @param currentSmallVideo small video currently displayed on large video
+     */
+    my.largeVideoUpdated = function (currentSmallVideo) {
+        // Makes sure that dominant speaker UI
+        // is enabled only on current small video
+        localVideoThumbnail.enableDominantSpeaker(
+            localVideoThumbnail === currentSmallVideo);
+        Object.keys(remoteVideos).forEach(
+            function (resourceJid) {
+                var remoteVideo = remoteVideos[resourceJid];
+                if (remoteVideo) {
+                    remoteVideo.enableDominantSpeaker(
+                        remoteVideo === currentSmallVideo);
+                }
+            }
+        );
     };
 
     my.handleVideoThumbClicked = function(noPinnedEndpointChangedEvent,
                                           resourceJid) {
         if(focusedVideoResourceJid) {
             var oldSmallVideo = VideoLayout.getSmallVideo(focusedVideoResourceJid);
-            if(oldSmallVideo)
+            if (oldSmallVideo && !interfaceConfig.filmStripOnly)
                 oldSmallVideo.focus(false);
         }
 
@@ -8275,8 +10421,7 @@ var VideoLayout = (function (my) {
             focusedVideoResourceJid = null;
             // Enable the currently set dominant speaker.
             if (currentDominantSpeaker) {
-                if(smallVideo && smallVideo.hasVideo())
-                {
+                if(smallVideo && smallVideo.hasVideo()) {
                     LargeVideo.updateLargeVideo(currentDominantSpeaker);
                 }
             }
@@ -8287,14 +10432,12 @@ var VideoLayout = (function (my) {
             return;
         }
 
-
         // Lock new video
         focusedVideoResourceJid = resourceJid;
 
         // Update focused/pinned interface.
-        if (resourceJid)
-        {
-            if(smallVideo)
+        if (resourceJid) {
+            if (smallVideo && !interfaceConfig.filmStripOnly)
                 smallVideo.focus(true);
 
             if (!noPinnedEndpointChangedEvent) {
@@ -8302,21 +10445,17 @@ var VideoLayout = (function (my) {
             }
         }
 
-        if (LargeVideo.getResourceJid() === resourceJid &&
-            LargeVideo.isLargeVideoOnTop()) {
-            return;
-        }
-
-        // Triggers a "video.selected" event. The "false" parameter indicates
-        // this isn't a prezi.
-        $(document).trigger("video.selected", [false]);
+        LargeVideo.setState("video");
 
         LargeVideo.updateLargeVideo(resourceJid);
 
-        $('audio').each(function (idx, el) {
-            el.volume = 0;
-            el.volume = 1;
-        });
+        // Writing volume not allowed in IE
+        if (!RTCBrowserType.isIExplorer()) {
+            $('audio').each(function (idx, el) {
+                el.volume = 0;
+                el.volume = 1;
+            });
+        }
     };
 
 
@@ -8325,26 +10464,30 @@ var VideoLayout = (function (my) {
      * in the document and creates it eventually.
      * 
      * @param peerJid peer Jid to check.
-     * @param userId user email or id for setting the avatar
      * 
      * @return Returns <tt>true</tt> if the peer container exists,
      * <tt>false</tt> - otherwise
      */
-    my.ensurePeerContainerExists = function(peerJid, userId) {
-        ContactList.ensureAddContact(peerJid, userId);
+    my.ensurePeerContainerExists = function(peerJid) {
+        ContactList.ensureAddContact(peerJid);
 
         var resourceJid = Strophe.getResourceFromJid(peerJid);
 
-        if(!remoteVideos[resourceJid])
-        {
-            remoteVideos[resourceJid] = new RemoteVideo(peerJid, VideoLayout);
-            Avatar.setUserAvatar(peerJid, userId);
+        if (!remoteVideos[resourceJid]) {
+
+            var remoteVideo = new RemoteVideo(peerJid, VideoLayout);
+            remoteVideos[resourceJid] = remoteVideo;
+
+            var videoType = remoteVideoTypes[resourceJid];
+            if (videoType) {
+                remoteVideo.setVideoType(videoType);
+            }
 
             // In case this is not currently in the last n we don't show it.
-            if (localLastNCount
-                && localLastNCount > 0
-                && $('#remoteVideos>span').length >= localLastNCount + 2) {
-                remoteVideos[resourceJid].showPeerContainer('hide');
+            if (localLastNCount &&
+                localLastNCount > 0 &&
+                $('#remoteVideos>span').length >= localLastNCount + 2) {
+                remoteVideo.showPeerContainer('hide');
             }
             else
                 VideoLayout.resizeThumbnails();
@@ -8357,6 +10500,9 @@ var VideoLayout = (function (my) {
     };
 
     my.videoactive = function (videoelem, resourceJid) {
+
+        console.info(resourceJid + " video is now active");
+
         videoelem.show();
         VideoLayout.resizeThumbnails();
 
@@ -8364,13 +10510,14 @@ var VideoLayout = (function (my) {
         // current dominant, focused speaker or prezi playing or update it to
         // the current dominant speaker.
         if ((!focusedVideoResourceJid &&
-            !VideoLayout.getDominantSpeakerResourceJid() &&
+            !currentDominantSpeaker &&
             !require("../prezi/Prezi").isPresentationVisible()) ||
+            focusedVideoResourceJid === resourceJid ||
             (resourceJid &&
-                VideoLayout.getDominantSpeakerResourceJid() === resourceJid)) {
+                currentDominantSpeaker === resourceJid)) {
             LargeVideo.updateLargeVideo(resourceJid, true);
         }
-    }
+    };
 
     /**
      * Shows the presence status message for the given video.
@@ -8399,13 +10546,10 @@ var VideoLayout = (function (my) {
             }
 
             var resourceJid = Strophe.getResourceFromJid(jid);
-
             var member = members[jid];
 
             if (member.role === 'moderator') {
-
                 remoteVideos[resourceJid].removeRemoteVideoMenu();
-
                 remoteVideos[resourceJid].createModeratorIndicatorElement();
             } else if (isModerator) {
                 // We are moderator, but user is not - add menu
@@ -8421,14 +10565,18 @@ var VideoLayout = (function (my) {
      * @param {boolean} isMuted
      */
     my.showLocalAudioIndicator = function(isMuted) {
-        localVideoThumbnail.showAudioIndicator(isMuted.toString());
+        localVideoThumbnail.showAudioIndicator(isMuted);
     };
 
     /**
      * Resizes the large video container.
      */
     my.resizeLargeVideoContainer = function () {
-        LargeVideo.resize();
+        if(LargeVideo.isEnabled()) {
+            LargeVideo.resize();
+        } else {
+            VideoLayout.resizeVideoSpace();
+        }
         VideoLayout.resizeThumbnails();
         LargeVideo.position();
     };
@@ -8445,10 +10593,9 @@ var VideoLayout = (function (my) {
 
         $('.userAvatar').css('left', (width - height) / 2);
 
-        if(animate)
-        {
+        if(animate) {
             $('#remoteVideos').animate({
-                    height: height
+                    height: height + 2 // adds 2 px because of small video 1px border
                 },
                 {
                     queue: false,
@@ -8470,41 +10617,15 @@ var VideoLayout = (function (my) {
                     }
                 });
 
-        }
-        else
-        {
+        } else {
             // size videos so that while keeping AR and max height, we have a
             // nice fit
-            $('#remoteVideos').height(height);
+            $('#remoteVideos').height(height + 2);// adds 2 px because of small video 1px border
             $('#remoteVideos>span').width(width);
             $('#remoteVideos>span').height(height);
 
-
             $(document).trigger("remotevideo.resized", [width, height]);
         }
-    };
-
-    /**
-     * Enables the dominant speaker UI.
-     *
-     * @param resourceJid the jid indicating the video element to
-     * activate/deactivate
-     * @param isEnable indicates if the dominant speaker should be enabled or
-     * disabled
-     */
-    my.enableDominantSpeaker = function(resourceJid, isEnable) {
-
-        if (resourceJid
-                === APP.xmpp.myResource()) {
-            localVideoThumbnail.enableDominantSpeaker(isEnable);
-        }
-        else {
-            remoteVideos[resourceJid].enableDominantSpeaker(isEnable);
-        }
-
-
-        Avatar.showUserAvatar(
-            APP.xmpp.findJidFromResource(resourceJid));
     };
 
     /**
@@ -8532,20 +10653,13 @@ var VideoLayout = (function (my) {
        var availableWidth = availableWinWidth / numvids;
        var aspectRatio = 16.0 / 9.0;
        var maxHeight = Math.min(160, availableHeight);
-       availableHeight = Math.min(maxHeight, availableWidth / aspectRatio);
+       availableHeight = Math.min(maxHeight, availableWidth / aspectRatio, window.innerHeight - 18);
        if (availableHeight < availableWidth / aspectRatio) {
            availableWidth = Math.floor(availableHeight * aspectRatio);
        }
 
        return [availableWidth, availableHeight];
    };
-
-    /**
-     * Returns the current dominant speaker resource jid.
-     */
-    my.getDominantSpeakerResourceJid = function () {
-        return currentDominantSpeaker;
-    };
 
     /**
      * Returns the corresponding resource jid to the given peer container
@@ -8555,10 +10669,14 @@ var VideoLayout = (function (my) {
      * DOM element
      */
     my.getPeerContainerResourceJid = function (containerElement) {
+        if (localVideoThumbnail.container === containerElement) {
+            return localVideoThumbnail.getResourceJid();
+        }
+
         var i = containerElement.id.indexOf('participant_');
 
         if (i >= 0)
-            return containerElement.id.substring(i + 12); 
+            return containerElement.id.substring(i + 12);
     };
 
     /**
@@ -8569,39 +10687,39 @@ var VideoLayout = (function (my) {
             return;
         }
 
+        if (jid === APP.xmpp.myJid()) {
+            $("#localVideoContainer").click();
+            return;
+        }
+
         var resource = Strophe.getResourceFromJid(jid);
-        var videoContainer = $("#participant_" + resource);
-        if (videoContainer.length > 0) {
-            var videoThumb = $('video', videoContainer).get(0);
+        var remoteVideo = remoteVideos[resource];
+        if (remoteVideo && remoteVideo.selectVideoElement().length) {
+            var videoThumb = remoteVideo.selectVideoElement()[0];
             // It is not always the case that a videoThumb exists (if there is
             // no actual video).
-            if (videoThumb) {
-                if (videoThumb.src && videoThumb.src != '') {
+            if (RTC.getVideoSrc(videoThumb)) {
 
-                    // We have a video src, great! Let's update the large video
-                    // now.
+                // We have a video src, great! Let's update the large video
+                // now.
+                VideoLayout.handleVideoThumbClicked(
+                    false,
+                    Strophe.getResourceFromJid(jid));
+            } else {
 
-                    VideoLayout.handleVideoThumbClicked(
-                        false,
-                        Strophe.getResourceFromJid(jid));
-                } else {
+                // If we don't have a video src for jid, there's absolutely
+                // no point in calling handleVideoThumbClicked; Quite
+                // simply, it won't work because it needs an src to attach
+                // to the large video.
+                //
+                // Instead, we trigger the pinned endpoint changed event to
+                // let the bridge adjust its lastN set for myjid and store
+                // the pinned user in the lastNPickupJid variable to be
+                // picked up later by the lastN changed event handler.
 
-                    // If we don't have a video src for jid, there's absolutely
-                    // no point in calling handleVideoThumbClicked; Quite
-                    // simply, it won't work because it needs an src to attach
-                    // to the large video.
-                    //
-                    // Instead, we trigger the pinned endpoint changed event to
-                    // let the bridge adjust its lastN set for myjid and store
-                    // the pinned user in the lastNPickupJid variable to be
-                    // picked up later by the lastN changed event handler.
-
-                    lastNPickupJid = jid;
-                    eventEmitter.emit(UIEvents.PINNED_ENDPOINT,
-                        Strophe.getResourceFromJid(jid));
-                }
-            } else if (jid == APP.xmpp.myJid()) {
-                $("#localVideoContainer").click();
+                lastNPickupJid = jid;
+                eventEmitter.emit(UIEvents.PINNED_ENDPOINT,
+                    Strophe.getResourceFromJid(jid));
             }
         }
     });
@@ -8609,7 +10727,7 @@ var VideoLayout = (function (my) {
     /**
      * On audio muted event.
      */
-    $(document).bind('audiomuted.muc', function (event, jid, isMuted) {
+    my.onAudioMute = function (jid, isMuted) {
         var resourceJid = Strophe.getResourceFromJid(jid);
         if (resourceJid === APP.xmpp.myResource()) {
             localVideoThumbnail.showAudioIndicator(isMuted);
@@ -8620,34 +10738,40 @@ var VideoLayout = (function (my) {
                 remoteVideos[resourceJid].updateRemoteVideoMenu(isMuted);
             }
         }
-
-
-    });
+    };
 
     /**
      * On video muted event.
      */
-    $(document).bind('videomuted.muc', function (event, jid, value) {
-        var isMuted = (value === "true");
-        if(jid !== APP.xmpp.myJid() && !APP.RTC.muteRemoteVideoStream(jid, isMuted))
+    my.onVideoMute = function (jid, value) {
+        if (jid !== APP.xmpp.myJid() &&
+            !APP.RTC.muteRemoteVideoStream(jid, value))
             return;
 
-        Avatar.showUserAvatar(jid, isMuted);
         if (jid === APP.xmpp.myJid()) {
-            localVideoThumbnail.showVideoIndicator(isMuted);
+            localVideoThumbnail.showVideoIndicator(value);
         } else {
+            var resource = Strophe.getResourceFromJid(jid);
+
             VideoLayout.ensurePeerContainerExists(jid);
-            remoteVideos[Strophe.getResourceFromJid(jid)].showVideoIndicator(isMuted);
+            var remoteVideo = remoteVideos[resource];
+            remoteVideo.showVideoIndicator(value);
+
+            var el = remoteVideo.selectVideoElement();
+            if (!value)
+                el.show();
+            else
+                el.hide();
         }
-    });
+    };
 
     /**
      * Display name changed.
      */
     my.onDisplayNameChanged =
                     function (jid, displayName, status) {
-        if (jid === 'localVideoContainer'
-            || jid === APP.xmpp.myJid()) {
+        if (jid === 'localVideoContainer' ||
+            jid === APP.xmpp.myJid()) {
             localVideoThumbnail.setDisplayName(displayName);
         } else {
             VideoLayout.ensurePeerContainerExists(jid);
@@ -8655,7 +10779,6 @@ var VideoLayout = (function (my) {
                 displayName,
                 status);
         }
-
     };
 
     /**
@@ -8666,18 +10789,19 @@ var VideoLayout = (function (my) {
         if (resourceJid === APP.xmpp.myResource())
             return;
 
+        var remoteVideo = remoteVideos[resourceJid];
         var members = APP.xmpp.getMembers();
         // Update the current dominant speaker.
         if (resourceJid !== currentDominantSpeaker) {
             var currentJID = APP.xmpp.findJidFromResource(currentDominantSpeaker);
             var newJID = APP.xmpp.findJidFromResource(resourceJid);
-            if(currentDominantSpeaker && (!members || !members[currentJID] ||
-                !members[currentJID].displayName)) {
-                remoteVideos[resourceJid].setDisplayName(null);
+            if (currentDominantSpeaker && (!members || !members[currentJID] ||
+                !members[currentJID].displayName) && remoteVideo) {
+                remoteVideo.setDisplayName(null);
             }
-            if(resourceJid && (!members || !members[newJID] ||
-                !members[newJID].displayName)) {
-                remoteVideos[resourceJid].setDisplayName(null,
+            if (resourceJid && (!members || !members[newJID] ||
+                !members[newJID].displayName) && remoteVideo) {
+                remoteVideo.setDisplayName(null,
                     interfaceConfig.DEFAULT_DOMINANT_SPEAKER_DISPLAY_NAME);
             }
             currentDominantSpeaker = resourceJid;
@@ -8685,19 +10809,18 @@ var VideoLayout = (function (my) {
             return;
         }
 
+        if (!remoteVideo)
+            return;
+
         // Obtain container for new dominant speaker.
-        var container  = document.getElementById(
-                'participant_' + resourceJid);
+        var videoSel  = remoteVideo.selectVideoElement();
 
         // Local video will not have container found, but that's ok
         // since we don't want to switch to local video.
-        if (container && !focusedVideoResourceJid)
-        {
-            var video = container.getElementsByTagName("video");
-
+        if (!focusedVideoResourceJid && videoSel.length) {
             // Update the large video if the video source is already available,
             // otherwise wait for the "videoactive.jingle" event.
-            if (video.length && video[0].currentTime > 0) {
+            if (videoSel[0].currentTime > 0) {
                 LargeVideo.updateLargeVideo(resourceJid);
             }
         }
@@ -8710,9 +10833,9 @@ var VideoLayout = (function (my) {
      * @param endpointsEnteringLastN the list currently entering last N
      * endpoints
      */
-    my.onLastNEndpointsChanged = function ( lastNEndpoints,
-                                                endpointsEnteringLastN,
-                                                stream) {
+    my.onLastNEndpointsChanged = function (lastNEndpoints,
+                                           endpointsEnteringLastN,
+                                           stream) {
         if (lastNCount !== lastNEndpoints.length)
             lastNCount = lastNEndpoints.length;
 
@@ -8749,7 +10872,6 @@ var VideoLayout = (function (my) {
         }
 
         localLastNSet = nextLocalLastNSet;
-
         var updateLargeVideo = false;
 
         // Handle LastN/local LastN changes.
@@ -8757,17 +10879,23 @@ var VideoLayout = (function (my) {
             var resourceJid = VideoLayout.getPeerContainerResourceJid(element);
 
             var isReceived = true;
-            if (resourceJid
-                && lastNEndpoints.indexOf(resourceJid) < 0
-                && localLastNSet.indexOf(resourceJid) < 0) {
+            if (resourceJid &&
+                lastNEndpoints.indexOf(resourceJid) < 0 &&
+                localLastNSet.indexOf(resourceJid) < 0) {
                 console.log("Remove from last N", resourceJid);
-                remoteVideos[resourceJid].showPeerContainer('hide');
+                if (remoteVideos[resourceJid])
+                    remoteVideos[resourceJid].showPeerContainer('hide');
+                else if (APP.xmpp.myResource() !== resourceJid)
+                    console.error("No remote video for: " + resourceJid);
                 isReceived = false;
-            } else if (resourceJid
-                && $('#participant_' + resourceJid).is(':visible')
-                && lastNEndpoints.indexOf(resourceJid) < 0
-                && localLastNSet.indexOf(resourceJid) >= 0) {
-                remoteVideos[resourceJid].showPeerContainer('avatar');
+            } else if (resourceJid &&
+                $('#participant_' + resourceJid).is(':visible') &&
+                lastNEndpoints.indexOf(resourceJid) < 0 &&
+                localLastNSet.indexOf(resourceJid) >= 0) {
+                if (remoteVideos[resourceJid])
+                    remoteVideos[resourceJid].showPeerContainer('avatar');
+                else if (APP.xmpp.myResource() !== resourceJid)
+                    console.error("No remote video for: " + resourceJid);
                 isReceived = false;
             }
 
@@ -8776,7 +10904,8 @@ var VideoLayout = (function (my) {
                 // it is no longer being received. If resourceJid was being
                 // displayed in the large video we have to switch to another
                 // user.
-                if (!updateLargeVideo && resourceJid === LargeVideo.getResourceJid()) {
+                if (!updateLargeVideo &&
+                    resourceJid === LargeVideo.getResourceJid()) {
                     updateLargeVideo = true;
                 }
             }
@@ -8789,13 +10918,15 @@ var VideoLayout = (function (my) {
             endpointsEnteringLastN.forEach(function (resourceJid) {
 
                 var isVisible = $('#participant_' + resourceJid).is(':visible');
-                remoteVideos[resourceJid].showPeerContainer('show');
+                var remoteVideo = remoteVideos[resourceJid];
+                remoteVideo.showPeerContainer('show');
                 if (!isVisible) {
                     console.log("Add to last N", resourceJid);
 
                     var jid = APP.xmpp.findJidFromResource(resourceJid);
-                    var mediaStream = APP.RTC.remoteStreams[jid][MediaStreamType.VIDEO_TYPE];
-                    var sel = $('#participant_' + resourceJid + '>video');
+                    var mediaStream =
+                        APP.RTC.remoteStreams[jid][MediaStreamType.VIDEO_TYPE];
+                    var sel = remoteVideo.selectVideoElement();
 
                     APP.RTC.attachMediaStream(sel, mediaStream.stream);
                     if (lastNPickupJid == mediaStream.peerjid) {
@@ -8810,9 +10941,10 @@ var VideoLayout = (function (my) {
 
                         updateLargeVideo = false;
                     }
-                    remoteVideos[resourceJid].waitForRemoteVideo(sel, mediaStream.ssrc, mediaStream.stream);
+                    remoteVideos[resourceJid].
+                        waitForPlayback(sel, mediaStream.stream);
                 }
-            })
+            });
         }
 
         // The endpoint that was being shown in the large video has dropped out
@@ -8820,13 +10952,12 @@ var VideoLayout = (function (my) {
         // the large video now.
 
         if (updateLargeVideo) {
-
-            var resource, container, src;
+            var resource;
             var myResource
                 = APP.xmpp.myResource();
 
             // Find out which endpoint to show in the large video.
-            for (var i = 0; i < lastNEndpoints.length; i++) {
+            for (i = 0; i < lastNEndpoints.length; i++) {
                 resource = lastNEndpoints[i];
                 if (!resource || resource === myResource)
                     continue;
@@ -8834,7 +10965,6 @@ var VideoLayout = (function (my) {
                 // videoSrcToSsrc needs to be update for this call to succeed.
                 LargeVideo.updateLargeVideo(resource);
                 break;
-
             }
         }
     };
@@ -8846,24 +10976,22 @@ var VideoLayout = (function (my) {
      */
     my.updateLocalConnectionStats = function (percent, object) {
         var resolution = null;
-        if(object.resolution !== null)
-        {
+        if (object.resolution !== null) {
             resolution = object.resolution;
             object.resolution = resolution[APP.xmpp.myJid()];
             delete resolution[APP.xmpp.myJid()];
         }
         localVideoThumbnail.updateStatsIndicator(percent, object);
-        for(var jid in resolution)
-        {
-            if(resolution[jid] === null)
+        for (var jid in resolution) {
+            if (resolution[jid] === null)
                 continue;
             var resourceJid = Strophe.getResourceFromJid(jid);
-            if(remoteVideos[resourceJid] && remoteVideos[resourceJid].connectionIndicator)
-            {
-                remoteVideos[resourceJid].connectionIndicator.updateResolution(resolution[jid]);
+            if (remoteVideos[resourceJid] &&
+                remoteVideos[resourceJid].connectionIndicator) {
+                remoteVideos[resourceJid].connectionIndicator.
+                    updateResolution(resolution[jid]);
             }
         }
-
     };
 
     /**
@@ -8875,16 +11003,8 @@ var VideoLayout = (function (my) {
     my.updateConnectionStats = function (jid, percent, object) {
         var resourceJid = Strophe.getResourceFromJid(jid);
 
-        if(remoteVideos[resourceJid])
+        if (remoteVideos[resourceJid])
             remoteVideos[resourceJid].updateStatsIndicator(percent, object);
-    };
-
-    /**
-     * Removes the connection
-     * @param jid
-     */
-    my.removeConnectionIndicator = function (jid) {
-        remoteVideos[Strophe.getResourceFromJid(jid)].removeConnectionIndicator();
     };
 
     /**
@@ -8899,9 +11019,8 @@ var VideoLayout = (function (my) {
      * Hides all the indicators
      */
     my.onStatsStop = function () {
-        for(var video in remoteVideos)
-        {
-            video.hideIndicator();
+        for(var video in remoteVideos) {
+            remoteVideos[video].hideIndicator();
         }
         localVideoThumbnail.hideIndicator();
     };
@@ -8909,75 +11028,189 @@ var VideoLayout = (function (my) {
     my.participantLeft = function (jid) {
         // Unlock large video
         var resourceJid = Strophe.getResourceFromJid(jid);
-        if (focusedVideoResourceJid === resourceJid)
-        {
+        if (focusedVideoResourceJid === resourceJid) {
             console.info("Focused video owner has left the conference");
             focusedVideoResourceJid = null;
         }
-    }
+
+        if (currentDominantSpeaker === resourceJid)
+        {
+            console.info("Dominant speaker has left the conference");
+            currentDominantSpeaker = null;
+        }
+
+        var remoteVideo = remoteVideos[resourceJid];
+        if (remoteVideo) {
+            // Remove remote video
+            console.info("Removing remote video: " + resourceJid);
+            remoteVideo.remove();
+            delete remoteVideos[resourceJid];
+        } else {
+            console.warn("No remote video for " + resourceJid);
+        }
+
+        VideoLayout.resizeThumbnails();
+    };
     
-    my.onVideoTypeChanged = function (jid) {
-        LargeVideo.onVideoTypeChanged();
-    }
+    my.onVideoTypeChanged = function (resourceJid, newVideoType) {
+        if (remoteVideoTypes[resourceJid] === newVideoType) {
+            return;
+        }
+
+        console.info("Peer video type changed: ", resourceJid, newVideoType);
+        remoteVideoTypes[resourceJid] = newVideoType;
+
+        var smallVideo;
+        if (resourceJid === APP.xmpp.myResource()) {
+            if (!localVideoThumbnail) {
+                console.warn("Local video not ready yet");
+                return;
+            }
+            smallVideo = localVideoThumbnail;
+        } else if (remoteVideos[resourceJid]) {
+            smallVideo = remoteVideos[resourceJid];
+        } else {
+            return;
+        }
+
+        smallVideo.setVideoType(newVideoType);
+        LargeVideo.onVideoTypeChanged(resourceJid, newVideoType);
+
+    };
 
     my.showMore = function (jid) {
-        if(APP.xmpp.myJid = jid)
-        {
+        if (jid === 'local') {
             localVideoThumbnail.connectionIndicator.showMore();
+        } else {
+            var remoteVideo = remoteVideos[Strophe.getResourceFromJid(jid)];
+            if (remoteVideo) {
+                remoteVideo.connectionIndicator.showMore();
+            } else {
+                console.info("Error - no remote video for jid: " + jid);
+            }
         }
-        else
-        {
-            remoteVideos[Strophe.getResourceFromJid(jid)].connectionIndicator.showMore();
-        }
-
-    }
+    };
 
     my.addPreziContainer = function (id) {
-        return RemoteVideo.createContainer(id);
-    }
+        var container = RemoteVideo.createContainer(id);
+        VideoLayout.resizeThumbnails();
+        return container;
+    };
 
     my.setLargeVideoVisible = function (isVisible) {
         LargeVideo.setLargeVideoVisible(isVisible);
-        if(!isVisible && focusedVideoResourceJid)
-        {
+        if(!isVisible && focusedVideoResourceJid) {
             var smallVideo = VideoLayout.getSmallVideo(focusedVideoResourceJid);
-            if(smallVideo)
+            if(smallVideo) {
                 smallVideo.focus(false);
-            Avatar.showUserAvatar(
-                APP.xmpp.findJidFromResource(focusedVideoResourceJid));
+                smallVideo.showAvatar();
+            }
             focusedVideoResourceJid = null;
-
         }
-    }
-
+    };
 
     /**
      * Resizes the video area
+     * @param callback a function to be called when the video space is
+     * resized.
+     */
+    my.resizeVideoArea = function(isVisible, callback) {
+        LargeVideo.resizeVideoAreaAnimated(isVisible, callback);
+        VideoLayout.resizeThumbnails(true);
+    };
+
+    /**
+     * Resizes the #videospace html element
+     * @param animate boolean property that indicates whether the resize should be animated or not.
+     * @param isChatVisible boolean property that indicates whether the chat area is displayed or not.
+     * If that parameter is null the method will check the chat pannel visibility.
      * @param completeFunction a function to be called when the video space is resized
      */
-    my.resizeVideoArea = function(isVisible, completeFunction) {
-        LargeVideo.resizeVideoAreaAnimated(isVisible, completeFunction);
-        VideoLayout.resizeThumbnails(true);
+    my.resizeVideoSpace = function (animate, isChatVisible, completeFunction) {
+        var availableHeight = window.innerHeight;
+        var availableWidth = UIUtil.getAvailableVideoWidth(isChatVisible);
+
+        if (availableWidth < 0 || availableHeight < 0) return;
+
+        if(animate) {
+            $('#videospace').animate({
+                    right: window.innerWidth - availableWidth,
+                    width: availableWidth,
+                    height: availableHeight
+                },
+                {
+                    queue: false,
+                    duration: 500,
+                    complete: completeFunction
+                });
+        } else {
+            $('#videospace').width(availableWidth);
+            $('#videospace').height(availableHeight);
+        }
 
     };
 
     my.getSmallVideo = function (resourceJid) {
-        if(resourceJid == APP.xmpp.myResource())
-        {
+        if(resourceJid == APP.xmpp.myResource()) {
             return localVideoThumbnail;
-        }
-        else
-        {
+        } else {
             if(!remoteVideos[resourceJid])
                 return null;
             return remoteVideos[resourceJid];
         }
-    }
+    };
+
+    my.userAvatarChanged = function(resourceJid, thumbUrl) {
+        var smallVideo = VideoLayout.getSmallVideo(resourceJid);
+        if(smallVideo)
+            smallVideo.avatarChanged(thumbUrl);
+        else
+            console.warn(
+                "Missed avatar update - no small video yet for " + resourceJid);
+        LargeVideo.updateAvatar(resourceJid, thumbUrl);
+    };
+
+    my.createEtherpadIframe = function(src, onloadHandler)
+    {
+        return LargeVideo.createEtherpadIframe(src, onloadHandler);
+    };
+
+    my.setLargeVideoState = function (state) {
+        LargeVideo.setState(state);
+    };
+
+    my.getLargeVideoState = function () {
+        return LargeVideo.getState();
+    };
+
+    my.setLargeVideoHover = function (inHandler, outHandler) {
+        LargeVideo.setHover(inHandler, outHandler);
+    };
+
+    /**
+     * Indicates that the video has been interrupted.
+     */
+    my.onVideoInterrupted = function () {
+        LargeVideo.enableVideoProblemFilter(true);
+        var reconnectingKey = "connection.RECONNECTING";
+        $('#videoConnectionMessage').attr("data-i18n", reconnectingKey);
+        $('#videoConnectionMessage').text(APP.translation.translateString(reconnectingKey));
+        $('#videoConnectionMessage').css({display: "block"});
+    };
+
+    /**
+     * Indicates that the video has been restored.
+     */
+    my.onVideoRestored = function () {
+        LargeVideo.enableVideoProblemFilter(false);
+        $('#videoConnectionMessage').css({display: "none"});
+    };
+
     return my;
 }(VideoLayout || {}));
 
 module.exports = VideoLayout;
-},{"../../../service/RTC/MediaStreamTypes":95,"../../../service/UI/UIEvents":100,"../audio_levels/AudioLevels":10,"../avatar/Avatar":14,"../prezi/Prezi":16,"../side_pannels/contactlist/ContactList":23,"./LargeVideo":33,"./LocalVideo":34,"./RemoteVideo":35}],38:[function(require,module,exports){
+},{"../../../service/RTC/MediaStreamTypes":167,"../../../service/UI/UIEvents":171,"../../RTC/RTC":9,"../../RTC/RTCBrowserType":10,"../audio_levels/AudioLevels":14,"../prezi/Prezi":20,"../side_pannels/contactlist/ContactList":27,"../util/UIUtil":35,"./LargeVideo":37,"./LocalVideo":38,"./RemoteVideo":39}],42:[function(require,module,exports){
 //var nouns = [
 //];
 var pluralNouns = [
@@ -9029,7 +11262,8 @@ var adverbs = [
     "Obviously", "Often", "Painfully", "Patiently", "Playfully", "Politely", "Poorly", "Precisely", "Promptly",
     "Quickly", "Quietly", "Randomly", "Rapidly", "Rarely", "Recklessly", "Regularly", "Remorsefully", "Responsibly",
     "Rudely", "Ruthlessly", "Sadly", "Scornfully", "Seamlessly", "Seldom", "Selfishly", "Seriously", "Shakily",
-    "Sharply", "Sideways", "Silently", "Sleepily", "Slightly", "Slowly", "Slyly", "Smoothly", "Softly", "Solemnly", "Steadily", "Sternly", "Strangely", "Strongly", "Stunningly", "Surely", "Tenderly", "Thoughtfully",
+    "Sharply", "Sideways", "Silently", "Sleepily", "Slightly", "Slowly", "Slyly", "Smoothly", "Softly", "Solemnly",
+    "Steadily", "Sternly", "Strangely", "Strongly", "Stunningly", "Surely", "Tenderly", "Thoughtfully",
     "Tightly", "Uneasily", "Vanishingly", "Violently", "Warmly", "Weakly", "Wearily", "Weekly", "Weirdly", "Well",
     "Well", "Wickedly", "Wildly", "Wisely", "Wonderfully", "Yearly"
 ];
@@ -9117,8 +11351,7 @@ var PATTERNS = [
 /*
  * Returns a random element from the array 'arr'
  */
-function randomElement(arr)
-{
+function randomElement(arr) {
     return arr[Math.floor(Math.random() * arr.length)];
 }
 
@@ -9126,8 +11359,7 @@ function randomElement(arr)
  * Returns true if the string 's' contains one of the
  * template strings.
  */
-function hasTemplate(s)
-{
+function hasTemplate(s) {
     for (var template in CATEGORIES){
         if (s.indexOf(template) >= 0){
             return true;
@@ -9139,14 +11371,15 @@ function hasTemplate(s)
  * Generates new room name.
  */
 var RoomNameGenerator = {
-    generateRoomWithoutSeparator: function()
-    {
-        // Note that if more than one pattern is available, the choice of 'name' won't be random (names from patterns
-        // with fewer options will have higher probability of being chosen that names from patterns with more options).
+    generateRoomWithoutSeparator: function() {
+        // Note that if more than one pattern is available, the choice of
+        // 'name' won't have a uniform distribution amongst all patterns (names
+        // from patterns with fewer options will have higher probability of
+        // being chosen that names from patterns with more options).
         var name = randomElement(PATTERNS);
         var word;
-        while (hasTemplate(name)){
-            for (var template in CATEGORIES){
+        while (hasTemplate(name)) {
+            for (var template in CATEGORIES) {
                 word = randomElement(CATEGORIES[template]);
                 name = name.replace(template, word);
             }
@@ -9154,17 +11387,17 @@ var RoomNameGenerator = {
 
         return name;
     }
-}
+};
 
 module.exports = RoomNameGenerator;
 
-},{}],39:[function(require,module,exports){
+},{}],43:[function(require,module,exports){
+/* global $, interfaceConfig */
 var animateTimeout, updateTimeout;
 
 var RoomNameGenerator = require("./RoomnameGenerator");
 
-function enter_room()
-{
+function enter_room() {
     var val = $("#enter_room_field").val();
     if(!val) {
         val = $("#enter_room_field").attr("room_name");
@@ -9182,8 +11415,7 @@ function animate(word) {
     }, 70);
 }
 
-function update_roomname()
-{
+function update_roomname() {
     var word = RoomNameGenerator.generateRoomWithoutSeparator();
     $("#enter_room_field").attr("room_name", word);
     $("#enter_room_field").attr("placeholder", "");
@@ -9192,33 +11424,30 @@ function update_roomname()
     updateTimeout = setTimeout(update_roomname, 10000);
 }
 
-
-function setupWelcomePage()
-{
+function setupWelcomePage() {
     $("#videoconference_page").hide();
     $("#domain_name").text(
             window.location.protocol + "//" + window.location.host + "/");
     if (interfaceConfig.SHOW_JITSI_WATERMARK) {
-        var leftWatermarkDiv
-            = $("#welcome_page_header div[class='watermark leftwatermark']");
-        if(leftWatermarkDiv && leftWatermarkDiv.length > 0)
-        {
+        var leftWatermarkDiv =
+            $("#welcome_page_header div[class='watermark leftwatermark']");
+        if(leftWatermarkDiv && leftWatermarkDiv.length > 0) {
             leftWatermarkDiv.css({display: 'block'});
-            leftWatermarkDiv.parent().get(0).href
-                = interfaceConfig.JITSI_WATERMARK_LINK;
+            leftWatermarkDiv.parent().get(0).href =
+                interfaceConfig.JITSI_WATERMARK_LINK;
         }
 
     }
 
     if (interfaceConfig.SHOW_BRAND_WATERMARK) {
-        var rightWatermarkDiv
-            = $("#welcome_page_header div[class='watermark rightwatermark']");
+        var rightWatermarkDiv =
+            $("#welcome_page_header div[class='watermark rightwatermark']");
         if(rightWatermarkDiv && rightWatermarkDiv.length > 0) {
             rightWatermarkDiv.css({display: 'block'});
-            rightWatermarkDiv.parent().get(0).href
-                = interfaceConfig.BRAND_WATERMARK_LINK;
-            rightWatermarkDiv.get(0).style.backgroundImage
-                = "url(images/rightwatermark.png)";
+            rightWatermarkDiv.parent().get(0).href =
+                interfaceConfig.BRAND_WATERMARK_LINK;
+            rightWatermarkDiv.get(0).style.backgroundImage =
+                "url(images/rightwatermark.png)";
         }
     }
 
@@ -9227,8 +11456,7 @@ function setupWelcomePage()
             .css({display: 'block'});
     }
 
-    $("#enter_room_button").click(function()
-    {
+    $("#enter_room_button").click(function() {
         enter_room();
     });
 
@@ -9238,36 +11466,94 @@ function setupWelcomePage()
         }
     });
 
-    if (!(interfaceConfig.GENERATE_ROOMNAMES_ON_WELCOME_PAGE === false)){
+    if (interfaceConfig.GENERATE_ROOMNAMES_ON_WELCOME_PAGE !== false) {
         var updateTimeout;
         var animateTimeout;
-        $("#reload_roomname").click(function () {
+        var selector = $("#reload_roomname");
+        selector.click(function () {
             clearTimeout(updateTimeout);
             clearTimeout(animateTimeout);
             update_roomname();
         });
-        $("#reload_roomname").show();
-
+        selector.show();
 
         update_roomname();
     }
 
     $("#disable_welcome").click(function () {
-        window.localStorage.welcomePageDisabled
-            = $("#disable_welcome").is(":checked");
+        window.localStorage.welcomePageDisabled =
+            $("#disable_welcome").is(":checked");
     });
 
 }
 
 module.exports = setupWelcomePage;
-},{"./RoomnameGenerator":38}],40:[function(require,module,exports){
+},{"./RoomnameGenerator":42}],44:[function(require,module,exports){
+/* global $, $iq, config, interfaceConfig */
+
+var configUtil = require('./Util');
+
+var HttpConfig = {
+    /**
+     * Sends HTTP POST request to specified <tt>endpoint</tt>. In request
+     * the name of the room is included in JSON format:
+     * {
+     *   "rooomName": "someroom12345"
+     * }
+     * @param endpoint the name of HTTP endpoint to which HTTP POST request will
+     *                 be sent.
+     * @param roomName the name of the conference room for which config will be
+     *                 requested.
+     * @param complete
+     */
+    obtainConfig: function (endpoint, roomName, complete) {
+        console.info(
+            "Send config request to " + endpoint + " for room: " + roomName);
+
+        var request = new XMLHttpRequest();
+        var error = null;
+        request.onreadystatechange = function (aEvt) {
+            if (request.readyState == 4) {
+                var status = request.status;
+                if (status === 200) {
+                    try {
+                        var data = JSON.parse(request.responseText);
+                        configUtil.overrideConfigJSON(
+                            config, interfaceConfig, data);
+                        complete(true);
+                        return;
+                    } catch (exception) {
+                        console.error("Parse config error: ", exception);
+                        error = exception;
+                    }
+                } else {
+                    console.error("Get config error: ", request, status);
+                    error = "Get config response status: " + status;
+                }
+                complete(false, error);
+            }
+        };
+
+        request.open("POST", endpoint, true);
+
+        request.setRequestHeader(
+            "Content-Type", "application/json;charset=UTF-8");
+
+        request.send({ "roomName": roomName });
+    }
+};
+
+module.exports = HttpConfig;
+},{"./Util":46}],45:[function(require,module,exports){
+/* global $, $iq, config, interfaceConfig */
+var configUtils = require('./Util');
 var params = {};
 function getConfigParamsFromUrl() {
-    if(!location.hash)
+    if (!location.hash)
         return {};
     var hash = location.hash.substr(1);
     var result = {};
-    hash.split("&").forEach(function(part) {
+    hash.split("&").forEach(function (part) {
         var item = part.split("=");
         result[item[0]] = JSON.parse(
             decodeURIComponent(item[1]).replace(/\\&/, "&"));
@@ -9279,29 +11565,103 @@ params = getConfigParamsFromUrl();
 
 var URLProcessor = {
     setConfigParametersFromUrl: function () {
-        for(var k in params)
-        {
-            if(typeof k !== "string" || k.indexOf("config.") === -1)
-                continue;
-
-            var v = params[k];
-            var confKey = k.substr(7);
-            if(config[confKey] && typeof config[confKey] !== typeof v)
-            {
-                console.warn("The type of " + k +
-                    " is wrong. That parameter won't be updated in config.js.");
+        // Convert 'params' to JSON object
+        // We have:
+        // {
+        //   "config.disableAudioLevels": false,
+        //   "config.channelLastN": -1,
+        //   "interfaceConfig.APP_NAME": "Jitsi Meet"
+        // }
+        // We want to have:
+        // {
+        //   "config": {
+        //     "disableAudioLevels": false,
+        //     "channelLastN": -1
+        //   },
+        //   interfaceConfig: {
+        //     APP_NAME: "Jitsi Meet"
+        //   }
+        // }
+        var configJSON = {
+            config: {},
+            interfaceConfig: {}
+        };
+        for (var key in params) {
+            if (typeof key !== "string") {
+                console.warn("Invalid config key: ", key);
                 continue;
             }
+            var confObj = null, confKey;
+            if (key.indexOf("config.") === 0) {
+                confObj = configJSON.config;
+                confKey = key.substr("config.".length);
+            } else if (key.indexOf("interfaceConfig.") === 0) {
+                confObj = configJSON.interfaceConfig;
+                confKey = key.substr("interfaceConfig.".length);
+            }
 
-            config[confKey] = v;
+            if (!confObj)
+                continue;
 
+            confObj[confKey] = params[key];
         }
-
+        configUtils.overrideConfigJSON(config, interfaceConfig, configJSON);
     }
 };
 
 module.exports = URLProcessor;
-},{}],41:[function(require,module,exports){
+},{"./Util":46}],46:[function(require,module,exports){
+/* global $ */
+var ConfigUtil = {
+    /**
+     * Method overrides JSON properties in <tt>config</tt> and
+     * <tt>interfaceConfig</tt> Objects with the values from <tt>newConfig</tt>
+     * @param config the config object for which we'll be overriding properties
+     * @param interfaceConfig the interfaceConfig object for which we'll be
+     *                        overriding properties.
+     * @param newConfig object containing configuration properties. Destination
+     *        object is selected based on root property name:
+     *        {
+     *          config: {
+     *             // config.js properties to be
+     *          },
+     *          interfaceConfig: {
+     *             // interfaceConfig.js properties here
+     *          }
+     *        }
+     */
+    overrideConfigJSON: function (config, interfaceConfig, newConfig) {
+        for (var configRoot in newConfig) {
+
+            var confObj = null;
+            if (configRoot == "config") {
+                confObj = config;
+            } else if (configRoot == "interfaceConfig") {
+                confObj = interfaceConfig;
+            } else {
+                continue;
+            }
+
+            for (var key in newConfig[configRoot]) {
+                var value = newConfig[configRoot][key];
+                if (confObj[key] && typeof confObj[key] !== typeof value)
+                {
+                    console.warn(
+                        "The type of " + key +
+                        " is wrong. That parameter won't be updated in: ",
+                        confObj);
+                    continue;
+                }
+                console.info("Overriding " + key + " with: " + value);
+                confObj[key] = value;
+            }
+        }
+    }
+};
+
+module.exports = ConfigUtil;
+},{}],47:[function(require,module,exports){
+/* global APP, require */
 var EventEmitter = require("events");
 var eventEmitter = new EventEmitter();
 var CQEvents = require("../../service/connectionquality/CQEvents");
@@ -9357,7 +11717,7 @@ function convertToMUCStats(stats) {
 }
 
 /**
- * Converts statitistics to format used by VideoLayout
+ * Converts statistics to format used by VideoLayout
  * @param stats
  * @returns {{bitrate: {download: *, upload: *}, packetLoss: {total: *, download: *, upload: *}}}
  */
@@ -9374,7 +11734,6 @@ function parseMUCStats(stats) {
         }
     };
 }
-
 
 var ConnectionQuality = {
     init: function () {
@@ -9436,7 +11795,7 @@ var ConnectionQuality = {
 };
 
 module.exports = ConnectionQuality;
-},{"../../service/connectionquality/CQEvents":102,"../../service/xmpp/XMPPEvents":106,"events":107}],42:[function(require,module,exports){
+},{"../../service/connectionquality/CQEvents":173,"../../service/xmpp/XMPPEvents":177,"events":1}],48:[function(require,module,exports){
 /* global $, alert, APP, changeLocalVideo, chrome, config, getConferenceHandler,
  getUserMediaWithConstraints */
 /**
@@ -9470,13 +11829,7 @@ var extInstalled = false;
  */
 var extUpdateRequired = false;
 
-/**
- * Flag used to cache desktop sharing enabled state. Do not use directly as
- * it can be <tt>null</tt>.
- *
- * @type {null|boolean}
- */
-var _desktopSharingEnabled = null;
+var AdapterJS = require("../RTC/adapter.screenshare");
 
 var EventEmitter = require("events");
 
@@ -9484,6 +11837,10 @@ var eventEmitter = new EventEmitter();
 
 var DesktopSharingEventTypes
     = require("../../service/desktopsharing/DesktopSharingEventTypes");
+
+var RTCBrowserType = require("../RTC/RTCBrowserType");
+
+var RTCEvents = require("../../service/RTC/RTCEvents");
 
 /**
  * Method obtains desktop stream from WebRTC 'screen' source.
@@ -9555,7 +11912,7 @@ function isUpdateRequired(minVersion, extVersion)
     }
 }
 
-function checkExtInstalled(callback) {
+function checkChromeExtInstalled(callback) {
     if (!chrome.runtime) {
         // No API, so no extension for sure
         callback(false, false);
@@ -9652,20 +12009,39 @@ function obtainScreenFromExtension(streamCallback, failCallback) {
  *        feature completely.
  */
 function setDesktopSharing(method) {
-    // Check if we are running chrome
-    if (!navigator.webkitGetUserMedia) {
-        obtainDesktopStream = null;
-        console.info("Desktop sharing disabled");
-    } else if (method == "ext") {
-        obtainDesktopStream = obtainScreenFromExtension;
-        console.info("Using Chrome extension for desktop sharing");
-    } else if (method == "webrtc") {
-        obtainDesktopStream = obtainWebRTCScreen;
-        console.info("Using Chrome WebRTC for desktop sharing");
+
+    obtainDesktopStream = null;
+
+    // When TemasysWebRTC plugin is used we always use getUserMedia, so we don't
+    // care about 'method' parameter
+    if (RTCBrowserType.isTemasysPluginUsed()) {
+        if (!AdapterJS.WebRTCPlugin.plugin.HasScreensharingFeature) {
+            console.info("Screensharing not supported by this plugin version");
+        } else if (!AdapterJS.WebRTCPlugin.plugin.isScreensharingAvailable) {
+            console.info(
+            "Screensharing not available with Temasys plugin on this site");
+        } else {
+            obtainDesktopStream = obtainWebRTCScreen;
+            console.info("Using Temasys plugin for desktop sharing");
+        }
+    } else if (RTCBrowserType.isChrome()) {
+        if (method == "ext") {
+            if (RTCBrowserType.getChromeVersion() >= 34) {
+                obtainDesktopStream = obtainScreenFromExtension;
+                console.info("Using Chrome extension for desktop sharing");
+                initChromeExtension();
+            } else {
+                console.info("Chrome extension not supported until ver 34");
+            }
+        } else if (method == "webrtc") {
+            obtainDesktopStream = obtainWebRTCScreen;
+            console.info("Using Chrome WebRTC for desktop sharing");
+        }
     }
 
-    // Reset enabled cache
-    _desktopSharingEnabled = null;
+    if (!obtainDesktopStream) {
+        console.info("Desktop sharing disabled");
+    }
 }
 
 /**
@@ -9676,6 +12052,19 @@ function setDesktopSharing(method) {
 function initInlineInstalls()
 {
     $("link[rel=chrome-webstore-item]").attr("href", getWebStoreInstallUrl());
+}
+
+function initChromeExtension() {
+    // Initialize Chrome extension inline installs
+    initInlineInstalls();
+    // Check if extension is installed
+    checkChromeExtInstalled(function (installed, updateRequired) {
+        extInstalled = installed;
+        extUpdateRequired = updateRequired;
+        console.info(
+            "Chrome extension installed: " + extInstalled +
+            " updateRequired: " + extUpdateRequired);
+    });
 }
 
 function getVideoStreamFailed(error) {
@@ -9703,6 +12092,25 @@ function newStreamCreated(stream)
         stream, isUsingScreenStream, streamSwitchDone);
 }
 
+function onEndedHandler(stream) {
+    if (!switchInProgress && isUsingScreenStream) {
+        APP.desktopsharing.toggleScreenSharing();
+    }
+    //FIXME: to be verified
+    if (stream.removeEventListener) {
+        stream.removeEventListener('ended', onEndedHandler);
+    } else {
+        stream.detachEvent('ended', onEndedHandler);
+    }
+}
+
+// Called when RTC finishes initialization
+function onWebRtcReady() {
+
+    setDesktopSharing(config.desktopSharing);
+
+    eventEmitter.emit(DesktopSharingEventTypes.INIT);
+}
 
 module.exports = {
     isUsingScreenStream: function () {
@@ -9713,43 +12121,10 @@ module.exports = {
      * @returns {boolean} <tt>true</tt> if desktop sharing feature is available
      *          and enabled.
      */
-    isDesktopSharingEnabled: function () {
-        if (_desktopSharingEnabled === null) {
-            if (obtainDesktopStream === obtainScreenFromExtension) {
-                // Parse chrome version
-                var userAgent = navigator.userAgent.toLowerCase();
-                // We can assume that user agent is chrome, because it's
-                // enforced when 'ext' streaming method is set
-                var ver = parseInt(userAgent.match(/chrome\/(\d+)\./)[1], 10);
-                console.log("Chrome version" + userAgent, ver);
-                _desktopSharingEnabled = ver >= 34;
-            } else {
-                _desktopSharingEnabled =
-                    obtainDesktopStream === obtainWebRTCScreen;
-            }
-        }
-        return _desktopSharingEnabled;
-    },
+    isDesktopSharingEnabled: function () { return !!obtainDesktopStream; },
     
     init: function () {
-        setDesktopSharing(config.desktopSharing);
-
-        // Initialize Chrome extension inline installs
-        if (config.chromeExtensionId) {
-
-            initInlineInstalls();
-
-            // Check if extension is installed
-            checkExtInstalled(function (installed, updateRequired) {
-                extInstalled = installed;
-                extUpdateRequired = updateRequired;
-                console.info(
-                    "Chrome extension installed: " + extInstalled +
-                    " updateRequired: " + extUpdateRequired);
-            });
-        }
-
-        eventEmitter.emit(DesktopSharingEventTypes.INIT);
+        APP.RTC.addListener(RTCEvents.RTC_READY, onWebRtcReady);
     },
 
     addListener: function (listener, type)
@@ -9780,13 +12155,16 @@ module.exports = {
                     isUsingScreenStream = true;
                     // Hook 'ended' event to restore camera
                     // when screen stream stops
-                    stream.addEventListener('ended',
-                        function (e) {
-                            if (!switchInProgress && isUsingScreenStream) {
-                                APP.desktopsharing.toggleScreenSharing();
-                            }
-                        }
-                    );
+                    //FIXME: to be verified
+                    if (stream.addEventListener) {
+                        stream.addEventListener('ended', function () {
+                            onEndedHandler(stream);
+                        });
+                    } else {
+                        stream.attachEvent('ended', function () {
+                            onEndedHandler(stream);
+                        });
+                    }
                     newStreamCreated(stream);
                 },
                 getDesktopStreamFailed);
@@ -9806,42 +12184,47 @@ module.exports = {
 };
 
 
-},{"../../service/desktopsharing/DesktopSharingEventTypes":103,"events":107}],43:[function(require,module,exports){
+},{"../../service/RTC/RTCEvents":168,"../../service/desktopsharing/DesktopSharingEventTypes":174,"../RTC/RTCBrowserType":10,"../RTC/adapter.screenshare":12,"events":1}],49:[function(require,module,exports){
+/* global APP, $ */
 //maps keycode to character, id of popover for given function and function
-var shortcuts = {
-    67: {
-        character: "C",
-        id: "toggleChatPopover",
-        function: APP.UI.toggleChat
-    },
-    70: {
-        character: "F",
-        id: "filmstripPopover",
-        function: APP.UI.toggleFilmStrip
-    },
-    77: {
-        character: "M",
-        id: "mutePopover",
-        function: APP.UI.toggleAudio
-    },
-    84: {
-        character: "T",
-        function: function() {
-            if(!APP.RTC.localAudio.isMuted()) {
-                APP.UI.toggleAudio();
+var shortcuts = {};
+function initShortcutHandlers() {
+    shortcuts = {
+        67: {
+            character: "C",
+            id: "toggleChatPopover",
+            function: APP.UI.toggleChat
+        },
+        70: {
+            character: "F",
+            id: "filmstripPopover",
+            function: APP.UI.toggleFilmStrip
+        },
+        77: {
+            character: "M",
+            id: "mutePopover",
+            function: APP.UI.toggleAudio
+        },
+        84: {
+            character: "T",
+            function: function() {
+                if(!APP.RTC.localAudio.isMuted()) {
+                    APP.UI.toggleAudio();
+                }
             }
+        },
+        86: {
+            character: "V",
+            id: "toggleVideoPopover",
+            function: APP.UI.toggleVideo
         }
-    },
-    86: {
-        character: "V",
-        id: "toggleVideoPopover",
-        function: APP.UI.toggleVideo
-    }
-};
+    };
+}
 
 
 var KeyboardShortcut = {
     init: function () {
+        initShortcutHandlers();
         window.onkeyup = function(e) {
             var keycode = e.which;
             if(!($(":focus").is("input[type=text]") ||
@@ -9899,8 +12282,8 @@ var KeyboardShortcut = {
 
 module.exports = KeyboardShortcut;
 
-},{}],44:[function(require,module,exports){
-/* global APP */
+},{}],50:[function(require,module,exports){
+/* global APP, require, $ */
 
 /**
  * This module is meant to (eventually) contain and manage all information
@@ -9989,7 +12372,7 @@ function updateDtmf(jid, newValue) {
  * Checks each member's 'supportsDtmf' field and updates
  * 'atLastOneSupportsDtmf'.
  */
-function updateAtLeastOneDtmf(){
+function updateAtLeastOneDtmf() {
     var newAtLeastOneDtmf = false;
     for (var key in members) {
         if (typeof members[key].supportsDtmf !== 'undefined'
@@ -10010,11 +12393,10 @@ function updateAtLeastOneDtmf(){
  * Exported interface.
  */
 var Members = {
-    start: function(){
+    start: function() {
         registerListeners();
     },
-    addListener: function(type, listener)
-    {
+    addListener: function(type, listener) {
         eventEmitter.on(type, listener);
     },
     removeListener: function (type, listener) {
@@ -10030,7 +12412,7 @@ var Members = {
 
 module.exports = Members;
 
-},{"../../service/members/Events":104,"../../service/xmpp/XMPPEvents":106,"events":107}],45:[function(require,module,exports){
+},{"../../service/members/Events":175,"../../service/xmpp/XMPPEvents":177,"events":1}],51:[function(require,module,exports){
 var email = '';
 var displayName = '';
 var userId;
@@ -10068,15 +12450,13 @@ if (supportsLocalStorage()) {
     userId = generateUniqueId();
 }
 
-var Settings =
-{
+var Settings = {
     setDisplayName: function (newDisplayName) {
         displayName = newDisplayName;
         window.localStorage.displayname = displayName;
         return displayName;
     },
-    setEmail: function (newEmail)
-    {
+    setEmail: function (newEmail) {
         email = newEmail;
         window.localStorage.email = newEmail;
         return email;
@@ -10097,27 +12477,108 @@ var Settings =
 
 module.exports = Settings;
 
-},{}],46:[function(require,module,exports){
+},{}],52:[function(require,module,exports){
+/* global config, $, APP, Strophe, callstats */
+var jsSHA = require('jssha');
+var io = require('socket.io-client');
+var callStats = null;
+
+function initCallback (err, msg) {
+    console.log("Initializing Status: err="+err+" msg="+msg);
+}
+
+var CallStats = {
+    init: function (jingleSession) {
+
+        if(!config.callStatsID || !config.callStatsSecret || callStats !== null)
+            return;
+
+        callStats = new callstats($, io, jsSHA);
+
+        this.session = jingleSession;
+        this.peerconnection = jingleSession.peerconnection.peerconnection;
+
+        this.userID =  APP.xmpp.myResource();
+
+        var location = window.location;
+        this.confID = location.protocol + "//" +
+            location.hostname + location.pathname;
+
+        //userID is generated or given by the origin server
+        callStats.initialize(config.callStatsID,
+            config.callStatsSecret,
+            this.userID,
+            initCallback);
+
+        var usage = callStats.fabricUsage.multiplex;
+
+        callStats.addNewFabric(this.peerconnection,
+            Strophe.getResourceFromJid(jingleSession.peerjid),
+            usage,
+            this.confID,
+            this.pcCallback.bind(this));
+    },
+    pcCallback: function (err, msg) {
+        if (!callStats)
+            return;
+        console.log("Monitoring status: "+ err + " msg: " + msg);
+        callStats.sendFabricEvent(this.peerconnection,
+            callStats.fabricEvent.fabricSetup, this.confID);
+    },
+    sendMuteEvent: function (mute, type) {
+        if (!callStats)
+            return;
+        var event = null;
+        if (type === "video") {
+            event = (mute? callStats.fabricEvent.videoPause :
+                callStats.fabricEvent.videoResume);
+        }
+        else {
+            event = (mute? callStats.fabricEvent.audioMute :
+                callStats.fabricEvent.audioUnmute);
+        }
+        callStats.sendFabricEvent(this.peerconnection, event, this.confID);
+    },
+    sendTerminateEvent: function () {
+        if(!callStats) {
+            return;
+        }
+        callStats.sendFabricEvent(this.peerconnection,
+            callStats.fabricEvent.fabricTerminated, this.confID);
+    },
+    sendSetupFailedEvent: function () {
+        if(!callStats) {
+            return;
+        }
+        callStats.sendFabricEvent(this.peerconnection,
+            callStats.fabricEvent.fabricSetupFailed, this.confID);
+    }
+
+};
+module.exports = CallStats;
+},{"jssha":76,"socket.io-client":114}],53:[function(require,module,exports){
+/* global config */
 /**
  * Provides statistics for the local stream.
  */
 
+var RTCBrowserType = require('../RTC/RTCBrowserType');
 
 /**
- * Size of the webaudio analizer buffer.
+ * Size of the webaudio analyzer buffer.
  * @type {number}
  */
-var WEBAUDIO_ANALIZER_FFT_SIZE = 2048;
+var WEBAUDIO_ANALYZER_FFT_SIZE = 2048;
 
 /**
- * Value of the webaudio analizer smoothing time parameter.
+ * Value of the webaudio analyzer smoothing time parameter.
  * @type {number}
  */
-var WEBAUDIO_ANALIZER_SMOOTING_TIME = 0.8;
+var WEBAUDIO_ANALYZER_SMOOTING_TIME = 0.8;
 
 /**
  * Converts time domain data array to audio level.
- * @param array the time domain data array.
+ * @param samples the time domain data array.
  * @returns {number} the audio level
  */
 function timeDomainDataToAudioLevel(samples) {
@@ -10132,7 +12593,7 @@ function timeDomainDataToAudioLevel(samples) {
     }
 
     return parseFloat(((maxVolume - 127) / 128).toFixed(3));
-};
+}
 
 /**
  * Animates audio level change
@@ -10140,20 +12601,16 @@ function timeDomainDataToAudioLevel(samples) {
  * @param lastLevel the last audio level
  * @returns {Number} the audio level to be set
  */
-function animateLevel(newLevel, lastLevel)
-{
+function animateLevel(newLevel, lastLevel) {
     var value = 0;
     var diff = lastLevel - newLevel;
-    if(diff > 0.2)
-    {
+    if(diff > 0.2) {
         value = lastLevel - 0.2;
     }
-    else if(diff < -0.4)
-    {
+    else if(diff < -0.4) {
         value = lastLevel + 0.4;
     }
-    else
-    {
+    else {
         value = newLevel;
     }
 
@@ -10166,8 +12623,6 @@ function animateLevel(newLevel, lastLevel)
  *
  * @param stream the local stream
  * @param interval stats refresh interval given in ms.
- * @param {function(LocalStatsCollector)} updateCallback the callback called on stats
- *                                   update.
  * @constructor
  */
 function LocalStatsCollector(stream, interval, statisticsService, eventEmitter) {
@@ -10184,13 +12639,14 @@ function LocalStatsCollector(stream, interval, statisticsService, eventEmitter) 
  * Starts the collecting the statistics.
  */
 LocalStatsCollector.prototype.start = function () {
-    if (config.disableAudioLevels || !window.AudioContext)
+    if (config.disableAudioLevels || !window.AudioContext ||
+        RTCBrowserType.isTemasysPluginUsed())
         return;
 
     var context = new AudioContext();
     var analyser = context.createAnalyser();
-    analyser.smoothingTimeConstant = WEBAUDIO_ANALIZER_SMOOTING_TIME;
-    analyser.fftSize = WEBAUDIO_ANALIZER_FFT_SIZE;
+    analyser.smoothingTimeConstant = WEBAUDIO_ANALYZER_SMOOTING_TIME;
+    analyser.fftSize = WEBAUDIO_ANALYZER_FFT_SIZE;
 
 
     var source = context.createMediaStreamSource(this.stream);
@@ -10204,7 +12660,7 @@ LocalStatsCollector.prototype.start = function () {
             var array = new Uint8Array(analyser.frequencyBinCount);
             analyser.getByteTimeDomainData(array);
             var audioLevel = timeDomainDataToAudioLevel(array);
-            if(audioLevel != self.audioLevel) {
+            if (audioLevel != self.audioLevel) {
                 self.audioLevel = animateLevel(audioLevel, self.audioLevel);
                 self.eventEmitter.emit(
                     "statistics.audioLevel",
@@ -10214,7 +12670,6 @@ LocalStatsCollector.prototype.start = function () {
         },
         this.intervalMilis
     );
-
 };
 
 /**
@@ -10228,12 +12683,14 @@ LocalStatsCollector.prototype.stop = function () {
 };
 
 module.exports = LocalStatsCollector;
-},{}],47:[function(require,module,exports){
-/* global ssrc2jid */
+},{"../RTC/RTCBrowserType":10}],54:[function(require,module,exports){
+/* global require, ssrc2jid */
 /* jshint -W117 */
-var RTCBrowserType = require("../../service/RTC/RTCBrowserType");
+var RTCBrowserType = require("../RTC/RTCBrowserType");
 
-
+/* Whether we support the browser we are running into for logging statistics */
+var browserSupported = RTCBrowserType.isChrome() ||
+    RTCBrowserType.isOpera() || RTCBrowserType.isFirefox();
 /**
  * Calculates packet lost percent using the number of lost packets and the
  * number of all packet.
@@ -10248,10 +12705,12 @@ function calculatePacketLoss(lostPackets, totalPackets) {
 }
 
 function getStatValue(item, name) {
-    if(!keyMap[APP.RTC.getBrowserType()][name])
+    var browserType = RTCBrowserType.getBrowserType();
+    if (!keyMap[browserType][name])
         throw "The property isn't supported!";
-    var key = keyMap[APP.RTC.getBrowserType()][name];
-    return APP.RTC.getBrowserType() == RTCBrowserType.RTC_BROWSER_CHROME? item.stat(key) : item[key];
+    var key = keyMap[browserType][name];
+    return (RTCBrowserType.isChrome() || RTCBrowserType.isOpera()) ?
+        item.stat(key) : item[key];
 }
 
 /**
@@ -10277,8 +12736,6 @@ PeerStats.bandwidth = {};
  * @type {{}}
  */
 PeerStats.bitrate = {};
-
-
 
 /**
  * The packet loss rate
@@ -10464,7 +12921,7 @@ StatsCollector.prototype.errorCallback = function (error)
 StatsCollector.prototype.start = function ()
 {
     var self = this;
-    if(!config.disableAudioLevels) {
+    if (!config.disableAudioLevels) {
         this.audioLevelsIntervalId = setInterval(
             function () {
                 // Interval updates
@@ -10491,7 +12948,7 @@ StatsCollector.prototype.start = function ()
         );
     }
 
-    if(!config.disableStats && !navigator.mozGetUserMedia) {
+    if (!config.disableStats && browserSupported) {
         this.statsIntervalId = setInterval(
             function () {
                 // Interval updates
@@ -10525,7 +12982,8 @@ StatsCollector.prototype.start = function ()
         );
     }
 
-    if (config.logStats && !navigator.mozGetUserMedia) {
+    // Logging statistics does not support firefox
+    if (config.logStats && (browserSupported && !RTCBrowserType.isFirefox())) {
         this.gatherStatsIntervalId = setInterval(
             function () {
                 self.peerconnection.getStats(
@@ -10646,6 +13104,8 @@ keyMap[RTCBrowserType.RTC_BROWSER_CHROME] = {
     "audioInputLevel": "audioInputLevel",
     "audioOutputLevel": "audioOutputLevel"
 };
+keyMap[RTCBrowserType.RTC_BROWSER_OPERA] =
+    keyMap[RTCBrowserType.RTC_BROWSER_CHROME];
 
 
 /**
@@ -10902,41 +13362,34 @@ StatsCollector.prototype.processStatsReport = function () {
 /**
  * Stats processing logic.
  */
-StatsCollector.prototype.processAudioLevelReport = function ()
-{
-    if (!this.baselineAudioLevelsReport)
-    {
+StatsCollector.prototype.processAudioLevelReport = function () {
+    if (!this.baselineAudioLevelsReport) {
         return;
     }
 
-    for (var idx in this.currentAudioLevelsReport)
-    {
+    for (var idx in this.currentAudioLevelsReport) {
         var now = this.currentAudioLevelsReport[idx];
 
-        if (now.type != 'ssrc')
-        {
+        if (now.type != 'ssrc') {
             continue;
         }
 
         var before = this.baselineAudioLevelsReport[idx];
-        if (!before)
-        {
+        if (!before) {
             console.warn(getStatValue(now, 'ssrc') + ' not enough data');
             continue;
         }
 
         var ssrc = getStatValue(now, 'ssrc');
         var jid = APP.xmpp.getJidFromSSRC(ssrc);
-        if (!jid)
-        {
+        if (!jid) {
             if((Date.now() - now.timestamp) < 3000)
                 console.warn("No jid for ssrc: " + ssrc);
             continue;
         }
 
         var jidStats = this.jid2stats[jid];
-        if (!jidStats)
-        {
+        if (!jidStats) {
             jidStats = new PeerStats();
             this.jid2stats[jid] = jidStats;
         }
@@ -10955,8 +13408,7 @@ StatsCollector.prototype.processAudioLevelReport = function ()
             return;
         }
 
-        if (audioLevel)
-        {
+        if (audioLevel) {
             // TODO: can't find specs about what this value really is,
             // but it seems to vary between 0 and around 32k.
             audioLevel = audioLevel / 32767;
@@ -10964,13 +13416,11 @@ StatsCollector.prototype.processAudioLevelReport = function ()
             if(jid != APP.xmpp.myJid())
                 this.eventEmitter.emit("statistics.audioLevel", jid, audioLevel);
         }
-
     }
-
-
 };
 
-},{"../../service/RTC/RTCBrowserType":96}],48:[function(require,module,exports){
+},{"../RTC/RTCBrowserType":10}],55:[function(require,module,exports){
+/* global require, APP */
 /**
  * Created by hristo on 8/4/14.
  */
@@ -10979,6 +13429,8 @@ var RTPStats = require("./RTPStatsCollector.js");
 var EventEmitter = require("events");
 var StreamEventTypes = require("../../service/RTC/StreamEventTypes.js");
 var XMPPEvents = require("../../service/xmpp/XMPPEvents");
+var CallStats = require("./CallStats");
+var RTCEvents = require("../../service/RTC/RTCEvents");
 
 var eventEmitter = new EventEmitter();
 
@@ -10986,19 +13438,15 @@ var localStats = null;
 
 var rtpStats = null;
 
-function stopLocal()
-{
-    if(localStats)
-    {
+function stopLocal() {
+    if (localStats) {
         localStats.stop();
         localStats = null;
     }
 }
 
-function stopRemote()
-{
-    if(rtpStats)
-    {
+function stopRemote() {
+    if (rtpStats) {
         rtpStats.stop();
         eventEmitter.emit("statistics.stop");
         rtpStats = null;
@@ -11006,20 +13454,18 @@ function stopRemote()
 }
 
 function startRemoteStats (peerconnection) {
-    if(rtpStats)
-    {
+    if (rtpStats) {
         rtpStats.stop();
-        rtpStats = null;
     }
 
     rtpStats = new RTPStats(peerconnection, 200, 2000, eventEmitter);
     rtpStats.start();
 }
 
-function onStreamCreated(stream)
-{
-    if(stream.getOriginalStream().getAudioTracks().length === 0)
+function onStreamCreated(stream) {
+    if(stream.getOriginalStream().getAudioTracks().length === 0) {
         return;
+    }
 
     localStats = new LocalStats(stream.getOriginalStream(), 200, statistics,
         eventEmitter);
@@ -11027,6 +13473,7 @@ function onStreamCreated(stream)
 }
 
 function onDisposeConference(onUnload) {
+    CallStats.sendTerminateEvent();
     stopRemote();
     if(onUnload) {
         stopLocal();
@@ -11034,9 +13481,7 @@ function onDisposeConference(onUnload) {
     }
 }
 
-
-var statistics =
-{
+var statistics = {
     /**
      * Indicates that this audio level is for local jid.
      * @type {string}
@@ -11092,18 +13537,32 @@ var statistics =
         APP.RTC.addStreamListener(onStreamCreated,
             StreamEventTypes.EVENT_TYPE_LOCAL_CREATED);
         APP.xmpp.addListener(XMPPEvents.DISPOSE_CONFERENCE, onDisposeConference);
+        //FIXME: we may want to change CALL INCOMING event to onnegotiationneeded
         APP.xmpp.addListener(XMPPEvents.CALL_INCOMING, function (event) {
             startRemoteStats(event.peerconnection);
+//            CallStats.init(event);
+        });
+        APP.xmpp.addListener(XMPPEvents.PEERCONNECTION_READY, function (session) {
+            CallStats.init(session);
+        });
+        APP.RTC.addListener(RTCEvents.AUDIO_MUTE, function (mute) {
+            CallStats.sendMuteEvent(mute, "audio");
+        });
+        APP.xmpp.addListener(XMPPEvents.CONFERENCE_SETUP_FAILED, function () {
+            CallStats.sendSetupFailedEvent();
+        });
+        APP.RTC.addListener(RTCEvents.VIDEO_MUTE, function (mute) {
+            CallStats.sendMuteEvent(mute, "video");
         });
     }
-
 };
 
 
 
 
 module.exports = statistics;
-},{"../../service/RTC/StreamEventTypes.js":99,"../../service/xmpp/XMPPEvents":106,"./LocalStatsCollector.js":46,"./RTPStatsCollector.js":47,"events":107}],49:[function(require,module,exports){
+},{"../../service/RTC/RTCEvents":168,"../../service/RTC/StreamEventTypes.js":170,"../../service/xmpp/XMPPEvents":177,"./CallStats":52,"./LocalStatsCollector.js":53,"./RTPStatsCollector.js":54,"events":1}],56:[function(require,module,exports){
+/* global $, require, config, interfaceConfig */
 var i18n = require("i18next-client");
 var languages = require("../../service/translation/languages");
 var Settings = require("../settings/Settings");
@@ -11129,7 +13588,6 @@ var defaultOptions = {
     fallbackOnNull: true,
     fallbackOnEmpty: true,
     useDataAttrOptions: true,
-    defaultValueFromContent: false,
     app: interfaceConfig.APP_NAME,
     getAsync: false,
     defaultValueFromContent: false,
@@ -11169,8 +13627,7 @@ var defaultOptions = {
 //                localStorageExpirationTime: 86400000 // in ms, default 1 week
 };
 
-function initCompleted(t)
-{
+function initCompleted(t) {
     $("[data-i18n]").i18n();
 }
 
@@ -11228,7 +13685,7 @@ module.exports = {
     translateElement: function (selector) {
         selector.i18n();
     },
-    generateTranslatonHTML: function (key, options) {
+    generateTranslationHTML: function (key, options) {
         var str = "<span data-i18n=\"" + key + "\"";
         if(options)
         {
@@ -11242,40 +13699,162 @@ module.exports = {
     }
 };
 
-},{"../../service/translation/languages":105,"../settings/Settings":45,"i18next-client":65}],50:[function(require,module,exports){
+},{"../../service/translation/languages":176,"../settings/Settings":51,"i18next-client":75}],57:[function(require,module,exports){
+/*
+ * JingleSession provides an API to manage a single Jingle session. We will
+ * have different implementations depending on the underlying interface used
+ * (i.e. WebRTC and ORTC) and here we hold the code common to all of them.
+ */
+function JingleSession(me, sid, connection, service, eventEmitter) {
+    /**
+     * Our JID.
+     */
+    this.me = me;
+
+    /**
+     * The Jingle session identifier.
+     */
+    this.sid = sid;
+
+    /**
+     * The XMPP connection.
+     */
+    this.connection = connection;
+
+    /**
+     * The XMPP service.
+     */
+    this.service = service;
+
+    /**
+     * The event emitter.
+     */
+    this.eventEmitter = eventEmitter;
+
+    /**
+     * Whether to use dripping or not. Dripping is sending trickle candidates
+     * not one-by-one.
+     * Note: currently we do not support 'false'.
+     */
+    this.usedrip = true;
+
+    /**
+     *  When dripping is used, stores ICE candidates which are to be sent.
+     */
+    this.drip_container = [];
+
+    // Media constraints. Is this WebRTC only?
+    this.media_constraints = null;
+
+    // ICE servers config (RTCConfiguration?).
+    this.ice_config = {};
+}
+
+/**
+ * Prepares this object to initiate a session.
+ * @param peerjid the JID of the remote peer.
+ * @param isInitiator whether we will be the Jingle initiator.
+ * @param media_constraints
+ * @param ice_config
+ */
+JingleSession.prototype.initialize = function(peerjid, isInitiator,
+                                              media_constraints, ice_config) {
+    this.media_constraints = media_constraints;
+    this.ice_config = ice_config;
+
+    if (this.state !== null) {
+        console.error('attempt to initiate on session ' + this.sid +
+        'in state ' + this.state);
+        return;
+    }
+    this.state = 'pending';
+    this.initiator = isInitiator ? this.me : peerjid;
+    this.responder = !isInitiator ? this.me : peerjid;
+    this.peerjid = peerjid;
+
+    this.doInitialize();
+};
+
+/**
+ * Finishes initialization.
+ */
+JingleSession.prototype.doInitialize = function() {};
+
+/**
+ * Adds the ICE candidates found in the 'contents' array as remote candidates?
+ * Note: currently only used on transport-info
+ */
+JingleSession.prototype.addIceCandidates = function(contents) {};
+
+/**
+ * Handles an 'add-source' event.
+ *
+ * @param contents an array of Jingle 'content' elements.
+ */
+JingleSession.prototype.addSources = function(contents) {};
+
+/**
+ * Handles a 'remove-source' event.
+ *
+ * @param contents an array of Jingle 'content' elements.
+ */
+JingleSession.prototype.removeSources = function(contents) {};
+
+/**
+ * Terminates this Jingle session (stops sending media and closes the streams?)
+ */
+JingleSession.prototype.terminate = function() {};
+
+/**
+ * Sends a Jingle session-terminate message to the peer and terminates the
+ * session.
+ * @param reason
+ * @param text
+ */
+JingleSession.prototype.sendTerminate = function(reason, text) {};
+
+/**
+ * Handles an offer from the remote peer (prepares to accept a session).
+ * @param jingle the 'jingle' XML element.
+ */
+JingleSession.prototype.setOffer = function(jingle) {};
+
+/**
+ * Handles an answer from the remote peer (prepares to accept a session).
+ * @param jingle the 'jingle' XML element.
+ */
+JingleSession.prototype.setAnswer = function(jingle) {};
+
+
+module.exports = JingleSession;
+
+},{}],58:[function(require,module,exports){
 /* jshint -W117 */
+var JingleSession = require("./JingleSession");
 var TraceablePeerConnection = require("./TraceablePeerConnection");
 var SDPDiffer = require("./SDPDiffer");
 var SDPUtil = require("./SDPUtil");
 var SDP = require("./SDP");
-var RTCBrowserType = require("../../service/RTC/RTCBrowserType");
 var async = require("async");
 var transform = require("sdp-transform");
+var XMPPEvents = require("../../service/xmpp/XMPPEvents");
+var RTCBrowserType = require("../RTC/RTCBrowserType");
+var SSRCReplacement = require("./LocalSSRCReplacement");
 
 // Jingle stuff
-function JingleSession(me, sid, connection, service) {
-    this.me = me;
-    this.sid = sid;
-    this.connection = connection;
+function JingleSessionPC(me, sid, connection, service, eventEmitter) {
+    JingleSession.call(this, me, sid, connection, service, eventEmitter);
     this.initiator = null;
     this.responder = null;
-    this.isInitiator = null;
     this.peerjid = null;
     this.state = null;
     this.localSDP = null;
     this.remoteSDP = null;
     this.relayedStreams = [];
-    this.startTime = null;
-    this.stopTime = null;
-    this.media_constraints = null;
     this.pc_constraints = null;
-    this.ice_config = {};
-    this.drip_container = [];
-    this.service = service;
 
     this.usetrickle = true;
     this.usepranswer = false; // early transport warmup -- mind you, this might fail. depends on webrtc issue 1718
-    this.usedrip = false; // dripping is sending trickle candidates not one-by-one
 
     this.hadstuncandidate = false;
     this.hadturncandidate = false;
@@ -11292,6 +13871,9 @@ function JingleSession(me, sid, connection, service) {
 
     this.wait = true;
     this.localStreamsSSRC = null;
+    this.ssrcOwners = {};
+    this.ssrcVideoTypes = {};
+    this.eventEmitter = eventEmitter;
 
     /**
      * The indicator which determines whether the (local) video has been muted
@@ -11304,8 +13886,19 @@ function JingleSession(me, sid, connection, service) {
     // stable and the ice connection state is connected.
     this.modifySourcesQueue.pause();
 }
+JingleSessionPC.prototype = JingleSession.prototype;
+JingleSessionPC.prototype.constructor = JingleSessionPC;
 
-JingleSession.prototype.updateModifySourcesQueue = function() {
+
+JingleSessionPC.prototype.setOffer = function(offer) {
+    this.setRemoteDescription(offer, 'offer');
+};
+
+JingleSessionPC.prototype.setAnswer = function(answer) {
+    this.setRemoteDescription(answer, 'answer');
+};
+
+JingleSessionPC.prototype.updateModifySourcesQueue = function() {
     var signalingState = this.peerconnection.signalingState;
     var iceConnectionState = this.peerconnection.iceConnectionState;
     if (signalingState === 'stable' && iceConnectionState === 'connected') {
@@ -11315,33 +13908,28 @@ JingleSession.prototype.updateModifySourcesQueue = function() {
     }
 };
 
-JingleSession.prototype.initiate = function (peerjid, isInitiator) {
+JingleSessionPC.prototype.doInitialize = function () {
     var self = this;
-    if (this.state !== null) {
-        console.error('attempt to initiate on session ' + this.sid +
-            'in state ' + this.state);
-        return;
-    }
-    this.isInitiator = isInitiator;
-    this.state = 'pending';
-    this.initiator = isInitiator ? this.me : peerjid;
-    this.responder = !isInitiator ? this.me : peerjid;
-    this.peerjid = peerjid;
+
     this.hadstuncandidate = false;
     this.hadturncandidate = false;
     this.lasticecandidate = false;
+    // True if reconnect is in progress
+    this.isreconnect = false;
+    // Set to true if the connection was ever stable
+    this.wasstable = false;
 
-    this.peerconnection
-        = new TraceablePeerConnection(
+    this.peerconnection = new TraceablePeerConnection(
             this.connection.jingle.ice_config,
-            this.connection.jingle.pc_constraints );
+            this.connection.jingle.pc_constraints,
+            this);
 
     this.peerconnection.onicecandidate = function (event) {
         self.sendIceCandidate(event.candidate);
     };
     this.peerconnection.onaddstream = function (event) {
         if (event.stream.id !== 'default') {
-        console.log("REMOTE STREAM ADDED: " + event.stream + " - " + event.stream.id);
+        console.log("REMOTE STREAM ADDED: ", event.stream , event.stream.id);
         self.remoteStreamAdded(event);
         } else {
             // This is a recvonly stream. Clients that implement Unified Plan,
@@ -11358,20 +13946,46 @@ JingleSession.prototype.initiate = function (peerjid, isInitiator) {
     };
     this.peerconnection.onsignalingstatechange = function (event) {
         if (!(self && self.peerconnection)) return;
+        console.info("Signaling: " + this.peerconnection.signalingState);
+        if (self.peerconnection.signalingState === 'stable') {
+            self.wasstable = true;
+        }
         self.updateModifySourcesQueue();
     };
+    /**
+     * The oniceconnectionstatechange event handler contains the code to execute when the iceconnectionstatechange event,
+     * of type Event, is received by this RTCPeerConnection. Such an event is sent when the value of
+     * RTCPeerConnection.iceConnectionState changes.
+     *
+     * @param event the event containing information about the change
+     */
     this.peerconnection.oniceconnectionstatechange = function (event) {
         if (!(self && self.peerconnection)) return;
+        console.info("Ice: " + self.peerconnection.iceConnectionState);
         self.updateModifySourcesQueue();
         switch (self.peerconnection.iceConnectionState) {
             case 'connected':
-                this.startTime = new Date();
+
+                // Informs interested parties that the connection has been restored.
+                if (self.peerconnection.signalingState === 'stable' && self.isreconnect)
+                    self.eventEmitter.emit(XMPPEvents.CONNECTION_RESTORED);
+                self.isreconnect = false;
+
                 break;
             case 'disconnected':
-                this.stopTime = new Date();
+                self.isreconnect = true;
+                // Informs interested parties that the connection has been interrupted.
+                if (self.wasstable)
+                    self.eventEmitter.emit(XMPPEvents.CONNECTION_INTERRUPTED);
+                break;
+            case 'failed':
+                self.eventEmitter.emit(XMPPEvents.CONFERENCE_SETUP_FAILED);
                 break;
         }
         onIceConnectionStateChange(self.sid, self);
+    };
+    this.peerconnection.onnegotiationneeded = function (event) {
+        self.eventEmitter.emit(XMPPEvents.PEERCONNECTION_READY, self);
     };
     // add any local and relayed stream
     APP.RTC.localStreams.forEach(function(stream) {
@@ -11425,8 +14039,7 @@ function onIceConnectionStateChange(sid, session) {
     }
 }
 
-JingleSession.prototype.accept = function () {
-    var self = this;
+JingleSessionPC.prototype.accept = function () {
     this.state = 'active';
 
     var pranswer = this.peerconnection.localDescription;
@@ -11453,7 +14066,11 @@ JingleSession.prototype.accept = function () {
             initiator: this.initiator,
             responder: this.responder,
             sid: this.sid });
-    prsdp.toJingle(accept, this.initiator == this.me ? 'initiator' : 'responder', this.localStreamsSSRC);
+    // FIXME why do we generate session-accept in 3 different places ?
+    prsdp.toJingle(
+        accept,
+        this.initiator == this.me ? 'initiator' : 'responder',
+        this.localStreamsSSRC);
     var sdp = this.peerconnection.localDescription.sdp;
     while (SDPUtil.find_line(sdp, 'a=inactive')) {
         // FIXME: change any inactive to sendrecv or whatever they were originally
@@ -11464,6 +14081,8 @@ JingleSession.prototype.accept = function () {
         function () {
             //console.log('setLocalDescription success');
             self.setLocalDescription();
+
+            SSRCReplacement.processSessionInit(accept);
 
             self.connection.sendIQ(accept,
                 function () {
@@ -11477,17 +14096,18 @@ JingleSession.prototype.accept = function () {
                         reason: $(stanza).find('error :first')[0].tagName
                     }:{};
                     error.source = 'answer';
-                    JingleSession.onJingleError(self.sid, error);
+                    JingleSessionPC.onJingleError(self.sid, error);
                 },
                 10000);
         },
         function (e) {
             console.error('setLocalDescription failed', e);
+            self.eventEmitter.emit(XMPPEvents.CONFERENCE_SETUP_FAILED);
         }
     );
 };
 
-JingleSession.prototype.terminate = function (reason) {
+JingleSessionPC.prototype.terminate = function (reason) {
     this.state = 'ended';
     this.reason = reason;
     this.peerconnection.close();
@@ -11497,11 +14117,11 @@ JingleSession.prototype.terminate = function (reason) {
     }
 };
 
-JingleSession.prototype.active = function () {
+JingleSessionPC.prototype.active = function () {
     return this.state == 'active';
 };
 
-JingleSession.prototype.sendIceCandidate = function (candidate) {
+JingleSessionPC.prototype.sendIceCandidate = function (candidate) {
     var self = this;
     if (candidate && !this.lasticecandidate) {
         var ice = SDPUtil.iceparams(this.localSDP.media[candidate.sdpMLineIndex], this.localSDP.session);
@@ -11539,6 +14159,7 @@ JingleSession.prototype.sendIceCandidate = function (candidate) {
         //console.log('sendIceCandidate: last candidate.');
         if (!this.usetrickle) {
             //console.log('should send full offer now...');
+            //FIXME why do we generate session-accept in 3 different places ?
             var init = $iq({to: this.peerjid,
                 type: 'set'})
                 .c('jingle', {xmlns: 'urn:xmpp:jingle:1',
@@ -11546,11 +14167,16 @@ JingleSession.prototype.sendIceCandidate = function (candidate) {
                     initiator: this.initiator,
                     sid: this.sid});
             this.localSDP = new SDP(this.peerconnection.localDescription.sdp);
-            var self = this;
             var sendJingle = function (ssrc) {
                 if(!ssrc)
                     ssrc = {};
-                self.localSDP.toJingle(init, self.initiator == self.me ? 'initiator' : 'responder', ssrc);
+                self.localSDP.toJingle(
+                    init,
+                    self.initiator == self.me ? 'initiator' : 'responder',
+                    ssrc);
+
+                SSRCReplacement.processSessionInit(init);
+
                 self.connection.sendIQ(init,
                     function () {
                         //console.log('session initiate ack');
@@ -11566,10 +14192,10 @@ JingleSession.prototype.sendIceCandidate = function (candidate) {
                             reason: $(stanza).find('error :first')[0].tagName,
                         }:{};
                         error.source = 'offer';
-                        JingleSession.onJingleError(self.sid, error);
+                        JingleSessionPC.onJingleError(self.sid, error);
                     },
                     10000);
-            }
+            };
             sendJingle();
         }
         this.lasticecandidate = true;
@@ -11582,7 +14208,7 @@ JingleSession.prototype.sendIceCandidate = function (candidate) {
     }
 };
 
-JingleSession.prototype.sendIceCandidates = function (candidates) {
+JingleSessionPC.prototype.sendIceCandidates = function (candidates) {
     console.log('sendIceCandidates', candidates);
     var cand = $iq({to: this.peerjid, type: 'set'})
         .c('jingle', {xmlns: 'urn:xmpp:jingle:1',
@@ -11631,13 +14257,13 @@ JingleSession.prototype.sendIceCandidates = function (candidates) {
                 reason: $(stanza).find('error :first')[0].tagName,
             }:{};
             error.source = 'transportinfo';
-            JingleSession.onJingleError(this.sid, error);
+            JingleSessionPC.onJingleError(this.sid, error);
         },
         10000);
 };
 
 
-JingleSession.prototype.sendOffer = function () {
+JingleSessionPC.prototype.sendOffer = function () {
     //console.log('sendOffer...');
     var self = this;
     this.peerconnection.createOffer(function (sdp) {
@@ -11650,7 +14276,8 @@ JingleSession.prototype.sendOffer = function () {
     );
 };
 
-JingleSession.prototype.createdOffer = function (sdp) {
+// FIXME createdOffer is never used in jitsi-meet
+JingleSessionPC.prototype.createdOffer = function (sdp) {
     //console.log('createdOffer', sdp);
     var self = this;
     this.localSDP = new SDP(sdp.sdp);
@@ -11662,7 +14289,13 @@ JingleSession.prototype.createdOffer = function (sdp) {
                 action: 'session-initiate',
                 initiator: this.initiator,
                 sid: this.sid});
-        self.localSDP.toJingle(init, this.initiator == this.me ? 'initiator' : 'responder', this.localStreamsSSRC);
+        self.localSDP.toJingle(
+            init,
+            this.initiator == this.me ? 'initiator' : 'responder',
+            this.localStreamsSSRC);
+
+        SSRCReplacement.processSessionInit(init);
+
         self.connection.sendIQ(init,
             function () {
                 var ack = {};
@@ -11677,7 +14310,7 @@ JingleSession.prototype.createdOffer = function (sdp) {
                     reason: $(stanza).find('error :first')[0].tagName,
                 }:{};
                 error.source = 'offer';
-                JingleSession.onJingleError(self.sid, error);
+                JingleSessionPC.onJingleError(self.sid, error);
             },
             10000);
     }
@@ -11693,6 +14326,7 @@ JingleSession.prototype.createdOffer = function (sdp) {
         },
         function (e) {
             console.error('setLocalDescription failed', e);
+            self.eventEmitter.emit(XMPPEvents.CONFERENCE_SETUP_FAILED);
         }
     );
     var cands = SDPUtil.find_lines(this.localSDP.raw, 'a=candidate:');
@@ -11706,10 +14340,33 @@ JingleSession.prototype.createdOffer = function (sdp) {
     }
 };
 
-JingleSession.prototype.setRemoteDescription = function (elem, desctype) {
+JingleSessionPC.prototype.readSsrcInfo = function (contents) {
+    var self = this;
+    $(contents).each(function (idx, content) {
+        var name = $(content).attr('name');
+        var mediaType = this.getAttribute('name');
+        var ssrcs = $(content).find('description>source[xmlns="urn:xmpp:jingle:apps:rtp:ssma:0"]');
+        ssrcs.each(function () {
+            var ssrc = this.getAttribute('ssrc');
+            $(this).find('>ssrc-info[xmlns="http://jitsi.org/jitmeet"]').each(
+                function () {
+                    var owner = this.getAttribute('owner');
+                    self.ssrcOwners[ssrc] = owner;
+                }
+            );
+        });
+    });
+};
+
+JingleSessionPC.prototype.getSsrcOwner = function (ssrc) {
+    return this.ssrcOwners[ssrc];
+};
+
+JingleSessionPC.prototype.setRemoteDescription = function (elem, desctype) {
     //console.log('setting remote description... ', desctype);
     this.remoteSDP = new SDP('');
     this.remoteSDP.fromJingle(elem);
+    this.readSsrcInfo($(elem).find(">content"));
     if (this.peerconnection.remoteDescription !== null) {
         console.log('setRemoteDescription when remote description is not null, should be pranswer', this.peerconnection.remoteDescription);
         if (this.peerconnection.remoteDescription.type == 'pranswer') {
@@ -11745,12 +14402,12 @@ JingleSession.prototype.setRemoteDescription = function (elem, desctype) {
         },
         function (e) {
             console.error('setRemoteDescription error', e);
-            JingleSession.onJingleFatalError(self, e);
+            JingleSessionPC.onJingleFatalError(self, e);
         }
     );
 };
 
-JingleSession.prototype.addIceCandidate = function (elem) {
+JingleSessionPC.prototype.addIceCandidate = function (elem) {
     var self = this;
     if (this.peerconnection.signalingState == 'closed') {
         return;
@@ -11858,7 +14515,7 @@ JingleSession.prototype.addIceCandidate = function (elem) {
     });
 };
 
-JingleSession.prototype.sendAnswer = function (provisional) {
+JingleSessionPC.prototype.sendAnswer = function (provisional) {
     //console.log('createAnswer', provisional);
     var self = this;
     this.peerconnection.createAnswer(
@@ -11867,12 +14524,13 @@ JingleSession.prototype.sendAnswer = function (provisional) {
         },
         function (e) {
             console.error('createAnswer failed', e);
+            self.eventEmitter.emit(XMPPEvents.CONFERENCE_SETUP_FAILED);
         },
         this.media_constraints
     );
 };
 
-JingleSession.prototype.createdAnswer = function (sdp, provisional) {
+JingleSessionPC.prototype.createdAnswer = function (sdp, provisional) {
     //console.log('createAnswer callback');
     var self = this;
     this.localSDP = new SDP(sdp.sdp);
@@ -11889,7 +14547,7 @@ JingleSession.prototype.createdAnswer = function (sdp, provisional) {
     }
     var self = this;
     var sendJingle = function (ssrcs) {
-
+                // FIXME why do we generate session-accept in 3 different places ?
                 var accept = $iq({to: self.peerjid,
                     type: 'set'})
                     .c('jingle', {xmlns: 'urn:xmpp:jingle:1',
@@ -11897,7 +14555,13 @@ JingleSession.prototype.createdAnswer = function (sdp, provisional) {
                         initiator: self.initiator,
                         responder: self.responder,
                         sid: self.sid });
-                self.localSDP.toJingle(accept, self.initiator == self.me ? 'initiator' : 'responder', ssrcs);
+                self.localSDP.toJingle(
+                    accept,
+                    self.initiator == self.me ? 'initiator' : 'responder',
+                    ssrcs);
+
+                SSRCReplacement.processSessionInit(accept);
+
                 self.connection.sendIQ(accept,
                     function () {
                         var ack = {};
@@ -11910,7 +14574,7 @@ JingleSession.prototype.createdAnswer = function (sdp, provisional) {
                             reason: $(stanza).find('error :first')[0].tagName,
                         }:{};
                         error.source = 'answer';
-                        JingleSession.onJingleError(self.sid, error);
+                        JingleSessionPC.onJingleError(self.sid, error);
                     },
                     10000);
     }
@@ -11926,6 +14590,7 @@ JingleSession.prototype.createdAnswer = function (sdp, provisional) {
         },
         function (e) {
             console.error('setLocalDescription failed', e);
+            self.eventEmitter.emit(XMPPEvents.CONFERENCE_SETUP_FAILED);
         }
     );
     var cands = SDPUtil.find_lines(this.localSDP.raw, 'a=candidate:');
@@ -11939,7 +14604,7 @@ JingleSession.prototype.createdAnswer = function (sdp, provisional) {
     }
 };
 
-JingleSession.prototype.sendTerminate = function (reason, text) {
+JingleSessionPC.prototype.sendTerminate = function (reason, text) {
     var self = this,
         term = $iq({to: this.peerjid,
             type: 'set'})
@@ -11977,7 +14642,7 @@ JingleSession.prototype.sendTerminate = function (reason, text) {
     }
 };
 
-JingleSession.prototype.addSource = function (elem, fromJid) {
+JingleSessionPC.prototype.addSource = function (elem, fromJid) {
 
     var self = this;
     // FIXME: dirty waiting
@@ -11995,6 +14660,9 @@ JingleSession.prototype.addSource = function (elem, fromJid) {
 
     console.log('addssrc', new Date().getTime());
     console.log('ice', this.peerconnection.iceConnectionState);
+
+    this.readSsrcInfo(elem);
+
     var sdp = new SDP(this.peerconnection.remoteDescription.sdp);
     var mySdp = new SDP(this.peerconnection.localDescription.sdp);
 
@@ -12021,6 +14689,10 @@ JingleSession.prototype.addSource = function (elem, fromJid) {
                  * addssrc are scheduled for update IQ. See
                  */
                 console.warn("Got add stream request for my own ssrc: "+ssrc);
+                return;
+            }
+            if (sdp.containsSSRC(ssrc)) {
+                console.warn("Source-add request for existing SSRC: " + ssrc);
                 return;
             }
             $(this).find('>parameter').each(function () {
@@ -12052,7 +14724,7 @@ JingleSession.prototype.addSource = function (elem, fromJid) {
     });
 };
 
-JingleSession.prototype.removeSource = function (elem, fromJid) {
+JingleSessionPC.prototype.removeSource = function (elem, fromJid) {
 
     var self = this;
     // FIXME: dirty waiting
@@ -12123,7 +14795,7 @@ JingleSession.prototype.removeSource = function (elem, fromJid) {
     });
 };
 
-JingleSession.prototype._modifySources = function (successCallback, queueCallback) {
+JingleSessionPC.prototype._modifySources = function (successCallback, queueCallback) {
     var self = this;
 
     if (this.peerconnection.signalingState == 'closed') return;
@@ -12157,15 +14829,6 @@ JingleSession.prototype._modifySources = function (successCallback, queueCallbac
         });
     });
     this.removessrc = [];
-
-    // FIXME:
-    // this was a hack for the situation when only one peer exists
-    // in the conference.
-    // check if still required and remove
-    if (sdp.media[0])
-        sdp.media[0] = sdp.media[0].replace('a=recvonly', 'a=sendrecv');
-    if (sdp.media[1])
-        sdp.media[1] = sdp.media[1].replace('a=recvonly', 'a=sendrecv');
 
     sdp.raw = sdp.session + sdp.media.join('');
     this.peerconnection.setRemoteDescription(new RTCSessionDescription({type: 'offer', sdp: sdp.raw}),
@@ -12238,7 +14901,7 @@ JingleSession.prototype._modifySources = function (successCallback, queueCallbac
  * @param oldStream old video stream of this session.
  * @param success_callback callback executed after successful stream switch.
  */
-JingleSession.prototype.switchStreams = function (new_stream, oldStream, success_callback, isAudio) {
+JingleSessionPC.prototype.switchStreams = function (new_stream, oldStream, success_callback, isAudio) {
 
     var self = this;
 
@@ -12252,9 +14915,6 @@ JingleSession.prototype.switchStreams = function (new_stream, oldStream, success
         if(new_stream)
             self.peerconnection.addStream(new_stream);
     }
-
-    if(!isAudio)
-    APP.RTC.switchVideoStreams(new_stream, oldStream);
 
     // Conference is not active
     if(!oldSdp || !self.peerconnection) {
@@ -12279,7 +14939,7 @@ JingleSession.prototype.switchStreams = function (new_stream, oldStream, success
  * @param old_sdp SDP object for old description.
  * @param new_sdp SDP object for new description.
  */
-JingleSession.prototype.notifyMySSRCUpdate = function (old_sdp, new_sdp) {
+JingleSessionPC.prototype.notifyMySSRCUpdate = function (old_sdp, new_sdp) {
 
     if (!(this.peerconnection.signalingState == 'stable' &&
         this.peerconnection.iceConnectionState == 'connected')){
@@ -12298,7 +14958,14 @@ JingleSession.prototype.notifyMySSRCUpdate = function (old_sdp, new_sdp) {
         }
     );
     var removed = sdpDiffer.toJingle(remove);
-    if (removed) {
+
+    // Let 'source-remove' IQ through the hack and see if we're allowed to send
+    // it in the current form
+    if (removed)
+        remove = SSRCReplacement.processSourceRemove(remove);
+
+    if (removed && remove) {
+        console.info("Sending source-remove", remove);
         this.connection.sendIQ(remove,
             function (res) {
                 console.info('got remove result', res);
@@ -12322,7 +14989,14 @@ JingleSession.prototype.notifyMySSRCUpdate = function (old_sdp, new_sdp) {
         }
     );
     var added = sdpDiffer.toJingle(add);
-    if (added) {
+
+    // Let 'source-add' IQ through the hack and see if we're allowed to send
+    // it in the current form
+    if (added)
+        add = SSRCReplacement.processSourceAdd(add);
+
+    if (added && add) {
+        console.info("Sending source-add", add);
         this.connection.sendIQ(add,
             function (res) {
                 console.info('got add result', res);
@@ -12350,7 +15024,7 @@ JingleSession.prototype.notifyMySSRCUpdate = function (old_sdp, new_sdp) {
  * specifies whether the method was initiated in response to a user command (in
  * contrast to an automatic decision made by the application logic)
  */
-JingleSession.prototype.setVideoMute = function (mute, callback, options) {
+JingleSessionPC.prototype.setVideoMute = function (mute, callback, options) {
     var byUser;
 
     if (options) {
@@ -12390,11 +15064,11 @@ JingleSession.prototype.setVideoMute = function (mute, callback, options) {
     });
 };
 
-JingleSession.prototype.hardMuteVideo = function (muted) {
+JingleSessionPC.prototype.hardMuteVideo = function (muted) {
     this.pendingop = muted ? 'mute' : 'unmute';
 };
 
-JingleSession.prototype.sendMute = function (muted, content) {
+JingleSessionPC.prototype.sendMute = function (muted, content) {
     var info = $iq({to: this.peerjid,
         type: 'set'})
         .c('jingle', {xmlns: 'urn:xmpp:jingle:1',
@@ -12409,7 +15083,7 @@ JingleSession.prototype.sendMute = function (muted, content) {
     this.connection.send(info);
 };
 
-JingleSession.prototype.sendRinging = function () {
+JingleSessionPC.prototype.sendRinging = function () {
     var info = $iq({to: this.peerjid,
         type: 'set'})
         .c('jingle', {xmlns: 'urn:xmpp:jingle:1',
@@ -12420,7 +15094,7 @@ JingleSession.prototype.sendRinging = function () {
     this.connection.send(info);
 };
 
-JingleSession.prototype.getStats = function (interval) {
+JingleSessionPC.prototype.getStats = function (interval) {
     var self = this;
     var recv = {audio: 0, video: 0};
     var lost = {audio: 0, video: 0};
@@ -12466,21 +15140,21 @@ JingleSession.prototype.getStats = function (interval) {
     return this.statsinterval;
 };
 
-JingleSession.onJingleError = function (session, error)
+JingleSessionPC.onJingleError = function (session, error)
 {
     console.error("Jingle error", error);
 }
 
-JingleSession.onJingleFatalError = function (session, error)
+JingleSessionPC.onJingleFatalError = function (session, error)
 {
     this.service.sessionTerminated = true;
     this.connection.emuc.doLeave();
-    APP.UI.messageHandler.showError("dialog.sorry",
-        "dialog.internalError");
+    this.eventEmitter.emit(XMPPEvents.CONFERENCE_SETUP_FAILED);
+    this.eventEmitter.emit(XMPPEvents.JINGLE_FATAL_ERROR, session, error);
 }
 
-JingleSession.prototype.setLocalDescription = function () {
-    // put our ssrcs into presence so other clients can identify our stream
+JingleSessionPC.prototype.setLocalDescription = function () {
+    var self = this;
     var newssrcs = [];
     var session = transform.parse(this.peerconnection.localDescription.sdp);
     session.media.forEach(function (media) {
@@ -12493,17 +15167,15 @@ JingleSession.prototype.setLocalDescription = function () {
                 }
                 newssrcs.push({
                     'ssrc': ssrc.id,
-                    'type': media.type,
-                    'direction': media.direction
+                    'type': media.type
                 });
             });
         }
-        else if(this.localStreamsSSRC && this.localStreamsSSRC[media.type])
+        else if(self.localStreamsSSRC && self.localStreamsSSRC[media.type])
         {
             newssrcs.push({
-                'ssrc': this.localStreamsSSRC[media.type],
-                'type': media.type,
-                'direction': media.direction
+                'ssrc': self.localStreamsSSRC[media.type],
+                'type': media.type
             });
         }
 
@@ -12511,24 +15183,19 @@ JingleSession.prototype.setLocalDescription = function () {
 
     console.log('new ssrcs', newssrcs);
 
-    // Have to clear presence map to get rid of removed streams
-    this.connection.emuc.clearPresenceMedia();
-
+    // Bind us as local SSRCs owner
     if (newssrcs.length > 0) {
         for (var i = 1; i <= newssrcs.length; i ++) {
-            // Change video type to screen
-            if (newssrcs[i-1].type === 'video' && APP.desktopsharing.isUsingScreenStream()) {
-                newssrcs[i-1].type = 'screen';
-            }
-            this.connection.emuc.addMediaToPresence(i,
-                newssrcs[i-1].type, newssrcs[i-1].ssrc, newssrcs[i-1].direction);
+            var ssrc = newssrcs[i-1].ssrc;
+            var myJid = self.connection.emuc.myroomjid;
+            self.ssrcOwners[ssrc] = myJid;
         }
-
-        this.connection.emuc.sendPresence();
     }
 }
 
 // an attempt to work around https://github.com/jitsi/jitmeet/issues/32
+// TODO: is this hack (along with the XMPPEvent-s used only for it) still needed
+// now that we announce an SSRC for receive-only streams?
 function sendKeyframe(pc) {
     console.log('sendkeyframe', pc.iceConnectionState);
     if (pc.iceConnectionState !== 'connected') return; // safe...
@@ -12544,31 +15211,33 @@ function sendKeyframe(pc) {
                         },
                         function (error) {
                             console.log('triggerKeyframe setLocalDescription failed', error);
-                            APP.UI.messageHandler.showError();
+                            eventEmitter.emit(XMPPEvents.SET_LOCAL_DESCRIPTION_ERROR);
                         }
                     );
                 },
                 function (error) {
                     console.log('triggerKeyframe createAnswer failed', error);
-                    APP.UI.messageHandler.showError();
+                    eventEmitter.emit(XMPPEvents.CREATE_ANSWER_ERROR);
                 }
             );
         },
         function (error) {
             console.log('triggerKeyframe setRemoteDescription failed', error);
-            APP.UI.messageHandler.showError();
+            eventEmitter.emit(XMPPEvents.SET_REMOTE_DESCRIPTION_ERROR);
         }
     );
 }
 
 
-JingleSession.prototype.remoteStreamAdded = function (data, times) {
+JingleSessionPC.prototype.remoteStreamAdded = function (data, times) {
     var self = this;
     var thessrc;
-    var ssrc2jid = this.connection.emuc.ssrc2jid;
+    var streamId = APP.RTC.getStreamID(data.stream);
 
     // look up an associated JID for a stream id
-    if (data.stream.id && data.stream.id.indexOf('mixedmslabel') === -1) {
+    if (!streamId) {
+        console.error("No stream ID for", data.stream);
+    } else if (streamId && streamId.indexOf('mixedmslabel') === -1) {
         // look only at a=ssrc: and _not_ at a=ssrc-group: lines
 
         var ssrclines
@@ -12578,45 +15247,23 @@ JingleSession.prototype.remoteStreamAdded = function (data, times) {
             // is not always present.
             // return line.indexOf('mslabel:' + data.stream.label) !== -1;
 
-            return ((line.indexOf('msid:' + data.stream.id) !== -1));
+            if (RTCBrowserType.isTemasysPluginUsed()) {
+                return ((line.indexOf('mslabel:' + streamId) !== -1));
+            } else {
+                return ((line.indexOf('msid:' + streamId) !== -1));
+            }
         });
         if (ssrclines.length) {
             thessrc = ssrclines[0].substring(7).split(' ')[0];
 
-            // We signal our streams (through Jingle to the focus) before we set
-            // our presence (through which peers associate remote streams to
-            // jids). So, it might arrive that a remote stream is added but
-            // ssrc2jid is not yet updated and thus data.peerjid cannot be
-            // successfully set. Here we wait for up to a second for the
-            // presence to arrive.
-
-            if (!ssrc2jid[thessrc]) {
-
-                if (typeof times === 'undefined')
-                {
-                    times = 0;
-                }
-
-                if (times > 10)
-                {
-                    console.warning('Waiting for jid timed out', thessrc);
-                }
-                else
-                {
-                    setTimeout(function(d) {
-                        return function() {
-                            self.remoteStreamAdded(d, times++);
-                        }
-                    }(data), 250);
-                }
+            if (!self.ssrcOwners[thessrc]) {
+                console.error("No SSRC owner known for: " + thessrc);
                 return;
             }
-
-            // ok to overwrite the one from focus? might save work in colibri.js
-            console.log('associated jid', ssrc2jid[thessrc], data.peerjid);
-            if (ssrc2jid[thessrc]) {
-                data.peerjid = ssrc2jid[thessrc];
-            }
+            data.peerjid = self.ssrcOwners[thessrc];
+            console.log('associated jid', self.ssrcOwners[thessrc]);
+        } else {
+            console.error("No SSRC lines for ", streamId);
         }
     }
 
@@ -12624,6 +15271,8 @@ JingleSession.prototype.remoteStreamAdded = function (data, times) {
 
     var isVideo = data.stream.getVideoTracks().length > 0;
     // an attempt to work around https://github.com/jitsi/jitmeet/issues/32
+    // TODO: is this hack still needed now that we announce an SSRC for
+    // receive-only streams?
     if (isVideo &&
         data.peerjid && this.peerjid === data.peerjid &&
         data.stream.getVideoTracks().length === 0 &&
@@ -12634,9 +15283,279 @@ JingleSession.prototype.remoteStreamAdded = function (data, times) {
     }
 }
 
-module.exports = JingleSession;
+module.exports = JingleSessionPC;
 
-},{"../../service/RTC/RTCBrowserType":96,"./SDP":51,"./SDPDiffer":52,"./SDPUtil":53,"./TraceablePeerConnection":54,"async":64,"sdp-transform":92}],51:[function(require,module,exports){
+},{"../../service/xmpp/XMPPEvents":177,"../RTC/RTCBrowserType":10,"./JingleSession":57,"./LocalSSRCReplacement":59,"./SDP":60,"./SDPDiffer":61,"./SDPUtil":62,"./TraceablePeerConnection":63,"async":74,"sdp-transform":111}],59:[function(require,module,exports){
+/* global $ */
+
+/*
+ Here we do modifications of local video SSRCs. There are 2 situations we have
+ to handle:
+
+ 1. We generate SSRC for local recvonly video stream. This is the case when we
+    have no local camera and it is not generated automatically, but SSRC=1 is
+    used implicitly. If that happens RTCP packets will be dropped by the JVB
+    and we won't be able to request video key frames correctly.
+
+ 2. A hack to re-use SSRC of the first video stream for any new stream created
+    in future. It turned out that Chrome may keep on using the SSRC of removed
+    video stream in RTCP even though a new one has been created. So we just
+    want to avoid that by re-using it. Jingle 'source-remove'/'source-add'
+    notifications are blocked once first video SSRC is advertised to the focus.
+
+ What this hack does:
+
+ 1. Stores the SSRC of the first video stream created by
+   a) scanning Jingle session-accept/session-invite for existing video SSRC
+   b) watching for 'source-add' for new video stream if it has not been
+      created in step a)
+ 2. Exposes method 'mungeLocalVideoSSRC' which replaces any new video SSRC with
+    the stored one. It is called by 'TracablePeerConnection' before local SDP is
+    returned to the other parts of the application.
+ 3. Scans 'source-remove'/'source-add' notifications for stored video SSRC and
+    blocks those notifications. This makes Jicofo and all participants think
+    that it exists all the time even if the video stream has been removed or
+    replaced locally. Thanks to that there is no additional signaling activity
+    on video mute or when switching to the desktop stream.
+ */
+
+var SDP = require('./SDP');
+var RTCBrowserType = require('../RTC/RTCBrowserType');
+
+/**
+ * The hack is enabled on all browsers except FF by default
+ * FIXME finish the hack once removeStream method is implemented in FF
+ * @type {boolean}
+ */
+var isEnabled = !RTCBrowserType.isFirefox();
+
+/**
+ * Stored SSRC of local video stream.
+ */
+var localVideoSSRC;
+
+/**
+ * SSRC used for recvonly video stream when we have no local camera.
+ * This is in order to tell Chrome what SSRC should be used in RTCP requests
+ * instead of 1.
+ */
+var localRecvOnlySSRC;
+
+/**
+ * cname for <tt>localRecvOnlySSRC</tt>
+ */
+var localRecvOnlyCName;
+
+/**
+ * Method removes <source> element which describes <tt>localVideoSSRC</tt>
+ * from given Jingle IQ.
+ * @param modifyIq 'source-add' or 'source-remove' Jingle IQ.
+ * @param actionName display name of the action which will be printed in log
+ *        messages.
+ * @returns {*} modified Jingle IQ, so that it does not contain <source> element
+ *          corresponding to <tt>localVideoSSRC</tt> or <tt>null</tt> if no
+ *          other SSRCs left to be signaled after removing it.
+ */
+var filterOutSource = function (modifyIq, actionName) {
+    var modifyIqTree = $(modifyIq.tree());
+
+    if (!localVideoSSRC)
+        return modifyIqTree[0];
+
+    var videoSSRC = modifyIqTree.find(
+        '>jingle>content[name="video"]' +
+        '>description>source[ssrc="' + localVideoSSRC + '"]');
+
+    if (!videoSSRC.length) {
+        return modifyIqTree[0];
+    }
+
+    console.info(
+        'Blocking ' + actionName + ' for local video SSRC: ' + localVideoSSRC);
+
+    videoSSRC.remove();
+
+    // Check if any sources still left to be added/removed
+    if (modifyIqTree.find('>jingle>content>description>source').length) {
+        return modifyIqTree[0];
+    } else {
+        return null;
+    }
+};
+
+/**
+ * Scans given Jingle IQ for video SSRC and stores it.
+ * @param jingleIq the Jingle IQ to be scanned for video SSRC.
+ */
+var storeLocalVideoSSRC = function (jingleIq) {
+    var videoSSRCs =
+        $(jingleIq.tree())
+            .find('>jingle>content[name="video"]>description>source');
+
+    videoSSRCs.each(function (idx, ssrcElem) {
+        if (localVideoSSRC)
+            return;
+        // We consider SSRC real only if it has msid attribute
+        // recvonly streams in FF do not have it as well as local SSRCs
+        // we generate for recvonly streams in Chrome
+        var ssrSel = $(ssrcElem);
+        var msid = ssrSel.find('>parameter[name="msid"]');
+        if (msid.length) {
+            var ssrcVal = ssrSel.attr('ssrc');
+            if (ssrcVal) {
+                localVideoSSRC = ssrcVal;
+                console.info('Stored local video SSRC' +
+                             ' for future re-use: ' + localVideoSSRC);
+            }
+        }
+    });
+};
+
+/**
+ * Generates new SSRC for local video recvonly stream.
+ * FIXME what about eventual SSRC collision ?
+ */
+function generateRecvonlySSRC() {
+    //
+    localRecvOnlySSRC =
+        Math.random().toString(10).substring(2, 11);
+    localRecvOnlyCName =
+        Math.random().toString(36).substring(2);
+    console.info(
+        "Generated local recvonly SSRC: " + localRecvOnlySSRC +
+        ", cname: " + localRecvOnlyCName);
+}
+
+var LocalSSRCReplacement = {
+    /**
+     * Method must be called before 'session-initiate' or 'session-invite' is
+     * sent. Scans the IQ for local video SSRC and stores it if detected.
+     *
+     * @param sessionInit our 'session-initiate' or 'session-accept' Jingle IQ
+     *        which will be scanned for local video SSRC.
+     */
+    processSessionInit: function (sessionInit) {
+        if (!isEnabled)
+            return;
+
+        if (localVideoSSRC) {
+            console.error("Local SSRC stored already: " + localVideoSSRC);
+            return;
+        }
+        storeLocalVideoSSRC(sessionInit);
+    },
+    /**
+     * If we have local video SSRC stored searched given
+     * <tt>localDescription</tt> for video SSRC and makes sure it is replaced
+     * with the stored one.
+     * @param localDescription local description object that will have local
+     *        video SSRC replaced with the stored one
+     * @returns modified <tt>localDescription</tt> object.
+     */
+    mungeLocalVideoSSRC: function (localDescription) {
+        if (!isEnabled)
+            return localDescription;
+
+        if (!localDescription) {
+            console.warn("localDescription is null or undefined");
+            return localDescription;
+        }
+
+        // IF we have local video SSRC stored make sure it is replaced
+        // with old SSRC
+        if (localVideoSSRC) {
+            var newSdp = new SDP(localDescription.sdp);
+            if (newSdp.media[1].indexOf("a=ssrc:") !== -1 &&
+                !newSdp.containsSSRC(localVideoSSRC)) {
+                // Get new video SSRC
+                var map = newSdp.getMediaSsrcMap();
+                var videoPart = map[1];
+                var videoSSRCs = videoPart.ssrcs;
+                var newSSRC = Object.keys(videoSSRCs)[0];
+
+                console.info(
+                    "Replacing new video SSRC: " + newSSRC +
+                    " with " + localVideoSSRC);
+
+                localDescription.sdp =
+                    newSdp.raw.replace(
+                        new RegExp('a=ssrc:' + newSSRC, 'g'),
+                        'a=ssrc:' + localVideoSSRC);
+            }
+        } else {
+            // Make sure we have any SSRC for recvonly video stream
+            var sdp = new SDP(localDescription.sdp);
+
+            if (sdp.media[1] && sdp.media[1].indexOf('a=ssrc:') === -1 &&
+                sdp.media[1].indexOf('a=recvonly') !== -1) {
+
+                if (!localRecvOnlySSRC) {
+                    generateRecvonlySSRC();
+                }
+
+                console.info('No SSRC in video recvonly stream' +
+                             ' - adding SSRC: ' + localRecvOnlySSRC);
+
+                sdp.media[1] += 'a=ssrc:' + localRecvOnlySSRC +
+                                ' cname:' + localRecvOnlyCName + '\r\n';
+
+                localDescription.sdp = sdp.session + sdp.media.join('');
+            }
+        }
+        return localDescription;
+    },
+    /**
+     * Method must be called before 'source-add' notification is sent. In case
+     * we have local video SSRC advertised already it will be removed from the
+     * notification. If no other SSRCs are described by given IQ null will be
+     * returned which means that there is no point in sending the notification.
+     * @param sourceAdd 'source-add' Jingle IQ to be processed
+     * @returns modified 'source-add' IQ which can be sent to the focus or
+     *          <tt>null</tt> if no notification shall be sent. It is no longer
+     *          a Strophe IQ Builder instance, but DOM element tree.
+     */
+    processSourceAdd: function (sourceAdd) {
+        if (!isEnabled)
+            return sourceAdd;
+
+        if (!localVideoSSRC) {
+            // Store local SSRC if available
+            storeLocalVideoSSRC(sourceAdd);
+            return sourceAdd;
+        } else {
+            return filterOutSource(sourceAdd, 'source-add');
+        }
+    },
+    /**
+     * Method must be called before 'source-remove' notification is sent.
+     * Removes local video SSRC from the notification. If there are no other
+     * SSRCs described in the given IQ <tt>null</tt> will be returned which
+     * means that there is no point in sending the notification.
+     * @param sourceRemove 'source-remove' Jingle IQ to be processed
+     * @returns modified 'source-remove' IQ which can be sent to the focus or
+     *          <tt>null</tt> if no notification shall be sent. It is no longer
+     *          a Strophe IQ Builder instance, but DOM element tree.
+     */
+    processSourceRemove: function (sourceRemove) {
+        if (!isEnabled)
+            return sourceRemove;
+
+        return filterOutSource(sourceRemove, 'source-remove');
+    },
+
+    /**
+     * Turns the hack on or off
+     * @param enabled <tt>true</tt> to enable the hack or <tt>false</tt>
+     *                to disable it
+     */
+    setEnabled: function (enabled) {
+        isEnabled = enabled;
+    }
+};
+
+module.exports = LocalSSRCReplacement;
+
+},{"../RTC/RTCBrowserType":10,"./SDP":60}],60:[function(require,module,exports){
 /* jshint -W117 */
 var SDPUtil = require("./SDPUtil");
 
@@ -12857,12 +15776,15 @@ SDP.prototype.toJingle = function (elem, thecreator, ssrcs) {
                         if (kv.indexOf(':') == -1) {
                             elem.attrs({ name: kv });
                         } else {
-                            elem.attrs({ name: kv.split(':', 2)[0] });
-                            elem.attrs({ value: kv.split(':', 2)[1] });
+                            var k = kv.split(':', 2)[0];
+                            elem.attrs({ name: k });
+
+                            var v = kv.split(':', 2)[1];
+                            v = SDPUtil.filter_special_chars(v);
+                            elem.attrs({ value: v });
                         }
                         elem.up();
                     });
-                    elem.up();
                 }
                 else
                 {
@@ -12882,7 +15804,7 @@ SDP.prototype.toJingle = function (elem, thecreator, ssrcs) {
                     }
                     if(msid != null)
                     {
-                        msid = msid.replace(/[\{,\}]/g,"");
+                        msid = SDPUtil.filter_special_chars(msid);
                         elem.c('parameter');
                         elem.attrs({name: "msid", value:msid});
                         elem.up();
@@ -12892,11 +15814,9 @@ SDP.prototype.toJingle = function (elem, thecreator, ssrcs) {
                         elem.c('parameter');
                         elem.attrs({name: "label", value:msid});
                         elem.up();
-                        elem.up();
                     }
-
-
                 }
+                elem.up();
 
                 // XEP-0339 handle ssrc-group attributes
                 var ssrc_group_lines = SDPUtil.find_lines(this.media[i], 'a=ssrc-group:');
@@ -13244,9 +16164,12 @@ SDP.prototype.jingle2media = function (content) {
     tmp.each(function () {
         var ssrc = this.getAttribute('ssrc');
         $(this).find('>parameter').each(function () {
-            media += 'a=ssrc:' + ssrc + ' ' + this.getAttribute('name');
-            if (this.getAttribute('value') && this.getAttribute('value').length)
-                media += ':' + this.getAttribute('value');
+            var name = this.getAttribute('name');
+            var value = this.getAttribute('value');
+            value = SDPUtil.filter_special_chars(value);
+            media += 'a=ssrc:' + ssrc + ' ' + name;
+            if (value && value.length)
+                media += ':' + value;
             media += '\r\n';
         });
     });
@@ -13258,7 +16181,10 @@ SDP.prototype.jingle2media = function (content) {
 module.exports = SDP;
 
 
-},{"./SDPUtil":53}],52:[function(require,module,exports){
+},{"./SDPUtil":62}],61:[function(require,module,exports){
+
+var SDPUtil = require("./SDPUtil");
+
 function SDPDiffer(mySDP, otherSDP) {
     this.mySDP = mySDP;
     this.otherSDP = otherSDP;
@@ -13391,8 +16317,11 @@ SDPDiffer.prototype.toJingle = function(modify) {
                 if (kv.indexOf(':') == -1) {
                     modify.attrs({ name: kv });
                 } else {
-                    modify.attrs({ name: kv.split(':', 2)[0] });
-                    modify.attrs({ value: kv.split(':', 2)[1] });
+                    var nv = kv.split(':', 2);
+                    var name = nv[0];
+                    var value = SDPUtil.filter_special_chars(nv[1]);
+                    modify.attrs({ name: name });
+                    modify.attrs({ value: value });
                 }
                 modify.up(); // end of parameter
             });
@@ -13424,8 +16353,11 @@ SDPDiffer.prototype.toJingle = function(modify) {
 };
 
 module.exports = SDPDiffer;
-},{}],53:[function(require,module,exports){
+},{"./SDPUtil":62}],62:[function(require,module,exports){
 SDPUtil = {
+    filter_special_chars: function (text) {
+        return text.replace(/[\\\/\{,\}\+]/g, "");
+    },
     iceparams: function (mediadesc, sessiondesc) {
         var data = null;
         if (SDPUtil.find_line(mediadesc, 'a=ice-ufrag:', sessiondesc) &&
@@ -13774,11 +16706,23 @@ SDPUtil = {
     }
 };
 module.exports = SDPUtil;
-},{}],54:[function(require,module,exports){
-function TraceablePeerConnection(ice_config, constraints) {
+},{}],63:[function(require,module,exports){
+var RTC = require('../RTC/RTC');
+var RTCBrowserType = require("../RTC/RTCBrowserType.js");
+var XMPPEvents = require("../../service/xmpp/XMPPEvents");
+var SSRCReplacement = require("./LocalSSRCReplacement");
+
+function TraceablePeerConnection(ice_config, constraints, session) {
     var self = this;
-    var RTCPeerconnection = navigator.mozGetUserMedia ? mozRTCPeerConnection : webkitRTCPeerConnection;
-    this.peerconnection = new RTCPeerconnection(ice_config, constraints);
+    var RTCPeerConnectionType = null;
+    if (RTCBrowserType.isFirefox()) {
+        RTCPeerConnectionType = mozRTCPeerConnection;
+    } else if (RTCBrowserType.isTemasysPluginUsed()) {
+        RTCPeerConnectionType = RTCPeerConnection;
+    } else {
+        RTCPeerConnectionType = webkitRTCPeerConnection;
+    }
+    this.peerconnection = new RTCPeerConnectionType(ice_config, constraints);
     this.updateLog = [];
     this.stats = {};
     this.statsinterval = null;
@@ -13790,7 +16734,15 @@ function TraceablePeerConnection(ice_config, constraints) {
 
     // override as desired
     this.trace = function (what, info) {
-        //console.warn('WTRACE', what, info);
+        /*console.warn('WTRACE', what, info);
+        if (info && RTCBrowserType.isIExplorer()) {
+            if (info.length > 1024) {
+                console.warn('WTRACE', what, info.substr(1024));
+            }
+            if (info.length > 2048) {
+                console.warn('WTRACE', what, info.substr(2048));
+            }
+        }*/
         self.updateLog.push({
             time: new Date(),
             type: what,
@@ -13799,7 +16751,9 @@ function TraceablePeerConnection(ice_config, constraints) {
     };
     this.onicecandidate = null;
     this.peerconnection.onicecandidate = function (event) {
-        self.trace('onicecandidate', JSON.stringify(event.candidate, null, ' '));
+        // FIXME: this causes stack overflow with Temasys Plugin
+        if (!RTCBrowserType.isTemasysPluginUsed())
+            self.trace('onicecandidate', JSON.stringify(event.candidate, null, ' '));
         if (self.onicecandidate !== null) {
             self.onicecandidate(event);
         }
@@ -13846,13 +16800,13 @@ function TraceablePeerConnection(ice_config, constraints) {
             self.ondatachannel(event);
         }
     };
-    if (!navigator.mozGetUserMedia && this.maxstats) {
+    // XXX: do all non-firefox browsers which we support also support this?
+    if (!RTCBrowserType.isFirefox() && this.maxstats) {
         this.statsinterval = window.setInterval(function() {
             self.peerconnection.getStats(function(stats) {
                 var results = stats.result();
+                var now = new Date();
                 for (var i = 0; i < results.length; ++i) {
-                    //console.log(results[i].type, results[i].id, results[i].names())
-                    var now = new Date();
                     results[i].names().forEach(function (name) {
                         var id = results[i].id + '-' + name;
                         if (!self.stats[id]) {
@@ -13876,9 +16830,12 @@ function TraceablePeerConnection(ice_config, constraints) {
 
         }, 1000);
     }
-};
+}
 
-dumpSDP = function(description) {
+/**
+ * Returns a string representation of a SessionDescription object.
+ */
+var dumpSDP = function(description) {
     if (typeof description === 'undefined' || description == null) {
         return '';
     }
@@ -13886,31 +16843,109 @@ dumpSDP = function(description) {
     return 'type: ' + description.type + '\r\n' + description.sdp;
 };
 
+/**
+ * Takes a SessionDescription object and returns a "normalized" version.
+ * Currently it only takes care of ordering the a=ssrc lines.
+ */
+var normalizePlanB = function(desc) {
+    if (typeof desc !== 'object' || desc === null ||
+        typeof desc.sdp !== 'string') {
+        console.warn('An empty description was passed as an argument.');
+        return desc;
+    }
+
+    var transform = require('sdp-transform');
+    var session = transform.parse(desc.sdp);
+
+    if (typeof session !== 'undefined' && typeof session.media !== 'undefined' &&
+        Array.isArray(session.media)) {
+        session.media.forEach(function (mLine) {
+
+            // Chrome appears to be picky about the order in which a=ssrc lines
+            // are listed in an m-line when rtx is enabled (and thus there are
+            // a=ssrc-group lines with FID semantics). Specifically if we have
+            // "a=ssrc-group:FID S1 S2" and the "a=ssrc:S2" lines appear before
+            // the "a=ssrc:S1" lines, SRD fails.
+            // So, put SSRC which appear as the first SSRC in an FID ssrc-group
+            // first.
+            var firstSsrcs = [];
+            var newSsrcLines = [];
+
+            if (typeof mLine.ssrcGroups !== 'undefined' && Array.isArray(mLine.ssrcGroups)) {
+                mLine.ssrcGroups.forEach(function (group) {
+                    if (typeof group.semantics !== 'undefined' &&
+                        group.semantics === 'FID') {
+                        if (typeof group.ssrcs !== 'undefined') {
+                            firstSsrcs.push(Number(group.ssrcs.split(' ')[0]));
+                        }
+                    }
+                });
+            }
+
+            if (typeof mLine.ssrcs !== 'undefined' && Array.isArray(mLine.ssrcs)) {
+                for (var i = 0; i<mLine.ssrcs.length; i++){
+                    if (typeof mLine.ssrcs[i] === 'object'
+                        && typeof mLine.ssrcs[i].id !== 'undefined'
+                        && $.inArray(mLine.ssrcs[i].id, firstSsrcs) == 0) {
+                        newSsrcLines.push(mLine.ssrcs[i]);
+                        delete mLine.ssrcs[i];
+                    }
+                }
+
+                for (var i = 0; i<mLine.ssrcs.length; i++){
+                    if (typeof mLine.ssrcs[i] !== 'undefined') {
+                        newSsrcLines.push(mLine.ssrcs[i]);
+                    }
+                }
+
+                mLine.ssrcs = newSsrcLines;
+            }
+        });
+    }
+
+    var resStr = transform.write(session);
+    return new RTCSessionDescription({
+        type: desc.type,
+        sdp: resStr
+    });
+};
+
 if (TraceablePeerConnection.prototype.__defineGetter__ !== undefined) {
-    TraceablePeerConnection.prototype.__defineGetter__('signalingState', function() { return this.peerconnection.signalingState; });
-    TraceablePeerConnection.prototype.__defineGetter__('iceConnectionState', function() { return this.peerconnection.iceConnectionState; });
-    TraceablePeerConnection.prototype.__defineGetter__('localDescription', function() {
-        var desc = this.peerconnection.localDescription;
-        this.trace('getLocalDescription::preTransform', dumpSDP(desc));
+    TraceablePeerConnection.prototype.__defineGetter__(
+        'signalingState',
+        function() { return this.peerconnection.signalingState; });
+    TraceablePeerConnection.prototype.__defineGetter__(
+        'iceConnectionState',
+        function() { return this.peerconnection.iceConnectionState; });
+    TraceablePeerConnection.prototype.__defineGetter__(
+        'localDescription',
+        function() {
+            var desc = this.peerconnection.localDescription;
 
-        // if we're running on FF, transform to Plan B first.
-        if (navigator.mozGetUserMedia) {
-            desc = this.interop.toPlanB(desc);
-            this.trace('getLocalDescription::postTransform (Plan B)', dumpSDP(desc));
-        }
-        return desc;
-    });
-    TraceablePeerConnection.prototype.__defineGetter__('remoteDescription', function() {
-        var desc = this.peerconnection.remoteDescription;
-        this.trace('getRemoteDescription::preTransform', dumpSDP(desc));
+            desc = SSRCReplacement.mungeLocalVideoSSRC(desc);
+            
+            this.trace('getLocalDescription::preTransform', dumpSDP(desc));
 
-        // if we're running on FF, transform to Plan B first.
-        if (navigator.mozGetUserMedia) {
-            desc = this.interop.toPlanB(desc);
-            this.trace('getRemoteDescription::postTransform (Plan B)', dumpSDP(desc));
-        }
-        return desc;
-    });
+            // if we're running on FF, transform to Plan B first.
+            if (RTCBrowserType.usesUnifiedPlan()) {
+                desc = this.interop.toPlanB(desc);
+                this.trace('getLocalDescription::postTransform (Plan B)', dumpSDP(desc));
+            }
+            return desc;
+        });
+    TraceablePeerConnection.prototype.__defineGetter__(
+        'remoteDescription',
+        function() {
+            var desc = this.peerconnection.remoteDescription;
+            this.trace('getRemoteDescription::preTransform', dumpSDP(desc));
+
+            // if we're running on FF, transform to Plan B first.
+            if (RTCBrowserType.usesUnifiedPlan()) {
+                desc = this.interop.toPlanB(desc);
+                this.trace('getRemoteDescription::postTransform (Plan B)', dumpSDP(desc));
+            }
+            return desc;
+        });
 }
 
 TraceablePeerConnection.prototype.addStream = function (stream) {
@@ -13922,7 +16957,6 @@ TraceablePeerConnection.prototype.addStream = function (stream) {
     catch (e)
     {
         console.error(e);
-        return;
     }
 };
 
@@ -13930,16 +16964,26 @@ TraceablePeerConnection.prototype.removeStream = function (stream, stopStreams) 
     this.trace('removeStream', stream.id);
     if(stopStreams) {
         stream.getAudioTracks().forEach(function (track) {
-            track.stop();
+            // stop() not supported with IE
+            if (track.stop) {
+                track.stop();
+            }
         });
         stream.getVideoTracks().forEach(function (track) {
-            track.stop();
+            // stop() not supported with IE
+            if (track.stop) {
+                track.stop();
+            }
         });
+        if (stream.stop) {
+            stream.stop();
+        }
     }
 
     try {
         // FF doesn't support this yet.
-        this.peerconnection.removeStream(stream);
+        if (this.peerconnection.removeStream)
+            this.peerconnection.removeStream(stream);
     } catch (e) {
         console.error(e);
     }
@@ -13950,10 +16994,11 @@ TraceablePeerConnection.prototype.createDataChannel = function (label, opts) {
     return this.peerconnection.createDataChannel(label, opts);
 };
 
-TraceablePeerConnection.prototype.setLocalDescription = function (description, successCallback, failureCallback) {
+TraceablePeerConnection.prototype.setLocalDescription
+        = function (description, successCallback, failureCallback) {
     this.trace('setLocalDescription::preTransform', dumpSDP(description));
     // if we're running on FF, transform to Plan A first.
-    if (navigator.mozGetUserMedia) {
+    if (RTCBrowserType.usesUnifiedPlan()) {
         description = this.interop.toUnifiedPlan(description);
         this.trace('setLocalDescription::postTransform (Plan A)', dumpSDP(description));
     }
@@ -13976,17 +17021,23 @@ TraceablePeerConnection.prototype.setLocalDescription = function (description, s
      */
 };
 
-TraceablePeerConnection.prototype.setRemoteDescription = function (description, successCallback, failureCallback) {
+TraceablePeerConnection.prototype.setRemoteDescription
+        = function (description, successCallback, failureCallback) {
     this.trace('setRemoteDescription::preTransform', dumpSDP(description));
     // TODO the focus should squeze or explode the remote simulcast
     description = this.simulcast.mungeRemoteDescription(description);
     this.trace('setRemoteDescription::postTransform (simulcast)', dumpSDP(description));
 
     // if we're running on FF, transform to Plan A first.
-    if (navigator.mozGetUserMedia) {
+    if (RTCBrowserType.usesUnifiedPlan()) {
         description = this.interop.toUnifiedPlan(description);
         this.trace('setRemoteDescription::postTransform (Plan A)', dumpSDP(description));
     }
+
+    if (RTCBrowserType.usesPlanB()) {
+        description = normalizePlanB(description);
+    }
+
     var self = this;
     this.peerconnection.setRemoteDescription(description,
         function () {
@@ -14014,19 +17065,23 @@ TraceablePeerConnection.prototype.close = function () {
     this.peerconnection.close();
 };
 
-TraceablePeerConnection.prototype.createOffer = function (successCallback, failureCallback, constraints) {
+TraceablePeerConnection.prototype.createOffer
+        = function (successCallback, failureCallback, constraints) {
     var self = this;
     this.trace('createOffer', JSON.stringify(constraints, null, ' '));
     this.peerconnection.createOffer(
         function (offer) {
             self.trace('createOfferOnSuccess::preTransform', dumpSDP(offer));
-            // if we're running on FF, transform to Plan B first.
             // NOTE this is not tested because in meet the focus generates the
             // offer.
-            if (navigator.mozGetUserMedia) {
+
+            // if we're running on FF, transform to Plan B first.
+            if (RTCBrowserType.usesUnifiedPlan()) {
                 offer = self.interop.toPlanB(offer);
                 self.trace('createOfferOnSuccess::postTransform (Plan B)', dumpSDP(offer));
             }
+
+            offer = SSRCReplacement.mungeLocalVideoSSRC(offer);
 
             if (config.enableSimulcast && self.simulcast.isSupported()) {
                 offer = self.simulcast.mungeLocalDescription(offer);
@@ -14042,20 +17097,25 @@ TraceablePeerConnection.prototype.createOffer = function (successCallback, failu
     );
 };
 
-TraceablePeerConnection.prototype.createAnswer = function (successCallback, failureCallback, constraints) {
+TraceablePeerConnection.prototype.createAnswer
+        = function (successCallback, failureCallback, constraints) {
     var self = this;
     this.trace('createAnswer', JSON.stringify(constraints, null, ' '));
     this.peerconnection.createAnswer(
         function (answer) {
-            self.trace('createAnswerOnSuccess::preTransfom', dumpSDP(answer));
+            self.trace('createAnswerOnSuccess::preTransform', dumpSDP(answer));
             // if we're running on FF, transform to Plan A first.
-            if (navigator.mozGetUserMedia) {
+            if (RTCBrowserType.usesUnifiedPlan()) {
                 answer = self.interop.toPlanB(answer);
-                self.trace('createAnswerOnSuccess::postTransfom (Plan B)', dumpSDP(answer));
+                self.trace('createAnswerOnSuccess::postTransform (Plan B)', dumpSDP(answer));
             }
+
+            // munge local video SSRC
+            answer = SSRCReplacement.mungeLocalVideoSSRC(answer);
+
             if (config.enableSimulcast && self.simulcast.isSupported()) {
                 answer = self.simulcast.mungeLocalDescription(answer);
-                self.trace('createAnswerOnSuccess::postTransfom (simulcast)', dumpSDP(answer));
+                self.trace('createAnswerOnSuccess::postTransform (simulcast)', dumpSDP(answer));
             }
             successCallback(answer);
         },
@@ -14067,8 +17127,9 @@ TraceablePeerConnection.prototype.createAnswer = function (successCallback, fail
     );
 };
 
-TraceablePeerConnection.prototype.addIceCandidate = function (candidate, successCallback, failureCallback) {
-    var self = this;
+TraceablePeerConnection.prototype.addIceCandidate
+        = function (candidate, successCallback, failureCallback) {
+    //var self = this;
     this.trace('addIceCandidate', JSON.stringify(candidate, null, ' '));
     this.peerconnection.addIceCandidate(candidate);
     /* maybe later
@@ -14086,13 +17147,12 @@ TraceablePeerConnection.prototype.addIceCandidate = function (candidate, success
 };
 
 TraceablePeerConnection.prototype.getStats = function(callback, errback) {
-    if (navigator.mozGetUserMedia) {
+    // TODO: Is this the correct way to handle Opera, Temasys?
+    if (RTCBrowserType.isFirefox()) {
         // ignore for now...
         if(!errback)
-            errback = function () {
-
-            }
-        this.peerconnection.getStats(null,callback,errback);
+            errback = function () {};
+        this.peerconnection.getStats(null, callback, errback);
     } else {
         this.peerconnection.getStats(callback);
     }
@@ -14101,8 +17161,8 @@ TraceablePeerConnection.prototype.getStats = function(callback, errback) {
 module.exports = TraceablePeerConnection;
 
 
-},{"sdp-interop":86,"sdp-simulcast":89}],55:[function(require,module,exports){
-/* global $, $iq, APP, config, connection, UI, messageHandler,
+},{"../../service/xmpp/XMPPEvents":177,"../RTC/RTC":9,"../RTC/RTCBrowserType.js":10,"./LocalSSRCReplacement":59,"sdp-interop":97,"sdp-simulcast":104,"sdp-transform":111}],64:[function(require,module,exports){
+/* global $, $iq, APP, config, messageHandler,
  roomName, sessionTerminated, Strophe, Util */
 var XMPPEvents = require("../../service/xmpp/XMPPEvents");
 var Settings = require("../settings/Settings");
@@ -14139,7 +17199,7 @@ var externalAuthEnabled = false;
 // Sip gateway can be enabled by configuring Jigasi host in config.js or
 // it will be enabled automatically if focus detects the component through
 // service discovery.
-var sipGatewayEnabled = config.hosts.call_control !== undefined;
+var sipGatewayEnabled;
 
 var eventEmitter = null;
 
@@ -14169,12 +17229,15 @@ var Moderator = {
         this.xmppService = xmpp;
         eventEmitter = emitter;
 
+        sipGatewayEnabled =
+            config.hosts && config.hosts.call_control !== undefined;
+
         // Message listener that talks to POPUP window
         function listener(event) {
             if (event.data && event.data.sessionId) {
                 if (event.origin !== window.location.origin) {
-                    console.warn(
-                        "Ignoring sessionId from different origin: " + event.origin);
+                    console.warn("Ignoring sessionId from different origin: " +
+                        event.origin);
                     return;
                 }
                 localStorage.setItem('sessionId', event.data.sessionId);
@@ -14323,8 +17386,7 @@ var Moderator = {
 
         console.info("Authentication enabled: " + authenticationEnabled);
 
-        externalAuthEnabled
-            = $(resultIq).find(
+        externalAuthEnabled = $(resultIq).find(
                 '>conference>property' +
                 '[name=\'externalAuth\'][value=\'true\']').length > 0;
 
@@ -14437,10 +17499,8 @@ var Moderator = {
                 // Do not show in case of session invalid
                 // which means just a retry
                 if (!invalidSession) {
-                    APP.UI.messageHandler.notify(
-                        null, "notify.focus",
-                        'disconnected', "notify.focusFail",
-                        {component: focusComponent, ms: retrySec});
+                    eventEmitter.emit(XMPPEvents.FOCUS_DISCONNECTED,
+                        focusComponent, retrySec);
                 }
                 // Reset response timeout
                 getNextTimeout(true);
@@ -14537,8 +17597,8 @@ module.exports = Moderator;
 
 
 
-},{"../../service/authentication/AuthenticationEvents":101,"../../service/xmpp/XMPPEvents":106,"../settings/Settings":45}],56:[function(require,module,exports){
-/* global $, $iq, config, connection, focusMucJid, messageHandler, Moderator,
+},{"../../service/authentication/AuthenticationEvents":172,"../../service/xmpp/XMPPEvents":177,"../settings/Settings":51}],65:[function(require,module,exports){
+/* global $, $iq, config, connection, focusMucJid, messageHandler,
    Toolbar, Util */
 var Moderator = require("./moderator");
 
@@ -14550,7 +17610,7 @@ var recordingEnabled;
  * Whether to use a jirecon component for recording, or use the videobridge
  * through COLIBRI.
  */
-var useJirecon = (typeof config.hosts.jirecon != "undefined");
+var useJirecon;
 
 /**
  * The ID of the jirecon recording session. Jirecon generates it when we
@@ -14559,16 +17619,14 @@ var useJirecon = (typeof config.hosts.jirecon != "undefined");
  */
 var jireconRid = null;
 
+/**
+ * The callback to update the recording button. Currently used from colibri
+ * after receiving a pending status.
+ */
+var recordingStateChangeCallback = null;
+
 function setRecordingToken(token) {
     recordingToken = token;
-}
-
-function setRecording(state, token, callback, connection) {
-    if (useJirecon){
-        setRecordingJirecon(state, token, callback, connection);
-    } else {
-        setRecordingColibri(state, token, callback, connection);
-    }
 }
 
 function setRecordingJirecon(state, token, callback, connection) {
@@ -14578,9 +17636,9 @@ function setRecordingJirecon(state, token, callback, connection) {
 
     var iq = $iq({to: config.hosts.jirecon, type: 'set'})
         .c('recording', {xmlns: 'http://jitsi.org/protocol/jirecon',
-            action: state ? 'start' : 'stop',
+            action: (state === 'on') ? 'start' : 'stop',
             mucjid: connection.emuc.roomjid});
-    if (!state){
+    if (state === 'off'){
         iq.attrs({rid: jireconRid});
     }
 
@@ -14592,10 +17650,10 @@ function setRecordingJirecon(state, token, callback, connection) {
             // TODO wait for an IQ with the real status, since this is
             // provisional?
             jireconRid = $(result).find('recording').attr('rid');
-            console.log('Recording ' + (state ? 'started' : 'stopped') +
+            console.log('Recording ' + ((state === 'on') ? 'started' : 'stopped') +
                 '(jirecon)' + result);
             recordingEnabled = state;
-            if (!state){
+            if (state === 'off'){
                 jireconRid = null;
             }
 
@@ -14621,10 +17679,19 @@ function setRecordingColibri(state, token, callback, connection) {
         function (result) {
             console.log('Set recording "', state, '". Result:', result);
             var recordingElem = $(result).find('>conference>recording');
-            var newState = ('true' === recordingElem.attr('state'));
+            var newState = recordingElem.attr('state');
 
             recordingEnabled = newState;
             callback(newState);
+
+            if (newState === 'pending' && recordingStateChangeCallback == null) {
+                recordingStateChangeCallback = callback;
+                connection.addHandler(function(iq){
+                    var state = $(iq).find('recording').attr('state');
+                    if (state)
+                        recordingStateChangeCallback(state);
+                }, 'http://jitsi.org/protocol/colibri', 'iq', null, null, null);
+            }
         },
         function (error) {
             console.warn(error);
@@ -14633,9 +17700,20 @@ function setRecordingColibri(state, token, callback, connection) {
     );
 }
 
+function setRecording(state, token, callback, connection) {
+    if (useJirecon){
+        setRecordingJirecon(state, token, callback, connection);
+    } else {
+        setRecordingColibri(state, token, callback, connection);
+    }
+}
+
 var Recording = {
-    toggleRecording: function (tokenEmptyCallback,
-                               startingCallback, startedCallback, connection) {
+    init: function () {
+        useJirecon = config.hosts &&
+            (typeof config.hosts.jirecon != "undefined");
+    },
+    toggleRecording: function (tokenEmptyCallback, recordingStateChangeCallback, connection) {
         if (!Moderator.isModerator()) {
             console.log(
                     'non-focus, or conference not yet organized:' +
@@ -14648,16 +17726,16 @@ var Recording = {
         if (!recordingToken && !useJirecon) {
             tokenEmptyCallback(function (value) {
                 setRecordingToken(value);
-                self.toggleRecording(tokenEmptyCallback,
-                    startingCallback, startedCallback, connection);
+                self.toggleRecording(tokenEmptyCallback, recordingStateChangeCallback, connection);
             });
 
             return;
         }
 
         var oldState = recordingEnabled;
-        startingCallback(!oldState);
-        setRecording(!oldState,
+        var newState = (oldState === 'off' || !oldState) ? 'on' : 'off';
+
+        setRecording(newState,
             recordingToken,
             function (state) {
                 console.log("New recording state: ", state);
@@ -14683,26 +17761,23 @@ var Recording = {
                     // have been wrong
                     setRecordingToken(null);
                 }
-                startedCallback(state);
+                recordingStateChangeCallback(state);
 
             },
             connection
         );
     }
 
-}
+};
 
 module.exports = Recording;
-},{"./moderator":55}],57:[function(require,module,exports){
+},{"./moderator":64}],66:[function(require,module,exports){
 /* jshint -W117 */
 /* a simple MUC connection plugin
  * can only handle a single MUC room
  */
 var XMPPEvents = require("../../service/xmpp/XMPPEvents");
 var Moderator = require("./moderator");
-var JingleSession = require("./JingleSession");
-
-var bridgeIsDown = false;
 
 module.exports = function(XMPP, eventEmitter) {
     Strophe.addConnectionPlugin('emuc', {
@@ -14717,20 +17792,17 @@ module.exports = function(XMPP, eventEmitter) {
         isOwner: false,
         role: null,
         focusMucJid: null,
-        ssrc2jid: {},
+        bridgeIsDown: false,
         init: function (conn) {
             this.connection = conn;
         },
         initPresenceMap: function (myroomjid) {
             this.presMap['to'] = myroomjid;
             this.presMap['xns'] = 'http://jabber.org/protocol/muc';
-            if(APP.RTC.localAudio.isMuted())
-            {
+            if (APP.RTC.localAudio && APP.RTC.localAudio.isMuted()) {
                 this.addAudioInfoToPresence(true);
             }
-
-            if(APP.RTC.localVideo.isMuted())
-            {
+            if (APP.RTC.localVideo && APP.RTC.localVideo.isMuted()) {
                 this.addVideoInfoToPresence(true);
             }
         },
@@ -14813,10 +17885,11 @@ module.exports = function(XMPP, eventEmitter) {
                 }
             }
 
+            var url;
             // Parse prezi tag.
             var presentation = $(pres).find('>prezi');
             if (presentation.length) {
-                var url = presentation.attr('url');
+                url = presentation.attr('url');
                 var current = presentation.find('>current').text();
 
                 console.log('presentation info received from', from, url);
@@ -14831,7 +17904,7 @@ module.exports = function(XMPP, eventEmitter) {
                 }
             }
             else if (this.preziMap[from] != null) {
-                var url = this.preziMap[from];
+                url = this.preziMap[from];
                 delete this.preziMap[from];
                 $(document).trigger('presentationremoved.muc', [from, url]);
             }
@@ -14839,20 +17912,22 @@ module.exports = function(XMPP, eventEmitter) {
             // Parse audio info tag.
             var audioMuted = $(pres).find('>audiomuted');
             if (audioMuted.length) {
-                $(document).trigger('audiomuted.muc', [from, audioMuted.text()]);
+                eventEmitter.emit(XMPPEvents.PARTICIPANT_AUDIO_MUTED,
+                    from, (audioMuted.text() === "true"));
             }
 
             // Parse video info tag.
             var videoMuted = $(pres).find('>videomuted');
             if (videoMuted.length) {
-                $(document).trigger('videomuted.muc', [from, videoMuted.text()]);
+                eventEmitter.emit(XMPPEvents.PARTICIPANT_VIDEO_MUTED,
+                    from, (videoMuted.text() === "true"));
             }
 
             var startMuted = $(pres).find('>startmuted');
-            if (startMuted.length)
-            {
-                eventEmitter.emit(XMPPEvents.START_MUTED,
-                    startMuted.attr("audio") === "true", startMuted.attr("video") === "true");
+            if (startMuted.length && Moderator.isPeerModerator(from)) {
+                eventEmitter.emit(XMPPEvents.START_MUTED_SETTING_CHANGED,
+                    startMuted.attr("audio") === "true",
+                    startMuted.attr("video") === "true");
             }
 
             var devices = $(pres).find('>devices');
@@ -14872,6 +17947,16 @@ module.exports = function(XMPP, eventEmitter) {
                 }
                 eventEmitter.emit(XMPPEvents.DEVICE_AVAILABLE,
                     Strophe.getResourceFromJid(from), devicesValues);
+            }
+
+            var videoType = $(pres).find('>videoType');
+            if (videoType.length)
+            {
+                if (videoType.text().length)
+                {
+                    eventEmitter.emit(XMPPEvents.PARTICIPANT_VIDEO_TYPE_CHANGED,
+                        Strophe.getResourceFromJid(from), videoType.text());
+                }
             }
 
             var stats = $(pres).find('>stats');
@@ -14906,7 +17991,7 @@ module.exports = function(XMPP, eventEmitter) {
             }
 
             var nicktag = $(pres).find('>nick[xmlns="http://jabber.org/protocol/nick"]');
-            member.displayName = (nicktag.length > 0 ? nicktag.html() : null);
+            member.displayName = (nicktag.length > 0 ? nicktag.text() : null);
 
             if (from == this.myroomjid) {
                 if (member.affiliation == 'owner') this.isOwner = true;
@@ -14975,14 +18060,6 @@ module.exports = function(XMPP, eventEmitter) {
                 return true;
             }
 
-            var self = this;
-            // Remove old ssrcs coming from the jid
-            Object.keys(this.ssrc2jid).forEach(function (ssrc) {
-                if (self.ssrc2jid[ssrc] == from) {
-                    delete self.ssrc2jid[ssrc];
-                }
-            });
-
             // Status code 110 indicates that this notification is "self-presence".
             if (!$(pres).find('>x[xmlns="http://jabber.org/protocol/muc#user"]>status[code="110"]').length) {
                 delete this.members[from];
@@ -15025,19 +18102,15 @@ module.exports = function(XMPP, eventEmitter) {
                     // We're either missing Jicofo/Prosody config for anonymous
                     // domains or something is wrong.
 //                    XMPP.promptLogin();
-                    APP.UI.messageHandler.openReportDialog(null,
-                        "dialog.joinError", pres);
+                    eventEmitter.emit(XMPPEvents.ROOM_JOIN_ERROR, pres);
+
                 } else {
                     console.warn('onPresError ', pres);
-                    APP.UI.messageHandler.openReportDialog(null,
-                        "dialog.connectError",
-                        pres);
+                    eventEmitter.emit(XMPPEvents.ROOM_CONNECT_ERROR, pres);
                 }
             } else {
                 console.warn('onPresError ', pres);
-                APP.UI.messageHandler.openReportDialog(null,
-                    "dialog.connectError",
-                    pres);
+                eventEmitter.emit(XMPPEvents.ROOM_CONNECT_ERROR, pres);
             }
             return true;
         },
@@ -15194,6 +18267,11 @@ module.exports = function(XMPP, eventEmitter) {
                     .t(this.presMap['videomuted']).up();
             }
 
+            if (this.presMap['videoTypeNs']) {
+                pres.c('videoType', { xmlns: this.presMap['videoTypeNs'] })
+                    .t(this.presMap['videoType']).up();
+            }
+
             if (this.presMap['statsns']) {
                 var stats = pres.c('stats', {xmlns: this.presMap['statsns']});
                 for (var stat in this.presMap["stats"])
@@ -15207,26 +18285,6 @@ module.exports = function(XMPP, eventEmitter) {
                     {xmlns: this.presMap['prezins'],
                         'url': this.presMap['preziurl']})
                     .c('current').t(this.presMap['prezicurrent']).up().up();
-            }
-
-            if (this.presMap['medians']) {
-                pres.c('media', {xmlns: this.presMap['medians']});
-                var sourceNumber = 0;
-                Object.keys(this.presMap).forEach(function (key) {
-                    if (key.indexOf('source') >= 0) {
-                        sourceNumber++;
-                    }
-                });
-                if (sourceNumber > 0)
-                    for (var i = 1; i <= sourceNumber / 3; i++) {
-                        pres.c('source',
-                            {type: this.presMap['source' + i + '_type'],
-                                ssrc: this.presMap['source' + i + '_ssrc'],
-                                direction: this.presMap['source' + i + '_direction']
-                                    || 'sendrecv' }
-                        ).up();
-                    }
-                pres.up();
             }
 
             if(this.presMap["startMuted"] !== undefined)
@@ -15243,24 +18301,16 @@ module.exports = function(XMPP, eventEmitter) {
         addDisplayNameToPresence: function (displayName) {
             this.presMap['displayName'] = displayName;
         },
-        addMediaToPresence: function (sourceNumber, mtype, ssrcs, direction) {
-            if (!this.presMap['medians'])
-                this.presMap['medians'] = 'http://estos.de/ns/mjs';
-
-            this.presMap['source' + sourceNumber + '_type'] = mtype;
-            this.presMap['source' + sourceNumber + '_ssrc'] = ssrcs;
-            this.presMap['source' + sourceNumber + '_direction'] = direction;
-        },
         addDevicesToPresence: function (devices) {
             this.presMap['devices'] = devices;
         },
-        clearPresenceMedia: function () {
-            var self = this;
-            Object.keys(this.presMap).forEach(function (key) {
-                if (key.indexOf('source') != -1) {
-                    delete self.presMap[key];
-                }
-            });
+        /**
+         * Adds the info about the type of our video stream.
+         * @param videoType 'camera' or 'screen'
+         */
+        addVideoTypeToPresence: function (videoType) {
+            this.presMap['videoTypeNs'] = 'http://jitsi.org/jitmeet/video';
+            this.presMap['videoType'] = videoType;
         },
         addPreziToPresence: function (url, currentSlide) {
             this.presMap['prezins'] = 'http://jitsi.org/jitmeet/prezi';
@@ -15336,51 +18386,25 @@ module.exports = function(XMPP, eventEmitter) {
 
             Moderator.onMucMemberLeft(jid);
         },
-        parsePresence: function (from, memeber, pres) {
-            if($(pres).find(">bridgeIsDown").length > 0 && !bridgeIsDown) {
-                bridgeIsDown = true;
+        parsePresence: function (from, member, pres) {
+            if($(pres).find(">bridgeIsDown").length > 0 && !this.bridgeIsDown) {
+                this.bridgeIsDown = true;
                 eventEmitter.emit(XMPPEvents.BRIDGE_DOWN);
             }
 
-            if(memeber.isFocus)
+            if(member.isFocus)
                 return;
 
-            var self = this;
-            // Remove old ssrcs coming from the jid
-            Object.keys(this.ssrc2jid).forEach(function (ssrc) {
-                if (self.ssrc2jid[ssrc] == from) {
-                    delete self.ssrc2jid[ssrc];
-                }
-            });
-
-            var changedStreams = [];
-            $(pres).find('>media[xmlns="http://estos.de/ns/mjs"]>source').each(function (idx, ssrc) {
-                //console.log(jid, 'assoc ssrc', ssrc.getAttribute('type'), ssrc.getAttribute('ssrc'));
-                var ssrcV = ssrc.getAttribute('ssrc');
-                self.ssrc2jid[ssrcV] = from;
-
-                var type = ssrc.getAttribute('type');
-
-                var direction = ssrc.getAttribute('direction');
-
-                changedStreams.push({type: type, direction: direction});
-
-            });
-
-            eventEmitter.emit(XMPPEvents.STREAMS_CHANGED, from, changedStreams);
-
             var displayName = !config.displayJids
-                ? memeber.displayName : Strophe.getResourceFromJid(from);
+                ? member.displayName : Strophe.getResourceFromJid(from);
 
-            if (displayName && displayName.length > 0)
-            {
+            if (displayName && displayName.length > 0) {
                 eventEmitter.emit(XMPPEvents.DISPLAY_NAME_CHANGED, from, displayName);
             }
 
-
             var id = $(pres).find('>userID').text();
             var email = $(pres).find('>email');
-            if(email.length > 0) {
+            if (email.length > 0) {
                 id = email.text();
             }
 
@@ -15390,31 +18414,15 @@ module.exports = function(XMPP, eventEmitter) {
 };
 
 
-},{"../../service/xmpp/XMPPEvents":106,"./JingleSession":50,"./moderator":55}],58:[function(require,module,exports){
+},{"../../service/xmpp/XMPPEvents":177,"./moderator":64}],67:[function(require,module,exports){
 /* jshint -W117 */
 
-var JingleSession = require("./JingleSession");
+var JingleSession = require("./JingleSessionPC");
 var XMPPEvents = require("../../service/xmpp/XMPPEvents");
+var RTCBrowserType = require("../RTC/RTCBrowserType");
 
 
-module.exports = function(XMPP, eventEmitter)
-{
-    function CallIncomingJingle(sid, connection) {
-        var sess = connection.jingle.sessions[sid];
-
-        // TODO: do we check activecall == null?
-        connection.jingle.activecall = sess;
-
-        eventEmitter.emit(XMPPEvents.CALL_INCOMING, sess);
-
-        // TODO: check affiliation and/or role
-        console.log('emuc data for', sess.peerjid, connection.emuc.members[sess.peerjid]);
-        sess.usedrip = true; // not-so-naive trickle ice
-        sess.sendAnswer();
-        sess.accept();
-
-    };
-
+module.exports = function(XMPP, eventEmitter) {
     Strophe.addConnectionPlugin('jingle', {
         connection: null,
         sessions: {},
@@ -15442,16 +18450,18 @@ module.exports = function(XMPP, eventEmitter)
                 this.connection.disco.addFeature('urn:xmpp:jingle:apps:rtp:audio');
                 this.connection.disco.addFeature('urn:xmpp:jingle:apps:rtp:video');
 
+                if (RTCBrowserType.isChrome() || RTCBrowserType.isOpera()
+                    || RTCBrowserType.isTemasysPluginUsed()) {
+                    this.connection.disco.addFeature('urn:ietf:rfc:4588');
+                }
 
-                // this is dealt with by SDP O/A so we don't need to annouce this
+                // this is dealt with by SDP O/A so we don't need to announce this
                 //this.connection.disco.addFeature('urn:xmpp:jingle:apps:rtp:rtcp-fb:0'); // XEP-0293
                 //this.connection.disco.addFeature('urn:xmpp:jingle:apps:rtp:rtp-hdrext:0'); // XEP-0294
-                if (config.useRtcpMux) {
-                    this.connection.disco.addFeature('urn:ietf:rfc:5761'); // rtcp-mux
-                }
-                if (config.useBundle) {
-                    this.connection.disco.addFeature('urn:ietf:rfc:5888'); // a=group, e.g. bundle
-                }
+
+                this.connection.disco.addFeature('urn:ietf:rfc:5761'); // rtcp-mux
+                this.connection.disco.addFeature('urn:ietf:rfc:5888'); // a=group, e.g. bundle
+
                 //this.connection.disco.addFeature('urn:ietf:rfc:5576'); // a=ssrc
             }
             this.connection.addHandler(this.onJingle.bind(this), 'urn:xmpp:jingle:1', 'iq', 'set', null, null);
@@ -15476,9 +18486,8 @@ module.exports = function(XMPP, eventEmitter)
                     this.connection.send(ack);
                     return true;
                 }
-                // compare from to sess.peerjid (bare jid comparison for later compat with message-mode)
                 // local jid is not checked
-                if (Strophe.getBareJidFromJid(fromJid) != Strophe.getBareJidFromJid(sess.peerjid)) {
+                if (fromJid != sess.peerjid) {
                     console.warn('jid mismatch for session id', sid, fromJid, sess.peerjid);
                     ack.type = 'error';
                     ack.c('error', {type: 'cancel'})
@@ -15503,36 +18512,45 @@ module.exports = function(XMPP, eventEmitter)
             switch (action) {
                 case 'session-initiate':
                     var startMuted = $(iq).find('jingle>startmuted');
-                    if(startMuted && startMuted.length > 0)
-                    {
+                    if (startMuted && startMuted.length > 0) {
                         var audioMuted = startMuted.attr("audio");
                         var videoMuted = startMuted.attr("video");
-                        APP.UI.setInitialMuteFromFocus((audioMuted === "true"),
-                            (videoMuted === "true"));
+                        eventEmitter.emit(XMPPEvents.START_MUTED_FROM_FOCUS,
+                                audioMuted === "true", videoMuted === "true");
                     }
                     sess = new JingleSession(
                         $(iq).attr('to'), $(iq).find('jingle').attr('sid'),
-                        this.connection, XMPP);
+                        this.connection, XMPP, eventEmitter);
                     // configure session
 
                     sess.media_constraints = this.media_constraints;
                     sess.pc_constraints = this.pc_constraints;
                     sess.ice_config = this.ice_config;
 
-                    sess.initiate(fromJid, false);
+                    sess.initialize(fromJid, false);
                     // FIXME: setRemoteDescription should only be done when this call is to be accepted
-                    sess.setRemoteDescription($(iq).find('>jingle'), 'offer');
+                    sess.setOffer($(iq).find('>jingle'));
 
                     this.sessions[sess.sid] = sess;
                     this.jid2session[sess.peerjid] = sess;
 
                     // the callback should either
                     // .sendAnswer and .accept
-                    // or .sendTerminate -- not necessarily synchronus
-                    CallIncomingJingle(sess.sid, this.connection);
+                    // or .sendTerminate -- not necessarily synchronous
+
+                    // TODO: do we check activecall == null?
+                    this.connection.jingle.activecall = sess;
+
+                    eventEmitter.emit(XMPPEvents.CALL_INCOMING, sess);
+
+                    // TODO: check affiliation and/or role
+                    console.log('emuc data for', sess.peerjid,
+                        this.connection.emuc.members[sess.peerjid]);
+                    sess.sendAnswer();
+                    sess.accept();
                     break;
                 case 'session-accept':
-                    sess.setRemoteDescription($(iq).find('>jingle'), 'answer');
+                    sess.setAnswer($(iq).find('>jingle'));
                     sess.accept();
                     $(document).trigger('callaccepted.jingle', [sess.sid]);
                     break;
@@ -15592,14 +18610,14 @@ module.exports = function(XMPP, eventEmitter)
         initiate: function (peerjid, myjid) { // initiate a new jinglesession to peerjid
             var sess = new JingleSession(myjid || this.connection.jid,
                 Math.random().toString(36).substr(2, 12), // random string
-                this.connection, XMPP);
+                this.connection, XMPP, eventEmitter);
             // configure session
 
             sess.media_constraints = this.media_constraints;
             sess.pc_constraints = this.pc_constraints;
             sess.ice_config = this.ice_config;
 
-            sess.initiate(peerjid, true);
+            sess.initialize(peerjid, true);
             this.sessions[sess.sid] = sess;
             this.jid2session[sess.peerjid] = sess;
             sess.sendOffer();
@@ -15717,9 +18735,9 @@ module.exports = function(XMPP, eventEmitter)
         },
 
         /**
-         * Populates the log data
+         * Returns the data saved in 'updateLog' in a format to be logged.
          */
-        populateData: function () {
+        getLog: function () {
             var data = {};
             var self = this;
             Object.keys(this.sessions).forEach(function (sid) {
@@ -15739,7 +18757,7 @@ module.exports = function(XMPP, eventEmitter)
 };
 
 
-},{"../../service/xmpp/XMPPEvents":106,"./JingleSession":50}],59:[function(require,module,exports){
+},{"../../service/xmpp/XMPPEvents":177,"../RTC/RTCBrowserType":10,"./JingleSessionPC":58}],68:[function(require,module,exports){
 /* global Strophe */
 module.exports = function () {
 
@@ -15760,13 +18778,15 @@ module.exports = function () {
         }
     });
 };
-},{}],60:[function(require,module,exports){
+},{}],69:[function(require,module,exports){
 /* global $, $iq, config, connection, focusMucJid, forceMuted,
    setAudioMuted, Strophe */
 /**
  * Moderate connection plugin.
  */
-module.exports = function (XMPP) {
+var XMPPEvents = require("../../service/xmpp/XMPPEvents");
+
+module.exports = function (XMPP, eventEmitter) {
     Strophe.addConnectionPlugin('moderate', {
         connection: null,
         init: function (conn) {
@@ -15807,7 +18827,7 @@ module.exports = function (XMPP) {
             var mute = $(iq).find('mute');
             if (mute.length) {
                 var doMuteAudio = mute.text() === "true";
-                APP.UI.setAudioMuted(doMuteAudio);
+                eventEmitter.emit(XMPPEvents.AUDIO_MUTED_BY_FOCUS, doMuteAudio);
                 XMPP.forceMuted = doMuteAudio;
             }
             return true;
@@ -15819,7 +18839,110 @@ module.exports = function (XMPP) {
         }
     });
 }
-},{}],61:[function(require,module,exports){
+},{"../../service/xmpp/XMPPEvents":177}],70:[function(require,module,exports){
+/* global $, $iq, Strophe */
+
+var XMPPEvents = require("../../service/xmpp/XMPPEvents");
+
+/**
+ * Ping every 20 sec
+ */
+var PING_INTERVAL = 20000;
+
+/**
+ * Ping timeout error after 15 sec of waiting.
+ */
+var PING_TIMEOUT = 15000;
+
+/**
+ * Will close the connection after 3 consecutive ping errors.
+ */
+var PING_THRESHOLD = 3;
+
+/**
+ * XEP-0199 ping plugin.
+ *
+ * Registers "urn:xmpp:ping" namespace under Strophe.NS.PING.
+ */
+module.exports = function (XMPP, eventEmitter) {
+    Strophe.addConnectionPlugin('ping', {
+
+        connection: null,
+
+        failedPings: 0,
+
+        /**
+         * Initializes the plugin. Method called by Strophe.
+         * @param connection Strophe connection instance.
+         */
+        init: function (connection) {
+            this.connection = connection;
+            Strophe.addNamespace('PING', "urn:xmpp:ping");
+        },
+
+        /**
+         * Sends "ping" to given <tt>jid</tt>
+         * @param jid the JID to which ping request will be sent.
+         * @param success callback called on success.
+         * @param error callback called on error.
+         * @param timeout ms how long are we going to wait for the response. On
+         *        timeout <tt>error<//t> callback is called with undefined error
+         *        argument.
+         */
+        ping: function (jid, success, error, timeout) {
+            var iq = $iq({type: 'get', to: jid});
+            iq.c('ping', {xmlns: Strophe.NS.PING});
+            this.connection.sendIQ(iq, success, error, timeout);
+        },
+
+        /**
+         * Starts to send ping in given interval to specified remote JID.
+         * This plugin supports only one such task and <tt>stopInterval</tt>
+         * must be called before starting a new one.
+         * @param remoteJid remote JID to which ping requests will be sent to.
+         * @param interval task interval in ms.
+         */
+        startInterval: function (remoteJid, interval) {
+            if (this.intervalId) {
+                console.error("Ping task scheduled already");
+                return;
+            }
+            if (!interval)
+                interval = PING_INTERVAL;
+            var self = this;
+            this.intervalId = window.setInterval(function () {
+                self.ping(remoteJid,
+                function (result) {
+                    // Ping OK
+                    self.failedPings = 0;
+                },
+                function (error) {
+                    self.failedPings += 1;
+                    console.error(
+                        "Ping " + (error ? "error" : "timeout"), error);
+                    if (self.failedPings >= PING_THRESHOLD) {
+                        self.connection.disconnect();
+                    }
+                }, PING_TIMEOUT);
+            }, interval);
+            console.info("XMPP pings will be sent every " + interval + " ms");
+        },
+
+        /**
+         * Stops current "ping"  interval task.
+         */
+        stopInterval: function () {
+            if (this.intervalId) {
+                window.clearInterval(this.intervalId);
+                this.intervalId = null;
+                this.failedPings = 0;
+                console.info("Ping interval cleared");
+            }
+        }
+    });
+};
+
+},{"../../service/xmpp/XMPPEvents":177}],71:[function(require,module,exports){
 /* jshint -W117 */
 module.exports = function() {
     Strophe.addConnectionPlugin('rayo',
@@ -15916,7 +19039,7 @@ module.exports = function() {
     );
 };
 
-},{}],62:[function(require,module,exports){
+},{}],72:[function(require,module,exports){
 /**
  * Strophe logger implementation. Logs from level WARN and above.
  */
@@ -15960,7 +19083,7 @@ module.exports = function () {
     };
 };
 
-},{}],63:[function(require,module,exports){
+},{}],73:[function(require,module,exports){
 /* global $, APP, config, Strophe*/
 var Moderator = require("./moderator");
 var EventEmitter = require("events");
@@ -15970,7 +19093,6 @@ var Settings = require("../settings/Settings");
 var Pako = require("pako");
 var StreamEventTypes = require("../../service/RTC/StreamEventTypes");
 var RTCEvents = require("../../service/RTC/RTCEvents");
-var UIEvents = require("../../service/UI/UIEvents");
 var XMPPEvents = require("../../service/xmpp/XMPPEvents");
 var retry = require('retry');
 
@@ -15990,9 +19112,6 @@ function connect(jid, password) {
         connection = XMPP.createConnection();
         Moderator.setConnection(connection);
 
-        if (connection.disco) {
-            // for chrome, add multistream cap
-        }
         connection.jingle.pc_constraints = APP.RTC.getPCConstraints();
         if (config.useIPv6) {
             // https://code.google.com/p/webrtc/issues/detail?id=2828
@@ -16054,6 +19173,8 @@ function connect(jid, password) {
 
                 console.info("My Jabber ID: " + connection.jid);
 
+                connection.ping.startInterval(config.hosts.domain);
+
                 if (password)
                     authenticatedUser = true;
                 maybeDoJoin();
@@ -16065,6 +19186,8 @@ function connect(jid, password) {
                 }
                 lastErrorMsg = msg;
             } else if (status === Strophe.Status.DISCONNECTED) {
+                // Stop ping interval
+                connection.ping.stopInterval();
                 if (anonymousConnectionFailed) {
                     // prompt user for username and password
                     XMPP.promptLogin();
@@ -16095,8 +19218,8 @@ function connect(jid, password) {
                     // if we get disconnected from the XMPP server permanently.
 
                     // If the connection failed, retry.
-                    if (connectionFailed
-                        && faultTolerantConnect.retry("connection-failed")) {
+                    if (connectionFailed &&
+                        faultTolerantConnect.retry("connection-failed")) {
                         return;
                     }
 
@@ -16115,41 +19238,54 @@ function connect(jid, password) {
 }
 
 
-
 function maybeDoJoin() {
     if (connection && connection.connected &&
-        Strophe.getResourceFromJid(connection.jid)
-        && (APP.RTC.localAudio || APP.RTC.localVideo)) {
+        Strophe.getResourceFromJid(connection.jid) &&
+        (APP.RTC.localAudio || APP.RTC.localVideo)) {
         // .connected is true while connecting?
         doJoin();
     }
 }
 
 function doJoin() {
-    var roomName = APP.UI.generateRoomName();
-
-    Moderator.allocateConferenceFocus(
-        roomName, APP.UI.checkForNicknameAndJoin);
+    eventEmitter.emit(XMPPEvents.READY_TO_JOIN);
 }
 
 function initStrophePlugins()
 {
     require("./strophe.emuc")(XMPP, eventEmitter);
     require("./strophe.jingle")(XMPP, eventEmitter);
-    require("./strophe.moderate")(XMPP);
+    require("./strophe.moderate")(XMPP, eventEmitter);
     require("./strophe.util")();
+    require("./strophe.ping")(XMPP, eventEmitter);
     require("./strophe.rayo")();
     require("./strophe.logger")();
 }
 
+/**
+ * If given <tt>localStream</tt> is video one this method will advertise it's
+ * video type in MUC presence.
+ * @param localStream new or modified <tt>LocalStream</tt>.
+ */
+function broadcastLocalVideoType(localStream) {
+    if (localStream.videoType)
+        XMPP.addToPresence('videoType', localStream.videoType);
+}
+
 function registerListeners() {
-    APP.RTC.addStreamListener(maybeDoJoin,
-        StreamEventTypes.EVENT_TYPE_LOCAL_CREATED);
+    APP.RTC.addStreamListener(
+        function (localStream) {
+            maybeDoJoin();
+            broadcastLocalVideoType(localStream);
+        },
+        StreamEventTypes.EVENT_TYPE_LOCAL_CREATED
+    );
+    APP.RTC.addStreamListener(
+        broadcastLocalVideoType,
+        StreamEventTypes.EVENT_TYPE_LOCAL_CHANGED
+    );
     APP.RTC.addListener(RTCEvents.AVAILABLE_DEVICES_CHANGED, function (devices) {
         XMPP.addToPresence("devices", devices);
-    })
-    APP.UI.addListener(UIEvents.NICKNAME_CHANGED, function (nickname) {
-        XMPP.addToPresence("displayName", nickname);
     });
 }
 
@@ -16168,7 +19304,8 @@ var unload = (function () {
                 async: false,
                 cache: false,
                 contentType: 'application/xml',
-                data: "<body rid='" + (connection.rid || connection._proto.rid) +
+                data: "<body rid='" +
+                    (connection.rid || connection._proto.rid) +
                     "' xmlns='http://jabber.org/protocol/httpbind' sid='" +
                     (connection.sid || connection._proto.sid)  +
                     "' type='terminate'>" +
@@ -16194,7 +19331,7 @@ function setupEvents() {
     // (change URL). If this participant doesn't unload properly, then it
     // becomes a ghost for the rest of the participants that stay in the
     // conference. Thankfully handling the 'unload' event in addition to the
-    // 'beforeunload' event seems to garante the execution of the 'unload'
+    // 'beforeunload' event seems to guarantee the execution of the 'unload'
     // method at least once.
     //
     // The 'unload' method can safely be run multiple times, it will actually do
@@ -16224,6 +19361,7 @@ var XMPP = {
         initStrophePlugins();
         registerListeners();
         Moderator.init(this, eventEmitter);
+        Recording.init();
         var configDomain = config.hosts.anonymousdomain || config.hosts.domain;
         // Force authenticated domain if room is appended with '?login=true'
         if (config.hosts.anonymousdomain &&
@@ -16242,13 +19380,10 @@ var XMPP = {
         return Strophe.getStatusString(status);
     },
     promptLogin: function () {
-        // FIXME: re-use LoginDialog which supports retries
-        APP.UI.showLoginPopup(connect);
+        eventEmitter.emit(XMPPEvents.PROMPT_FOR_LOGIN);
     },
-    joinRoom: function(roomName, useNicks, nick)
-    {
-        var roomjid;
-        roomjid = roomName;
+    joinRoom: function(roomName, useNicks, nick) {
+        var roomjid = roomName;
 
         if (useNicks) {
             if (nick) {
@@ -16257,7 +19392,6 @@ var XMPP = {
                 roomjid += '/' + Strophe.getNodeFromJid(connection.jid);
             }
         } else {
-
             var tmpJid = Strophe.getNodeFromJid(connection.jid);
 
             if(!authenticatedUser)
@@ -16278,7 +19412,6 @@ var XMPP = {
         return Strophe.getResourceFromJid(connection.emuc.myroomjid);
     },
     disposeConference: function (onUnload) {
-        eventEmitter.emit(XMPPEvents.DISPOSE_CONFERENCE, onUnload);
         var handler = connection.jingle.activecall;
         if (handler && handler.peerconnection) {
             // FIXME: probably removing streams is not required and close() should
@@ -16293,15 +19426,14 @@ var XMPP = {
             }
             handler.peerconnection.close();
         }
+        eventEmitter.emit(XMPPEvents.DISPOSE_CONFERENCE, onUnload);
         connection.jingle.activecall = null;
-        if(!onUnload)
-        {
+        if (!onUnload) {
             this.sessionTerminated = true;
             connection.emuc.doLeave();
         }
     },
-    addListener: function(type, listener)
-    {
+    addListener: function(type, listener) {
         eventEmitter.on(type, listener);
     },
     removeListener: function (type, listener) {
@@ -16325,8 +19457,12 @@ var XMPP = {
     isExternalAuthEnabled: function () {
         return Moderator.isExternalAuthEnabled();
     },
+    isConferenceInProgress: function () {
+        return connection && connection.jingle.activecall &&
+            connection.jingle.activecall.peerconnection;
+    },
     switchStreams: function (stream, oldStream, callback, isAudio) {
-        if (connection && connection.jingle.activecall) {
+        if (this.isConferenceInProgress()) {
             // FIXME: will block switchInProgress on true value in case of exception
             connection.jingle.activecall.switchStreams(stream, oldStream, callback, isAudio);
         } else {
@@ -16365,7 +19501,6 @@ var XMPP = {
             return false;
         }
 
-
         if (this.forceMuted && !mute) {
             console.info("Asking focus for unmute");
             connection.moderate.setMute(connection.emuc.myroomjid, mute);
@@ -16378,16 +19513,11 @@ var XMPP = {
             return true;
         }
 
-        // It is not clear what is the right way to handle multiple tracks.
-        // So at least make sure that they are all muted or all unmuted and
-        // that we send presence just once.
-        APP.RTC.localAudio.setMute(!mute);
-        // isMuted is the opposite of audioEnabled
+        APP.RTC.localAudio.setMute(mute);
         this.sendAudioInfoPresence(mute, callback);
         return true;
     },
-    sendAudioInfoPresence: function(mute, callback)
-    {
+    sendAudioInfoPresence: function(mute, callback) {
         if(connection) {
             connection.emuc.addAudioInfoToPresence(mute);
             connection.emuc.sendPresence();
@@ -16395,56 +19525,13 @@ var XMPP = {
         callback();
         return true;
     },
-    // Really mute video, i.e. dont even send black frames
-    muteVideo: function (pc, unmute) {
-        // FIXME: this probably needs another of those lovely state safeguards...
-        // which checks for iceconn == connected and sigstate == stable
-        pc.setRemoteDescription(pc.remoteDescription,
-            function () {
-                pc.createAnswer(
-                    function (answer) {
-                        var sdp = new SDP(answer.sdp);
-                        if (sdp.media.length > 1) {
-                            if (unmute)
-                                sdp.media[1] = sdp.media[1].replace('a=recvonly', 'a=sendrecv');
-                            else
-                                sdp.media[1] = sdp.media[1].replace('a=sendrecv', 'a=recvonly');
-                            sdp.raw = sdp.session + sdp.media.join('');
-                            answer.sdp = sdp.raw;
-                        }
-                        pc.setLocalDescription(answer,
-                            function () {
-                                console.log('mute SLD ok');
-                            },
-                            function (error) {
-                                console.log('mute SLD error');
-                                APP.UI.messageHandler.showError("dialog.error",
-                                    "dialog.SLDFailure");
-                            }
-                        );
-                    },
-                    function (error) {
-                        console.log(error);
-                        APP.UI.messageHandler.showError();
-                    }
-                );
-            },
-            function (error) {
-                console.log('muteVideo SRD error');
-                APP.UI.messageHandler.showError("dialog.error",
-                    "dialog.SRDFailure");
-
-            }
-        );
-    },
     toggleRecording: function (tokenEmptyCallback,
-                               startingCallback, startedCallback) {
+                               recordingStateChangeCallback) {
         Recording.toggleRecording(tokenEmptyCallback,
-            startingCallback, startedCallback, connection);
+            recordingStateChangeCallback, connection);
     },
     addToPresence: function (name, value, dontSend) {
-        switch (name)
-        {
+        switch (name) {
             case "displayName":
                 connection.emuc.addDisplayNameToPresence(value);
                 break;
@@ -16462,6 +19549,9 @@ var XMPP = {
                 break;
             case "devices":
                 connection.emuc.addDevicesToPresence(value);
+                break;
+            case "videoType":
+                connection.emuc.addVideoTypeToPresence(value);
                 break;
             case "startMuted":
                 if(!Moderator.isModerator())
@@ -16506,17 +19596,13 @@ var XMPP = {
         connection.send(message);
         return true;
     },
-    populateData: function () {
-        var data = {};
-        if (connection.jingle) {
-            data = connection.jingle.populateData();
-        }
-        return data;
+    // Gets the logs from strophe.jingle.
+    getJingleLog: function () {
+        return connection.jingle ? connection.jingle.getLog() : {};
     },
-    getLogger: function () {
-        if(connection.logger)
-            return connection.logger.log;
-        return null;
+    // Gets the logs from strophe.
+    getXmppLog: function () {
+        return connection.logger ? connection.logger.log : null;
     },
     getPrezi: function () {
         return connection.emuc.getPrezi(this.myJid());
@@ -16553,19 +19639,19 @@ var XMPP = {
         return connection.emuc.members;
     },
     getJidFromSSRC: function (ssrc) {
-        if(!connection)
+        if (!this.isConferenceInProgress())
             return null;
-        return connection.emuc.ssrc2jid[ssrc];
+        return connection.jingle.activecall.getSsrcOwner(ssrc);
     },
-    getMUCJoined: function () {
+    // Returns true iff we have joined the MUC.
+    isMUCJoined: function () {
         return connection.emuc.joined;
     },
     getSessions: function () {
         return connection.jingle.sessions;
     },
     removeStream: function (stream) {
-        if(!connection || !connection.jingle.activecall ||
-            !connection.jingle.activecall.peerconnection)
+        if (!this.isConferenceInProgress())
             return;
         connection.jingle.activecall.peerconnection.removeStream(stream);
     }
@@ -16573,7 +19659,7 @@ var XMPP = {
 
 module.exports = XMPP;
 
-},{"../../service/RTC/RTCEvents":97,"../../service/RTC/StreamEventTypes":99,"../../service/UI/UIEvents":100,"../../service/xmpp/XMPPEvents":106,"../settings/Settings":45,"./SDP":51,"./moderator":55,"./recording":56,"./strophe.emuc":57,"./strophe.jingle":58,"./strophe.logger":59,"./strophe.moderate":60,"./strophe.rayo":61,"./strophe.util":62,"events":107,"pako":66,"retry":82}],64:[function(require,module,exports){
+},{"../../service/RTC/RTCEvents":168,"../../service/RTC/StreamEventTypes":170,"../../service/xmpp/XMPPEvents":177,"../settings/Settings":51,"./SDP":60,"./moderator":64,"./recording":65,"./strophe.emuc":66,"./strophe.jingle":67,"./strophe.logger":68,"./strophe.moderate":69,"./strophe.ping":70,"./strophe.rayo":71,"./strophe.util":72,"events":1,"pako":77,"retry":93}],74:[function(require,module,exports){
 (function (process){
 /*!
  * async
@@ -17700,7 +20786,7 @@ module.exports = XMPP;
 }());
 
 }).call(this,require('_process'))
-},{"_process":108}],65:[function(require,module,exports){
+},{"_process":2}],75:[function(require,module,exports){
 // i18next, v1.7.7
 // Copyright (c)2014 Jan Mühlemann (jamuhl).
 // Distributed under MIT license
@@ -19823,7 +22909,43 @@ module.exports = XMPP;
     i18n.options = o;
 
 })();
-},{"jquery":"jquery"}],66:[function(require,module,exports){
+},{"jquery":"jquery"}],76:[function(require,module,exports){
+/*
+ A JavaScript implementation of the SHA family of hashes, as
+ defined in FIPS PUB 180-2 as well as the corresponding HMAC implementation
+ as defined in FIPS PUB 198a
+
+ Copyright Brian Turek 2008-2013
+ Distributed under the BSD License
+ See http://caligatio.github.com/jsSHA/ for more information
+
+ Several functions taken from Paul Johnston
+*/
+(function(T){function z(a,c,b){var g=0,f=[0],h="",l=null,h=b||"UTF8";if("UTF8"!==h&&"UTF16"!==h)throw"encoding must be UTF8 or UTF16";if("HEX"===c){if(0!==a.length%2)throw"srcString of HEX type must be in byte increments";l=B(a);g=l.binLen;f=l.value}else if("ASCII"===c||"TEXT"===c)l=J(a,h),g=l.binLen,f=l.value;else if("B64"===c)l=K(a),g=l.binLen,f=l.value;else throw"inputFormat must be HEX, TEXT, ASCII, or B64";this.getHash=function(a,c,b,h){var l=null,d=f.slice(),n=g,p;3===arguments.length?"number"!==
+typeof b&&(h=b,b=1):2===arguments.length&&(b=1);if(b!==parseInt(b,10)||1>b)throw"numRounds must a integer >= 1";switch(c){case "HEX":l=L;break;case "B64":l=M;break;default:throw"format must be HEX or B64";}if("SHA-1"===a)for(p=0;p<b;p++)d=y(d,n),n=160;else if("SHA-224"===a)for(p=0;p<b;p++)d=v(d,n,a),n=224;else if("SHA-256"===a)for(p=0;p<b;p++)d=v(d,n,a),n=256;else if("SHA-384"===a)for(p=0;p<b;p++)d=v(d,n,a),n=384;else if("SHA-512"===a)for(p=0;p<b;p++)d=v(d,n,a),n=512;else throw"Chosen SHA variant is not supported";
+return l(d,N(h))};this.getHMAC=function(a,b,c,l,s){var d,n,p,m,w=[],x=[];d=null;switch(l){case "HEX":l=L;break;case "B64":l=M;break;default:throw"outputFormat must be HEX or B64";}if("SHA-1"===c)n=64,m=160;else if("SHA-224"===c)n=64,m=224;else if("SHA-256"===c)n=64,m=256;else if("SHA-384"===c)n=128,m=384;else if("SHA-512"===c)n=128,m=512;else throw"Chosen SHA variant is not supported";if("HEX"===b)d=B(a),p=d.binLen,d=d.value;else if("ASCII"===b||"TEXT"===b)d=J(a,h),p=d.binLen,d=d.value;else if("B64"===
+b)d=K(a),p=d.binLen,d=d.value;else throw"inputFormat must be HEX, TEXT, ASCII, or B64";a=8*n;b=n/4-1;n<p/8?(d="SHA-1"===c?y(d,p):v(d,p,c),d[b]&=4294967040):n>p/8&&(d[b]&=4294967040);for(n=0;n<=b;n+=1)w[n]=d[n]^909522486,x[n]=d[n]^1549556828;c="SHA-1"===c?y(x.concat(y(w.concat(f),a+g)),a+m):v(x.concat(v(w.concat(f),a+g,c)),a+m,c);return l(c,N(s))}}function s(a,c){this.a=a;this.b=c}function J(a,c){var b=[],g,f=[],h=0,l;if("UTF8"===c)for(l=0;l<a.length;l+=1)for(g=a.charCodeAt(l),f=[],2048<g?(f[0]=224|
+(g&61440)>>>12,f[1]=128|(g&4032)>>>6,f[2]=128|g&63):128<g?(f[0]=192|(g&1984)>>>6,f[1]=128|g&63):f[0]=g,g=0;g<f.length;g+=1)b[h>>>2]|=f[g]<<24-h%4*8,h+=1;else if("UTF16"===c)for(l=0;l<a.length;l+=1)b[h>>>2]|=a.charCodeAt(l)<<16-h%4*8,h+=2;return{value:b,binLen:8*h}}function B(a){var c=[],b=a.length,g,f;if(0!==b%2)throw"String of HEX type must be in byte increments";for(g=0;g<b;g+=2){f=parseInt(a.substr(g,2),16);if(isNaN(f))throw"String of HEX type contains invalid characters";c[g>>>3]|=f<<24-g%8*4}return{value:c,
+binLen:4*b}}function K(a){var c=[],b=0,g,f,h,l,r;if(-1===a.search(/^[a-zA-Z0-9=+\/]+$/))throw"Invalid character in base-64 string";g=a.indexOf("=");a=a.replace(/\=/g,"");if(-1!==g&&g<a.length)throw"Invalid '=' found in base-64 string";for(f=0;f<a.length;f+=4){r=a.substr(f,4);for(h=l=0;h<r.length;h+=1)g="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".indexOf(r[h]),l|=g<<18-6*h;for(h=0;h<r.length-1;h+=1)c[b>>2]|=(l>>>16-8*h&255)<<24-b%4*8,b+=1}return{value:c,binLen:8*b}}function L(a,
+c){var b="",g=4*a.length,f,h;for(f=0;f<g;f+=1)h=a[f>>>2]>>>8*(3-f%4),b+="0123456789abcdef".charAt(h>>>4&15)+"0123456789abcdef".charAt(h&15);return c.outputUpper?b.toUpperCase():b}function M(a,c){var b="",g=4*a.length,f,h,l;for(f=0;f<g;f+=3)for(l=(a[f>>>2]>>>8*(3-f%4)&255)<<16|(a[f+1>>>2]>>>8*(3-(f+1)%4)&255)<<8|a[f+2>>>2]>>>8*(3-(f+2)%4)&255,h=0;4>h;h+=1)b=8*f+6*h<=32*a.length?b+"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".charAt(l>>>6*(3-h)&63):b+c.b64Pad;return b}function N(a){var c=
+{outputUpper:!1,b64Pad:"="};try{a.hasOwnProperty("outputUpper")&&(c.outputUpper=a.outputUpper),a.hasOwnProperty("b64Pad")&&(c.b64Pad=a.b64Pad)}catch(b){}if("boolean"!==typeof c.outputUpper)throw"Invalid outputUpper formatting option";if("string"!==typeof c.b64Pad)throw"Invalid b64Pad formatting option";return c}function U(a,c){return a<<c|a>>>32-c}function u(a,c){return a>>>c|a<<32-c}function t(a,c){var b=null,b=new s(a.a,a.b);return b=32>=c?new s(b.a>>>c|b.b<<32-c&4294967295,b.b>>>c|b.a<<32-c&4294967295):
+new s(b.b>>>c-32|b.a<<64-c&4294967295,b.a>>>c-32|b.b<<64-c&4294967295)}function O(a,c){var b=null;return b=32>=c?new s(a.a>>>c,a.b>>>c|a.a<<32-c&4294967295):new s(0,a.a>>>c-32)}function V(a,c,b){return a^c^b}function P(a,c,b){return a&c^~a&b}function W(a,c,b){return new s(a.a&c.a^~a.a&b.a,a.b&c.b^~a.b&b.b)}function Q(a,c,b){return a&c^a&b^c&b}function X(a,c,b){return new s(a.a&c.a^a.a&b.a^c.a&b.a,a.b&c.b^a.b&b.b^c.b&b.b)}function Y(a){return u(a,2)^u(a,13)^u(a,22)}function Z(a){var c=t(a,28),b=t(a,
+34);a=t(a,39);return new s(c.a^b.a^a.a,c.b^b.b^a.b)}function $(a){return u(a,6)^u(a,11)^u(a,25)}function aa(a){var c=t(a,14),b=t(a,18);a=t(a,41);return new s(c.a^b.a^a.a,c.b^b.b^a.b)}function ba(a){return u(a,7)^u(a,18)^a>>>3}function ca(a){var c=t(a,1),b=t(a,8);a=O(a,7);return new s(c.a^b.a^a.a,c.b^b.b^a.b)}function da(a){return u(a,17)^u(a,19)^a>>>10}function ea(a){var c=t(a,19),b=t(a,61);a=O(a,6);return new s(c.a^b.a^a.a,c.b^b.b^a.b)}function R(a,c){var b=(a&65535)+(c&65535);return((a>>>16)+(c>>>
+16)+(b>>>16)&65535)<<16|b&65535}function fa(a,c,b,g){var f=(a&65535)+(c&65535)+(b&65535)+(g&65535);return((a>>>16)+(c>>>16)+(b>>>16)+(g>>>16)+(f>>>16)&65535)<<16|f&65535}function S(a,c,b,g,f){var h=(a&65535)+(c&65535)+(b&65535)+(g&65535)+(f&65535);return((a>>>16)+(c>>>16)+(b>>>16)+(g>>>16)+(f>>>16)+(h>>>16)&65535)<<16|h&65535}function ga(a,c){var b,g,f;b=(a.b&65535)+(c.b&65535);g=(a.b>>>16)+(c.b>>>16)+(b>>>16);f=(g&65535)<<16|b&65535;b=(a.a&65535)+(c.a&65535)+(g>>>16);g=(a.a>>>16)+(c.a>>>16)+(b>>>
+16);return new s((g&65535)<<16|b&65535,f)}function ha(a,c,b,g){var f,h,l;f=(a.b&65535)+(c.b&65535)+(b.b&65535)+(g.b&65535);h=(a.b>>>16)+(c.b>>>16)+(b.b>>>16)+(g.b>>>16)+(f>>>16);l=(h&65535)<<16|f&65535;f=(a.a&65535)+(c.a&65535)+(b.a&65535)+(g.a&65535)+(h>>>16);h=(a.a>>>16)+(c.a>>>16)+(b.a>>>16)+(g.a>>>16)+(f>>>16);return new s((h&65535)<<16|f&65535,l)}function ia(a,c,b,g,f){var h,l,r;h=(a.b&65535)+(c.b&65535)+(b.b&65535)+(g.b&65535)+(f.b&65535);l=(a.b>>>16)+(c.b>>>16)+(b.b>>>16)+(g.b>>>16)+(f.b>>>
+16)+(h>>>16);r=(l&65535)<<16|h&65535;h=(a.a&65535)+(c.a&65535)+(b.a&65535)+(g.a&65535)+(f.a&65535)+(l>>>16);l=(a.a>>>16)+(c.a>>>16)+(b.a>>>16)+(g.a>>>16)+(f.a>>>16)+(h>>>16);return new s((l&65535)<<16|h&65535,r)}function y(a,c){var b=[],g,f,h,l,r,s,u=P,t=V,v=Q,d=U,n=R,p,m,w=S,x,q=[1732584193,4023233417,2562383102,271733878,3285377520];a[c>>>5]|=128<<24-c%32;a[(c+65>>>9<<4)+15]=c;x=a.length;for(p=0;p<x;p+=16){g=q[0];f=q[1];h=q[2];l=q[3];r=q[4];for(m=0;80>m;m+=1)b[m]=16>m?a[m+p]:d(b[m-3]^b[m-8]^b[m-
+14]^b[m-16],1),s=20>m?w(d(g,5),u(f,h,l),r,1518500249,b[m]):40>m?w(d(g,5),t(f,h,l),r,1859775393,b[m]):60>m?w(d(g,5),v(f,h,l),r,2400959708,b[m]):w(d(g,5),t(f,h,l),r,3395469782,b[m]),r=l,l=h,h=d(f,30),f=g,g=s;q[0]=n(g,q[0]);q[1]=n(f,q[1]);q[2]=n(h,q[2]);q[3]=n(l,q[3]);q[4]=n(r,q[4])}return q}function v(a,c,b){var g,f,h,l,r,t,u,v,z,d,n,p,m,w,x,q,y,C,D,E,F,G,H,I,e,A=[],B,k=[1116352408,1899447441,3049323471,3921009573,961987163,1508970993,2453635748,2870763221,3624381080,310598401,607225278,1426881987,
+1925078388,2162078206,2614888103,3248222580,3835390401,4022224774,264347078,604807628,770255983,1249150122,1555081692,1996064986,2554220882,2821834349,2952996808,3210313671,3336571891,3584528711,113926993,338241895,666307205,773529912,1294757372,1396182291,1695183700,1986661051,2177026350,2456956037,2730485921,2820302411,3259730800,3345764771,3516065817,3600352804,4094571909,275423344,430227734,506948616,659060556,883997877,958139571,1322822218,1537002063,1747873779,1955562222,2024104815,2227730452,
+2361852424,2428436474,2756734187,3204031479,3329325298];d=[3238371032,914150663,812702999,4144912697,4290775857,1750603025,1694076839,3204075428];f=[1779033703,3144134277,1013904242,2773480762,1359893119,2600822924,528734635,1541459225];if("SHA-224"===b||"SHA-256"===b)n=64,g=(c+65>>>9<<4)+15,w=16,x=1,e=Number,q=R,y=fa,C=S,D=ba,E=da,F=Y,G=$,I=Q,H=P,d="SHA-224"===b?d:f;else if("SHA-384"===b||"SHA-512"===b)n=80,g=(c+128>>>10<<5)+31,w=32,x=2,e=s,q=ga,y=ha,C=ia,D=ca,E=ea,F=Z,G=aa,I=X,H=W,k=[new e(k[0],
+3609767458),new e(k[1],602891725),new e(k[2],3964484399),new e(k[3],2173295548),new e(k[4],4081628472),new e(k[5],3053834265),new e(k[6],2937671579),new e(k[7],3664609560),new e(k[8],2734883394),new e(k[9],1164996542),new e(k[10],1323610764),new e(k[11],3590304994),new e(k[12],4068182383),new e(k[13],991336113),new e(k[14],633803317),new e(k[15],3479774868),new e(k[16],2666613458),new e(k[17],944711139),new e(k[18],2341262773),new e(k[19],2007800933),new e(k[20],1495990901),new e(k[21],1856431235),
+new e(k[22],3175218132),new e(k[23],2198950837),new e(k[24],3999719339),new e(k[25],766784016),new e(k[26],2566594879),new e(k[27],3203337956),new e(k[28],1034457026),new e(k[29],2466948901),new e(k[30],3758326383),new e(k[31],168717936),new e(k[32],1188179964),new e(k[33],1546045734),new e(k[34],1522805485),new e(k[35],2643833823),new e(k[36],2343527390),new e(k[37],1014477480),new e(k[38],1206759142),new e(k[39],344077627),new e(k[40],1290863460),new e(k[41],3158454273),new e(k[42],3505952657),
+new e(k[43],106217008),new e(k[44],3606008344),new e(k[45],1432725776),new e(k[46],1467031594),new e(k[47],851169720),new e(k[48],3100823752),new e(k[49],1363258195),new e(k[50],3750685593),new e(k[51],3785050280),new e(k[52],3318307427),new e(k[53],3812723403),new e(k[54],2003034995),new e(k[55],3602036899),new e(k[56],1575990012),new e(k[57],1125592928),new e(k[58],2716904306),new e(k[59],442776044),new e(k[60],593698344),new e(k[61],3733110249),new e(k[62],2999351573),new e(k[63],3815920427),new e(3391569614,
+3928383900),new e(3515267271,566280711),new e(3940187606,3454069534),new e(4118630271,4000239992),new e(116418474,1914138554),new e(174292421,2731055270),new e(289380356,3203993006),new e(460393269,320620315),new e(685471733,587496836),new e(852142971,1086792851),new e(1017036298,365543100),new e(1126000580,2618297676),new e(1288033470,3409855158),new e(1501505948,4234509866),new e(1607167915,987167468),new e(1816402316,1246189591)],d="SHA-384"===b?[new e(3418070365,d[0]),new e(1654270250,d[1]),new e(2438529370,
+d[2]),new e(355462360,d[3]),new e(1731405415,d[4]),new e(41048885895,d[5]),new e(3675008525,d[6]),new e(1203062813,d[7])]:[new e(f[0],4089235720),new e(f[1],2227873595),new e(f[2],4271175723),new e(f[3],1595750129),new e(f[4],2917565137),new e(f[5],725511199),new e(f[6],4215389547),new e(f[7],327033209)];else throw"Unexpected error in SHA-2 implementation";a[c>>>5]|=128<<24-c%32;a[g]=c;B=a.length;for(p=0;p<B;p+=w){c=d[0];g=d[1];f=d[2];h=d[3];l=d[4];r=d[5];t=d[6];u=d[7];for(m=0;m<n;m+=1)A[m]=16>m?
+new e(a[m*x+p],a[m*x+p+1]):y(E(A[m-2]),A[m-7],D(A[m-15]),A[m-16]),v=C(u,G(l),H(l,r,t),k[m],A[m]),z=q(F(c),I(c,g,f)),u=t,t=r,r=l,l=q(h,v),h=f,f=g,g=c,c=q(v,z);d[0]=q(c,d[0]);d[1]=q(g,d[1]);d[2]=q(f,d[2]);d[3]=q(h,d[3]);d[4]=q(l,d[4]);d[5]=q(r,d[5]);d[6]=q(t,d[6]);d[7]=q(u,d[7])}if("SHA-224"===b)a=[d[0],d[1],d[2],d[3],d[4],d[5],d[6]];else if("SHA-256"===b)a=d;else if("SHA-384"===b)a=[d[0].a,d[0].b,d[1].a,d[1].b,d[2].a,d[2].b,d[3].a,d[3].b,d[4].a,d[4].b,d[5].a,d[5].b];else if("SHA-512"===b)a=[d[0].a,
+d[0].b,d[1].a,d[1].b,d[2].a,d[2].b,d[3].a,d[3].b,d[4].a,d[4].b,d[5].a,d[5].b,d[6].a,d[6].b,d[7].a,d[7].b];else throw"Unexpected error in SHA-2 implementation";return a}"function"===typeof define&&typeof define.amd?define(function(){return z}):"undefined"!==typeof exports?"undefined"!==typeof module&&module.exports?module.exports=exports=z:exports=z:T.jsSHA=z})(this);
+
+},{}],77:[function(require,module,exports){
 // Top level file is just a mixin of submodules & constants
 'use strict';
 
@@ -19839,7 +22961,7 @@ assign(pako, deflate, inflate, constants);
 
 module.exports = pako;
 
-},{"./lib/deflate":67,"./lib/inflate":68,"./lib/utils/common":69,"./lib/zlib/constants":72}],67:[function(require,module,exports){
+},{"./lib/deflate":78,"./lib/inflate":79,"./lib/utils/common":80,"./lib/zlib/constants":83}],78:[function(require,module,exports){
 'use strict';
 
 
@@ -20217,7 +23339,7 @@ exports.deflate = deflate;
 exports.deflateRaw = deflateRaw;
 exports.gzip = gzip;
 
-},{"./utils/common":69,"./utils/strings":70,"./zlib/deflate.js":74,"./zlib/messages":79,"./zlib/zstream":81}],68:[function(require,module,exports){
+},{"./utils/common":80,"./utils/strings":81,"./zlib/deflate.js":85,"./zlib/messages":90,"./zlib/zstream":92}],79:[function(require,module,exports){
 'use strict';
 
 
@@ -20598,7 +23720,7 @@ exports.inflate = inflate;
 exports.inflateRaw = inflateRaw;
 exports.ungzip  = inflate;
 
-},{"./utils/common":69,"./utils/strings":70,"./zlib/constants":72,"./zlib/gzheader":75,"./zlib/inflate.js":77,"./zlib/messages":79,"./zlib/zstream":81}],69:[function(require,module,exports){
+},{"./utils/common":80,"./utils/strings":81,"./zlib/constants":83,"./zlib/gzheader":86,"./zlib/inflate.js":88,"./zlib/messages":90,"./zlib/zstream":92}],80:[function(require,module,exports){
 'use strict';
 
 
@@ -20702,7 +23824,7 @@ exports.setTyped = function (on) {
 
 exports.setTyped(TYPED_OK);
 
-},{}],70:[function(require,module,exports){
+},{}],81:[function(require,module,exports){
 // String encode/decode helpers
 'use strict';
 
@@ -20889,7 +24011,7 @@ exports.utf8border = function(buf, max) {
   return (pos + _utf8len[buf[pos]] > max) ? pos : max;
 };
 
-},{"./common":69}],71:[function(require,module,exports){
+},{"./common":80}],82:[function(require,module,exports){
 'use strict';
 
 // Note: adler32 takes 12% for level 0 and 2% for level 6.
@@ -20923,7 +24045,7 @@ function adler32(adler, buf, len, pos) {
 
 module.exports = adler32;
 
-},{}],72:[function(require,module,exports){
+},{}],83:[function(require,module,exports){
 module.exports = {
 
   /* Allowed flush values; see deflate() and inflate() below for details */
@@ -20972,7 +24094,7 @@ module.exports = {
   //Z_NULL:                 null // Use -1 or null inline, depending on var type
 };
 
-},{}],73:[function(require,module,exports){
+},{}],84:[function(require,module,exports){
 'use strict';
 
 // Note: we can't get significant speed boost here.
@@ -21015,7 +24137,7 @@ function crc32(crc, buf, len, pos) {
 
 module.exports = crc32;
 
-},{}],74:[function(require,module,exports){
+},{}],85:[function(require,module,exports){
 'use strict';
 
 var utils   = require('../utils/common');
@@ -22782,7 +25904,7 @@ exports.deflatePrime = deflatePrime;
 exports.deflateTune = deflateTune;
 */
 
-},{"../utils/common":69,"./adler32":71,"./crc32":73,"./messages":79,"./trees":80}],75:[function(require,module,exports){
+},{"../utils/common":80,"./adler32":82,"./crc32":84,"./messages":90,"./trees":91}],86:[function(require,module,exports){
 'use strict';
 
 
@@ -22824,7 +25946,7 @@ function GZheader() {
 
 module.exports = GZheader;
 
-},{}],76:[function(require,module,exports){
+},{}],87:[function(require,module,exports){
 'use strict';
 
 // See state defs from inflate.js
@@ -23151,7 +26273,7 @@ module.exports = function inflate_fast(strm, start) {
   return;
 };
 
-},{}],77:[function(require,module,exports){
+},{}],88:[function(require,module,exports){
 'use strict';
 
 
@@ -24656,7 +27778,7 @@ exports.inflateSyncPoint = inflateSyncPoint;
 exports.inflateUndermine = inflateUndermine;
 */
 
-},{"../utils/common":69,"./adler32":71,"./crc32":73,"./inffast":76,"./inftrees":78}],78:[function(require,module,exports){
+},{"../utils/common":80,"./adler32":82,"./crc32":84,"./inffast":87,"./inftrees":89}],89:[function(require,module,exports){
 'use strict';
 
 
@@ -24985,7 +28107,7 @@ module.exports = function inflate_table(type, lens, lens_index, codes, table, ta
   return 0;
 };
 
-},{"../utils/common":69}],79:[function(require,module,exports){
+},{"../utils/common":80}],90:[function(require,module,exports){
 'use strict';
 
 module.exports = {
@@ -25000,7 +28122,7 @@ module.exports = {
   '-6':   'incompatible version' /* Z_VERSION_ERROR (-6) */
 };
 
-},{}],80:[function(require,module,exports){
+},{}],91:[function(require,module,exports){
 'use strict';
 
 
@@ -26201,7 +29323,7 @@ exports._tr_flush_block  = _tr_flush_block;
 exports._tr_tally = _tr_tally;
 exports._tr_align = _tr_align;
 
-},{"../utils/common":69}],81:[function(require,module,exports){
+},{"../utils/common":80}],92:[function(require,module,exports){
 'use strict';
 
 
@@ -26232,9 +29354,9 @@ function ZStream() {
 
 module.exports = ZStream;
 
-},{}],82:[function(require,module,exports){
+},{}],93:[function(require,module,exports){
 module.exports = require('./lib/retry');
-},{"./lib/retry":83}],83:[function(require,module,exports){
+},{"./lib/retry":94}],94:[function(require,module,exports){
 var RetryOperation = require('./retry_operation');
 
 exports.operation = function(options) {
@@ -26285,7 +29407,7 @@ exports._createTimeout = function(attempt, opts) {
 
   return timeout;
 };
-},{"./retry_operation":84}],84:[function(require,module,exports){
+},{"./retry_operation":95}],95:[function(require,module,exports){
 function RetryOperation(timeouts) {
   this._timeouts = timeouts;
   this._fn = null;
@@ -26395,7 +29517,7 @@ RetryOperation.prototype.mainError = function() {
 
   return mainError;
 };
-},{}],85:[function(require,module,exports){
+},{}],96:[function(require,module,exports){
 module.exports = function arrayEquals(array) {
     // if the other array is a falsy value, return
     if (!array)
@@ -26421,10 +29543,10 @@ module.exports = function arrayEquals(array) {
 }
 
 
-},{}],86:[function(require,module,exports){
+},{}],97:[function(require,module,exports){
 exports.Interop = require('./interop');
 
-},{"./interop":87}],87:[function(require,module,exports){
+},{"./interop":98}],98:[function(require,module,exports){
 "use strict";
 
 var transform = require('./transform');
@@ -27006,7 +30128,7 @@ Interop.prototype.toUnifiedPlan = function(desc) {
     //#endregion
 };
 
-},{"./array-equals":85,"./transform":88}],88:[function(require,module,exports){
+},{"./array-equals":96,"./transform":99}],99:[function(require,module,exports){
 var transform = require('sdp-transform');
 
 exports.write = function(session, opts) {
@@ -27105,7 +30227,477 @@ exports.parse = function(sdp) {
 };
 
 
-},{"sdp-transform":92}],89:[function(require,module,exports){
+},{"sdp-transform":101}],100:[function(require,module,exports){
+var grammar = module.exports = {
+  v: [{
+      name: 'version',
+      reg: /^(\d*)$/
+  }],
+  o: [{ //o=- 20518 0 IN IP4 203.0.113.1
+    // NB: sessionId will be a String in most cases because it is huge
+    name: 'origin',
+    reg: /^(\S*) (\d*) (\d*) (\S*) IP(\d) (\S*)/,
+    names: ['username', 'sessionId', 'sessionVersion', 'netType', 'ipVer', 'address'],
+    format: "%s %s %d %s IP%d %s"
+  }],
+  // default parsing of these only (though some of these feel outdated)
+  s: [{ name: 'name' }],
+  i: [{ name: 'description' }],
+  u: [{ name: 'uri' }],
+  e: [{ name: 'email' }],
+  p: [{ name: 'phone' }],
+  z: [{ name: 'timezones' }], // TODO: this one can actually be parsed properly..
+  r: [{ name: 'repeats' }],   // TODO: this one can also be parsed properly
+  //k: [{}], // outdated thing ignored
+  t: [{ //t=0 0
+    name: 'timing',
+    reg: /^(\d*) (\d*)/,
+    names: ['start', 'stop'],
+    format: "%d %d"
+  }],
+  c: [{ //c=IN IP4 10.47.197.26
+      name: 'connection',
+      reg: /^IN IP(\d) (\S*)/,
+      names: ['version', 'ip'],
+      format: "IN IP%d %s"
+  }],
+  b: [{ //b=AS:4000
+      push: 'bandwidth',
+      reg: /^(TIAS|AS|CT|RR|RS):(\d*)/,
+      names: ['type', 'limit'],
+      format: "%s:%s"
+  }],
+  m: [{ //m=video 51744 RTP/AVP 126 97 98 34 31
+      // NB: special - pushes to session
+      // TODO: rtp/fmtp should be filtered by the payloads found here?
+      reg: /^(\w*) (\d*) ([\w\/]*)(?: (.*))?/,
+      names: ['type', 'port', 'protocol', 'payloads'],
+      format: "%s %d %s %s"
+  }],
+  a: [
+    { //a=rtpmap:110 opus/48000/2
+      push: 'rtp',
+      reg: /^rtpmap:(\d*) ([\w\-]*)\/(\d*)(?:\s*\/(\S*))?/,
+      names: ['payload', 'codec', 'rate', 'encoding'],
+      format: function (o) {
+        return (o.encoding) ?
+          "rtpmap:%d %s/%s/%s":
+          "rtpmap:%d %s/%s";
+      }
+    },
+    { //a=fmtp:108 profile-level-id=24;object=23;bitrate=64000
+      push: 'fmtp',
+      reg: /^fmtp:(\d*) (\S*)/,
+      names: ['payload', 'config'],
+      format: "fmtp:%d %s"
+    },
+    { //a=control:streamid=0
+        name: 'control',
+        reg: /^control:(.*)/,
+        format: "control:%s"
+    },
+    { //a=rtcp:65179 IN IP4 193.84.77.194
+      name: 'rtcp',
+      reg: /^rtcp:(\d*)(?: (\S*) IP(\d) (\S*))?/,
+      names: ['port', 'netType', 'ipVer', 'address'],
+      format: function (o) {
+        return (o.address != null) ?
+          "rtcp:%d %s IP%d %s":
+          "rtcp:%d";
+      }
+    },
+    { //a=rtcp-fb:98 trr-int 100
+      push: 'rtcpFbTrrInt',
+      reg: /^rtcp-fb:(\*|\d*) trr-int (\d*)/,
+      names: ['payload', 'value'],
+      format: "rtcp-fb:%d trr-int %d"
+    },
+    { //a=rtcp-fb:98 nack rpsi
+      push: 'rtcpFb',
+      reg: /^rtcp-fb:(\*|\d*) ([\w-_]*)(?: ([\w-_]*))?/,
+      names: ['payload', 'type', 'subtype'],
+      format: function (o) {
+        return (o.subtype != null) ?
+          "rtcp-fb:%s %s %s":
+          "rtcp-fb:%s %s";
+      }
+    },
+    { //a=extmap:2 urn:ietf:params:rtp-hdrext:toffset
+      //a=extmap:1/recvonly URI-gps-string
+      push: 'ext',
+      reg: /^extmap:([\w_\/]*) (\S*)(?: (\S*))?/,
+      names: ['value', 'uri', 'config'], // value may include "/direction" suffix
+      format: function (o) {
+        return (o.config != null) ?
+          "extmap:%s %s %s":
+          "extmap:%s %s";
+      }
+    },
+    {
+      //a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:PS1uQCVeeCFCanVmcjkpPywjNWhcYD0mXXtxaVBR|2^20|1:32
+      push: 'crypto',
+      reg: /^crypto:(\d*) ([\w_]*) (\S*)(?: (\S*))?/,
+      names: ['id', 'suite', 'config', 'sessionConfig'],
+      format: function (o) {
+        return (o.sessionConfig != null) ?
+          "crypto:%d %s %s %s":
+          "crypto:%d %s %s";
+      }
+    },
+    { //a=setup:actpass
+      name: 'setup',
+      reg: /^setup:(\w*)/,
+      format: "setup:%s"
+    },
+    { //a=mid:1
+      name: 'mid',
+      reg: /^mid:([^\s]*)/,
+      format: "mid:%s"
+    },
+    { //a=msid:0c8b064d-d807-43b4-b434-f92a889d8587 98178685-d409-46e0-8e16-7ef0db0db64a
+      name: 'msid',
+      reg: /^msid:(.*)/,
+      format: "msid:%s"
+    },
+    { //a=ptime:20
+      name: 'ptime',
+      reg: /^ptime:(\d*)/,
+      format: "ptime:%d"
+    },
+    { //a=maxptime:60
+      name: 'maxptime',
+      reg: /^maxptime:(\d*)/,
+      format: "maxptime:%d"
+    },
+    { //a=sendrecv
+      name: 'direction',
+      reg: /^(sendrecv|recvonly|sendonly|inactive)/
+    },
+    { //a=ice-lite
+      name: 'icelite',
+      reg: /^(ice-lite)/
+    },
+    { //a=ice-ufrag:F7gI
+      name: 'iceUfrag',
+      reg: /^ice-ufrag:(\S*)/,
+      format: "ice-ufrag:%s"
+    },
+    { //a=ice-pwd:x9cml/YzichV2+XlhiMu8g
+      name: 'icePwd',
+      reg: /^ice-pwd:(\S*)/,
+      format: "ice-pwd:%s"
+    },
+    { //a=fingerprint:SHA-1 00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33
+      name: 'fingerprint',
+      reg: /^fingerprint:(\S*) (\S*)/,
+      names: ['type', 'hash'],
+      format: "fingerprint:%s %s"
+    },
+    {
+      //a=candidate:0 1 UDP 2113667327 203.0.113.1 54400 typ host
+      //a=candidate:1162875081 1 udp 2113937151 192.168.34.75 60017 typ host generation 0
+      //a=candidate:3289912957 2 udp 1845501695 193.84.77.194 60017 typ srflx raddr 192.168.34.75 rport 60017 generation 0
+      push:'candidates',
+      reg: /^candidate:(\S*) (\d*) (\S*) (\d*) (\S*) (\d*) typ (\S*)(?: raddr (\S*) rport (\d*))?(?: generation (\d*))?/,
+      names: ['foundation', 'component', 'transport', 'priority', 'ip', 'port', 'type', 'raddr', 'rport', 'generation'],
+      format: function (o) {
+        var str = "candidate:%s %d %s %d %s %d typ %s";
+        // NB: candidate has two optional chunks, so %void middle one if it's missing
+        str += (o.raddr != null) ? " raddr %s rport %d" : "%v%v";
+        if (o.generation != null) {
+          str += " generation %d";
+        }
+        return str;
+      }
+    },
+    { //a=end-of-candidates (keep after the candidates line for readability)
+      name: 'endOfCandidates',
+      reg: /^(end-of-candidates)/
+    },
+    { //a=remote-candidates:1 203.0.113.1 54400 2 203.0.113.1 54401 ...
+      name: 'remoteCandidates',
+      reg: /^remote-candidates:(.*)/,
+      format: "remote-candidates:%s"
+    },
+    { //a=ice-options:google-ice
+      name: 'iceOptions',
+      reg: /^ice-options:(\S*)/,
+      format: "ice-options:%s"
+    },
+    { //a=ssrc:2566107569 cname:t9YU8M1UxTF8Y1A1
+      push: "ssrcs",
+      reg: /^ssrc:(\d*) ([\w_]*):(.*)/,
+      names: ['id', 'attribute', 'value'],
+      format: "ssrc:%d %s:%s"
+    },
+    { //a=ssrc-group:FEC 1 2
+      push: "ssrcGroups",
+      reg: /^ssrc-group:(\w*) (.*)/,
+      names: ['semantics', 'ssrcs'],
+      format: "ssrc-group:%s %s"
+    },
+    { //a=msid-semantic: WMS Jvlam5X3SX1OP6pn20zWogvaKJz5Hjf9OnlV
+      name: "msidSemantic",
+      reg: /^msid-semantic:\s?(\w*) (\S*)/,
+      names: ['semantic', 'token'],
+      format: "msid-semantic: %s %s" // space after ":" is not accidental
+    },
+    { //a=group:BUNDLE audio video
+      push: 'groups',
+      reg: /^group:(\w*) (.*)/,
+      names: ['type', 'mids'],
+      format: "group:%s %s"
+    },
+    { //a=rtcp-mux
+      name: 'rtcpMux',
+      reg: /^(rtcp-mux)/
+    },
+    { //a=rtcp-rsize
+      name: 'rtcpRsize',
+      reg: /^(rtcp-rsize)/
+    },
+    { // any a= that we don't understand is kepts verbatim on media.invalid
+      push: 'invalid',
+      names: ["value"]
+    }
+  ]
+};
+
+// set sensible defaults to avoid polluting the grammar with boring details
+Object.keys(grammar).forEach(function (key) {
+  var objs = grammar[key];
+  objs.forEach(function (obj) {
+    if (!obj.reg) {
+      obj.reg = /(.*)/;
+    }
+    if (!obj.format) {
+      obj.format = "%s";
+    }
+  });
+});
+
+},{}],101:[function(require,module,exports){
+var parser = require('./parser');
+var writer = require('./writer');
+
+exports.write = writer;
+exports.parse = parser.parse;
+exports.parseFmtpConfig = parser.parseFmtpConfig;
+exports.parsePayloads = parser.parsePayloads;
+exports.parseRemoteCandidates = parser.parseRemoteCandidates;
+
+},{"./parser":102,"./writer":103}],102:[function(require,module,exports){
+var toIntIfInt = function (v) {
+  return String(Number(v)) === v ? Number(v) : v;
+};
+
+var attachProperties = function (match, location, names, rawName) {
+  if (rawName && !names) {
+    location[rawName] = toIntIfInt(match[1]);
+  }
+  else {
+    for (var i = 0; i < names.length; i += 1) {
+      if (match[i+1] != null) {
+        location[names[i]] = toIntIfInt(match[i+1]);
+      }
+    }
+  }
+};
+
+var parseReg = function (obj, location, content) {
+  var needsBlank = obj.name && obj.names;
+  if (obj.push && !location[obj.push]) {
+    location[obj.push] = [];
+  }
+  else if (needsBlank && !location[obj.name]) {
+    location[obj.name] = {};
+  }
+  var keyLocation = obj.push ?
+    {} :  // blank object that will be pushed
+    needsBlank ? location[obj.name] : location; // otherwise, named location or root
+
+  attachProperties(content.match(obj.reg), keyLocation, obj.names, obj.name);
+
+  if (obj.push) {
+    location[obj.push].push(keyLocation);
+  }
+};
+
+var grammar = require('./grammar');
+var validLine = RegExp.prototype.test.bind(/^([a-z])=(.*)/);
+
+exports.parse = function (sdp) {
+  var session = {}
+    , media = []
+    , location = session; // points at where properties go under (one of the above)
+
+  // parse lines we understand
+  sdp.split(/(\r\n|\r|\n)/).filter(validLine).forEach(function (l) {
+    var type = l[0];
+    var content = l.slice(2);
+    if (type === 'm') {
+      media.push({rtp: [], fmtp: []});
+      location = media[media.length-1]; // point at latest media line
+    }
+
+    for (var j = 0; j < (grammar[type] || []).length; j += 1) {
+      var obj = grammar[type][j];
+      if (obj.reg.test(content)) {
+        return parseReg(obj, location, content);
+      }
+    }
+  });
+
+  session.media = media; // link it up
+  return session;
+};
+
+var fmtpReducer = function (acc, expr) {
+  var s = expr.split('=');
+  if (s.length === 2) {
+    acc[s[0]] = toIntIfInt(s[1]);
+  }
+  return acc;
+};
+
+exports.parseFmtpConfig = function (str) {
+  return str.split(';').reduce(fmtpReducer, {});
+};
+
+exports.parsePayloads = function (str) {
+  return str.split(' ').map(Number);
+};
+
+exports.parseRemoteCandidates = function (str) {
+  var candidates = [];
+  var parts = str.split(' ').map(toIntIfInt);
+  for (var i = 0; i < parts.length; i += 3) {
+    candidates.push({
+      component: parts[i],
+      ip: parts[i + 1],
+      port: parts[i + 2]
+    });
+  }
+  return candidates;
+};
+
+},{"./grammar":100}],103:[function(require,module,exports){
+var grammar = require('./grammar');
+
+// customized util.format - discards excess arguments and can void middle ones
+var formatRegExp = /%[sdv%]/g;
+var format = function (formatStr) {
+  var i = 1;
+  var args = arguments;
+  var len = args.length;
+  return formatStr.replace(formatRegExp, function (x) {
+    if (i >= len) {
+      return x; // missing argument
+    }
+    var arg = args[i];
+    i += 1;
+    switch (x) {
+      case '%%':
+        return '%';
+      case '%s':
+        return String(arg);
+      case '%d':
+        return Number(arg);
+      case '%v':
+        return '';
+    }
+  });
+  // NB: we discard excess arguments - they are typically undefined from makeLine
+};
+
+var makeLine = function (type, obj, location) {
+  var str = obj.format instanceof Function ?
+    (obj.format(obj.push ? location : location[obj.name])) :
+    obj.format;
+
+  var args = [type + '=' + str];
+  if (obj.names) {
+    for (var i = 0; i < obj.names.length; i += 1) {
+      var n = obj.names[i];
+      if (obj.name) {
+        args.push(location[obj.name][n]);
+      }
+      else { // for mLine and push attributes
+        args.push(location[obj.names[i]]);
+      }
+    }
+  }
+  else {
+    args.push(location[obj.name]);
+  }
+  return format.apply(null, args);
+};
+
+// RFC specified order
+// TODO: extend this with all the rest
+var defaultOuterOrder = [
+  'v', 'o', 's', 'i',
+  'u', 'e', 'p', 'c',
+  'b', 't', 'r', 'z', 'a'
+];
+var defaultInnerOrder = ['i', 'c', 'b', 'a'];
+
+
+module.exports = function (session, opts) {
+  opts = opts || {};
+  // ensure certain properties exist
+  if (session.version == null) {
+    session.version = 0; // "v=0" must be there (only defined version atm)
+  }
+  if (session.name == null) {
+    session.name = " "; // "s= " must be there if no meaningful name set
+  }
+  session.media.forEach(function (mLine) {
+    if (mLine.payloads == null) {
+      mLine.payloads = "";
+    }
+  });
+
+  var outerOrder = opts.outerOrder || defaultOuterOrder;
+  var innerOrder = opts.innerOrder || defaultInnerOrder;
+  var sdp = [];
+
+  // loop through outerOrder for matching properties on session
+  outerOrder.forEach(function (type) {
+    grammar[type].forEach(function (obj) {
+      if (obj.name in session && session[obj.name] != null) {
+        sdp.push(makeLine(type, obj, session));
+      }
+      else if (obj.push in session && session[obj.push] != null) {
+        session[obj.push].forEach(function (el) {
+          sdp.push(makeLine(type, obj, el));
+        });
+      }
+    });
+  });
+
+  // then for each media line, follow the innerOrder
+  session.media.forEach(function (mLine) {
+    sdp.push(makeLine('m', grammar.m[0], mLine));
+
+    innerOrder.forEach(function (type) {
+      grammar[type].forEach(function (obj) {
+        if (obj.name in mLine && mLine[obj.name] != null) {
+          sdp.push(makeLine(type, obj, mLine));
+        }
+        else if (obj.push in mLine && mLine[obj.push] != null) {
+          mLine[obj.push].forEach(function (el) {
+            sdp.push(makeLine(type, obj, el));
+          });
+        }
+      });
+    });
+  });
+
+  return sdp.join('\r\n') + '\r\n';
+};
+
+},{"./grammar":100}],104:[function(require,module,exports){
 var transform = require('sdp-transform');
 var transformUtils = require('./transform-utils');
 var parseSsrcs = transformUtils.parseSsrcs;
@@ -27507,7 +31099,7 @@ Simulcast.prototype.mungeLocalDescription = function (desc) {
 
 module.exports = Simulcast;
 
-},{"./transform-utils":90,"sdp-transform":92}],90:[function(require,module,exports){
+},{"./transform-utils":105,"sdp-transform":107}],105:[function(require,module,exports){
 exports.writeSsrcs = function(sources, order) {
   var ssrcs = [];
 
@@ -27558,7 +31150,15 @@ exports.parseSsrcs = function (mLine) {
 };
 
 
-},{}],91:[function(require,module,exports){
+},{}],106:[function(require,module,exports){
+arguments[4][100][0].apply(exports,arguments)
+},{"dup":100}],107:[function(require,module,exports){
+arguments[4][101][0].apply(exports,arguments)
+},{"./parser":108,"./writer":109,"dup":101}],108:[function(require,module,exports){
+arguments[4][102][0].apply(exports,arguments)
+},{"./grammar":106,"dup":102}],109:[function(require,module,exports){
+arguments[4][103][0].apply(exports,arguments)
+},{"./grammar":106,"dup":103}],110:[function(require,module,exports){
 var grammar = module.exports = {
   v: [{
       name: 'version',
@@ -27616,9 +31216,11 @@ var grammar = module.exports = {
           "rtpmap:%d %s/%s";
       }
     },
-    { //a=fmtp:108 profile-level-id=24;object=23;bitrate=64000
+    {
+      //a=fmtp:108 profile-level-id=24;object=23;bitrate=64000
+      //a=fmtp:111 minptime=10; useinbandfec=1
       push: 'fmtp',
-      reg: /^fmtp:(\d*) (\S*)/,
+      reg: /^fmtp:(\d*) ([\S| ]*)/,
       names: ['payload', 'config'],
       format: "fmtp:%d %s"
     },
@@ -27807,17 +31409,9 @@ Object.keys(grammar).forEach(function (key) {
   });
 });
 
-},{}],92:[function(require,module,exports){
-var parser = require('./parser');
-var writer = require('./writer');
-
-exports.write = writer;
-exports.parse = parser.parse;
-exports.parseFmtpConfig = parser.parseFmtpConfig;
-exports.parsePayloads = parser.parsePayloads;
-exports.parseRemoteCandidates = parser.parseRemoteCandidates;
-
-},{"./parser":93,"./writer":94}],93:[function(require,module,exports){
+},{}],111:[function(require,module,exports){
+arguments[4][101][0].apply(exports,arguments)
+},{"./parser":112,"./writer":113,"dup":101}],112:[function(require,module,exports){
 var toIntIfInt = function (v) {
   return String(Number(v)) === v ? Number(v) : v;
 };
@@ -27892,7 +31486,7 @@ var fmtpReducer = function (acc, expr) {
 };
 
 exports.parseFmtpConfig = function (str) {
-  return str.split(';').reduce(fmtpReducer, {});
+  return str.split(/\;\s?/).reduce(fmtpReducer, {});
 };
 
 exports.parsePayloads = function (str) {
@@ -27912,147 +31506,7032 @@ exports.parseRemoteCandidates = function (str) {
   return candidates;
 };
 
-},{"./grammar":91}],94:[function(require,module,exports){
-var grammar = require('./grammar');
+},{"./grammar":110}],113:[function(require,module,exports){
+arguments[4][103][0].apply(exports,arguments)
+},{"./grammar":110,"dup":103}],114:[function(require,module,exports){
 
-// customized util.format - discards excess arguments and can void middle ones
-var formatRegExp = /%[sdv%]/g;
-var format = function (formatStr) {
-  var i = 1;
-  var args = arguments;
-  var len = args.length;
-  return formatStr.replace(formatRegExp, function (x) {
-    if (i >= len) {
-      return x; // missing argument
+module.exports = require('./lib/');
+
+},{"./lib/":115}],115:[function(require,module,exports){
+
+/**
+ * Module dependencies.
+ */
+
+var url = require('./url');
+var parser = require('socket.io-parser');
+var Manager = require('./manager');
+var debug = require('debug')('socket.io-client');
+
+/**
+ * Module exports.
+ */
+
+module.exports = exports = lookup;
+
+/**
+ * Managers cache.
+ */
+
+var cache = exports.managers = {};
+
+/**
+ * Looks up an existing `Manager` for multiplexing.
+ * If the user summons:
+ *
+ *   `io('http://localhost/a');`
+ *   `io('http://localhost/b');`
+ *
+ * We reuse the existing instance based on same scheme/port/host,
+ * and we initialize sockets for each namespace.
+ *
+ * @api public
+ */
+
+function lookup(uri, opts) {
+  if (typeof uri == 'object') {
+    opts = uri;
+    uri = undefined;
+  }
+
+  opts = opts || {};
+
+  var parsed = url(uri);
+  var source = parsed.source;
+  var id = parsed.id;
+  var io;
+
+  if (opts.forceNew || opts['force new connection'] || false === opts.multiplex) {
+    debug('ignoring socket cache for %s', source);
+    io = Manager(source, opts);
+  } else {
+    if (!cache[id]) {
+      debug('new io instance for %s', source);
+      cache[id] = Manager(source, opts);
     }
-    var arg = args[i];
-    i += 1;
-    switch (x) {
-      case '%%':
-        return '%';
-      case '%s':
-        return String(arg);
-      case '%d':
-        return Number(arg);
-      case '%v':
-        return '';
-    }
+    io = cache[id];
+  }
+
+  return io.socket(parsed.path);
+}
+
+/**
+ * Protocol version.
+ *
+ * @api public
+ */
+
+exports.protocol = parser.protocol;
+
+/**
+ * `connect`.
+ *
+ * @param {String} uri
+ * @api public
+ */
+
+exports.connect = lookup;
+
+/**
+ * Expose constructors for standalone build.
+ *
+ * @api public
+ */
+
+exports.Manager = require('./manager');
+exports.Socket = require('./socket');
+
+},{"./manager":116,"./socket":118,"./url":119,"debug":123,"socket.io-parser":160}],116:[function(require,module,exports){
+
+/**
+ * Module dependencies.
+ */
+
+var url = require('./url');
+var eio = require('engine.io-client');
+var Socket = require('./socket');
+var Emitter = require('component-emitter');
+var parser = require('socket.io-parser');
+var on = require('./on');
+var bind = require('component-bind');
+var object = require('object-component');
+var debug = require('debug')('socket.io-client:manager');
+var indexOf = require('indexof');
+var Backoff = require('backo2');
+
+/**
+ * Module exports
+ */
+
+module.exports = Manager;
+
+/**
+ * `Manager` constructor.
+ *
+ * @param {String} engine instance or engine uri/opts
+ * @param {Object} options
+ * @api public
+ */
+
+function Manager(uri, opts){
+  if (!(this instanceof Manager)) return new Manager(uri, opts);
+  if (uri && ('object' == typeof uri)) {
+    opts = uri;
+    uri = undefined;
+  }
+  opts = opts || {};
+
+  opts.path = opts.path || '/socket.io';
+  this.nsps = {};
+  this.subs = [];
+  this.opts = opts;
+  this.reconnection(opts.reconnection !== false);
+  this.reconnectionAttempts(opts.reconnectionAttempts || Infinity);
+  this.reconnectionDelay(opts.reconnectionDelay || 1000);
+  this.reconnectionDelayMax(opts.reconnectionDelayMax || 5000);
+  this.randomizationFactor(opts.randomizationFactor || 0.5);
+  this.backoff = new Backoff({
+    min: this.reconnectionDelay(),
+    max: this.reconnectionDelayMax(),
+    jitter: this.randomizationFactor()
   });
-  // NB: we discard excess arguments - they are typically undefined from makeLine
+  this.timeout(null == opts.timeout ? 20000 : opts.timeout);
+  this.readyState = 'closed';
+  this.uri = uri;
+  this.connected = [];
+  this.encoding = false;
+  this.packetBuffer = [];
+  this.encoder = new parser.Encoder();
+  this.decoder = new parser.Decoder();
+  this.autoConnect = opts.autoConnect !== false;
+  if (this.autoConnect) this.open();
+}
+
+/**
+ * Propagate given event to sockets and emit on `this`
+ *
+ * @api private
+ */
+
+Manager.prototype.emitAll = function() {
+  this.emit.apply(this, arguments);
+  for (var nsp in this.nsps) {
+    this.nsps[nsp].emit.apply(this.nsps[nsp], arguments);
+  }
 };
 
-var makeLine = function (type, obj, location) {
-  var str = obj.format instanceof Function ?
-    (obj.format(obj.push ? location : location[obj.name])) :
-    obj.format;
+/**
+ * Update `socket.id` of all sockets
+ *
+ * @api private
+ */
 
-  var args = [type + '=' + str];
-  if (obj.names) {
-    for (var i = 0; i < obj.names.length; i += 1) {
-      var n = obj.names[i];
-      if (obj.name) {
-        args.push(location[obj.name][n]);
+Manager.prototype.updateSocketIds = function(){
+  for (var nsp in this.nsps) {
+    this.nsps[nsp].id = this.engine.id;
+  }
+};
+
+/**
+ * Mix in `Emitter`.
+ */
+
+Emitter(Manager.prototype);
+
+/**
+ * Sets the `reconnection` config.
+ *
+ * @param {Boolean} true/false if it should automatically reconnect
+ * @return {Manager} self or value
+ * @api public
+ */
+
+Manager.prototype.reconnection = function(v){
+  if (!arguments.length) return this._reconnection;
+  this._reconnection = !!v;
+  return this;
+};
+
+/**
+ * Sets the reconnection attempts config.
+ *
+ * @param {Number} max reconnection attempts before giving up
+ * @return {Manager} self or value
+ * @api public
+ */
+
+Manager.prototype.reconnectionAttempts = function(v){
+  if (!arguments.length) return this._reconnectionAttempts;
+  this._reconnectionAttempts = v;
+  return this;
+};
+
+/**
+ * Sets the delay between reconnections.
+ *
+ * @param {Number} delay
+ * @return {Manager} self or value
+ * @api public
+ */
+
+Manager.prototype.reconnectionDelay = function(v){
+  if (!arguments.length) return this._reconnectionDelay;
+  this._reconnectionDelay = v;
+  this.backoff && this.backoff.setMin(v);
+  return this;
+};
+
+Manager.prototype.randomizationFactor = function(v){
+  if (!arguments.length) return this._randomizationFactor;
+  this._randomizationFactor = v;
+  this.backoff && this.backoff.setJitter(v);
+  return this;
+};
+
+/**
+ * Sets the maximum delay between reconnections.
+ *
+ * @param {Number} delay
+ * @return {Manager} self or value
+ * @api public
+ */
+
+Manager.prototype.reconnectionDelayMax = function(v){
+  if (!arguments.length) return this._reconnectionDelayMax;
+  this._reconnectionDelayMax = v;
+  this.backoff && this.backoff.setMax(v);
+  return this;
+};
+
+/**
+ * Sets the connection timeout. `false` to disable
+ *
+ * @return {Manager} self or value
+ * @api public
+ */
+
+Manager.prototype.timeout = function(v){
+  if (!arguments.length) return this._timeout;
+  this._timeout = v;
+  return this;
+};
+
+/**
+ * Starts trying to reconnect if reconnection is enabled and we have not
+ * started reconnecting yet
+ *
+ * @api private
+ */
+
+Manager.prototype.maybeReconnectOnOpen = function() {
+  // Only try to reconnect if it's the first time we're connecting
+  if (!this.reconnecting && this._reconnection && this.backoff.attempts === 0) {
+    // keeps reconnection from firing twice for the same reconnection loop
+    this.reconnect();
+  }
+};
+
+
+/**
+ * Sets the current transport `socket`.
+ *
+ * @param {Function} optional, callback
+ * @return {Manager} self
+ * @api public
+ */
+
+Manager.prototype.open =
+Manager.prototype.connect = function(fn){
+  debug('readyState %s', this.readyState);
+  if (~this.readyState.indexOf('open')) return this;
+
+  debug('opening %s', this.uri);
+  this.engine = eio(this.uri, this.opts);
+  var socket = this.engine;
+  var self = this;
+  this.readyState = 'opening';
+  this.skipReconnect = false;
+
+  // emit `open`
+  var openSub = on(socket, 'open', function() {
+    self.onopen();
+    fn && fn();
+  });
+
+  // emit `connect_error`
+  var errorSub = on(socket, 'error', function(data){
+    debug('connect_error');
+    self.cleanup();
+    self.readyState = 'closed';
+    self.emitAll('connect_error', data);
+    if (fn) {
+      var err = new Error('Connection error');
+      err.data = data;
+      fn(err);
+    } else {
+      // Only do this if there is no fn to handle the error
+      self.maybeReconnectOnOpen();
+    }
+  });
+
+  // emit `connect_timeout`
+  if (false !== this._timeout) {
+    var timeout = this._timeout;
+    debug('connect attempt will timeout after %d', timeout);
+
+    // set timer
+    var timer = setTimeout(function(){
+      debug('connect attempt timed out after %d', timeout);
+      openSub.destroy();
+      socket.close();
+      socket.emit('error', 'timeout');
+      self.emitAll('connect_timeout', timeout);
+    }, timeout);
+
+    this.subs.push({
+      destroy: function(){
+        clearTimeout(timer);
       }
-      else { // for mLine and push attributes
-        args.push(location[obj.names[i]]);
+    });
+  }
+
+  this.subs.push(openSub);
+  this.subs.push(errorSub);
+
+  return this;
+};
+
+/**
+ * Called upon transport open.
+ *
+ * @api private
+ */
+
+Manager.prototype.onopen = function(){
+  debug('open');
+
+  // clear old subs
+  this.cleanup();
+
+  // mark as open
+  this.readyState = 'open';
+  this.emit('open');
+
+  // add new subs
+  var socket = this.engine;
+  this.subs.push(on(socket, 'data', bind(this, 'ondata')));
+  this.subs.push(on(this.decoder, 'decoded', bind(this, 'ondecoded')));
+  this.subs.push(on(socket, 'error', bind(this, 'onerror')));
+  this.subs.push(on(socket, 'close', bind(this, 'onclose')));
+};
+
+/**
+ * Called with data.
+ *
+ * @api private
+ */
+
+Manager.prototype.ondata = function(data){
+  this.decoder.add(data);
+};
+
+/**
+ * Called when parser fully decodes a packet.
+ *
+ * @api private
+ */
+
+Manager.prototype.ondecoded = function(packet) {
+  this.emit('packet', packet);
+};
+
+/**
+ * Called upon socket error.
+ *
+ * @api private
+ */
+
+Manager.prototype.onerror = function(err){
+  debug('error', err);
+  this.emitAll('error', err);
+};
+
+/**
+ * Creates a new socket for the given `nsp`.
+ *
+ * @return {Socket}
+ * @api public
+ */
+
+Manager.prototype.socket = function(nsp){
+  var socket = this.nsps[nsp];
+  if (!socket) {
+    socket = new Socket(this, nsp);
+    this.nsps[nsp] = socket;
+    var self = this;
+    socket.on('connect', function(){
+      socket.id = self.engine.id;
+      if (!~indexOf(self.connected, socket)) {
+        self.connected.push(socket);
+      }
+    });
+  }
+  return socket;
+};
+
+/**
+ * Called upon a socket close.
+ *
+ * @param {Socket} socket
+ */
+
+Manager.prototype.destroy = function(socket){
+  var index = indexOf(this.connected, socket);
+  if (~index) this.connected.splice(index, 1);
+  if (this.connected.length) return;
+
+  this.close();
+};
+
+/**
+ * Writes a packet.
+ *
+ * @param {Object} packet
+ * @api private
+ */
+
+Manager.prototype.packet = function(packet){
+  debug('writing packet %j', packet);
+  var self = this;
+
+  if (!self.encoding) {
+    // encode, then write to engine with result
+    self.encoding = true;
+    this.encoder.encode(packet, function(encodedPackets) {
+      for (var i = 0; i < encodedPackets.length; i++) {
+        self.engine.write(encodedPackets[i]);
+      }
+      self.encoding = false;
+      self.processPacketQueue();
+    });
+  } else { // add packet to the queue
+    self.packetBuffer.push(packet);
+  }
+};
+
+/**
+ * If packet buffer is non-empty, begins encoding the
+ * next packet in line.
+ *
+ * @api private
+ */
+
+Manager.prototype.processPacketQueue = function() {
+  if (this.packetBuffer.length > 0 && !this.encoding) {
+    var pack = this.packetBuffer.shift();
+    this.packet(pack);
+  }
+};
+
+/**
+ * Clean up transport subscriptions and packet buffer.
+ *
+ * @api private
+ */
+
+Manager.prototype.cleanup = function(){
+  var sub;
+  while (sub = this.subs.shift()) sub.destroy();
+
+  this.packetBuffer = [];
+  this.encoding = false;
+
+  this.decoder.destroy();
+};
+
+/**
+ * Close the current socket.
+ *
+ * @api private
+ */
+
+Manager.prototype.close =
+Manager.prototype.disconnect = function(){
+  this.skipReconnect = true;
+  this.backoff.reset();
+  this.readyState = 'closed';
+  this.engine && this.engine.close();
+};
+
+/**
+ * Called upon engine close.
+ *
+ * @api private
+ */
+
+Manager.prototype.onclose = function(reason){
+  debug('close');
+  this.cleanup();
+  this.backoff.reset();
+  this.readyState = 'closed';
+  this.emit('close', reason);
+  if (this._reconnection && !this.skipReconnect) {
+    this.reconnect();
+  }
+};
+
+/**
+ * Attempt a reconnection.
+ *
+ * @api private
+ */
+
+Manager.prototype.reconnect = function(){
+  if (this.reconnecting || this.skipReconnect) return this;
+
+  var self = this;
+
+  if (this.backoff.attempts >= this._reconnectionAttempts) {
+    debug('reconnect failed');
+    this.backoff.reset();
+    this.emitAll('reconnect_failed');
+    this.reconnecting = false;
+  } else {
+    var delay = this.backoff.duration();
+    debug('will wait %dms before reconnect attempt', delay);
+
+    this.reconnecting = true;
+    var timer = setTimeout(function(){
+      if (self.skipReconnect) return;
+
+      debug('attempting reconnect');
+      self.emitAll('reconnect_attempt', self.backoff.attempts);
+      self.emitAll('reconnecting', self.backoff.attempts);
+
+      // check again for the case socket closed in above events
+      if (self.skipReconnect) return;
+
+      self.open(function(err){
+        if (err) {
+          debug('reconnect attempt error');
+          self.reconnecting = false;
+          self.reconnect();
+          self.emitAll('reconnect_error', err.data);
+        } else {
+          debug('reconnect success');
+          self.onreconnect();
+        }
+      });
+    }, delay);
+
+    this.subs.push({
+      destroy: function(){
+        clearTimeout(timer);
+      }
+    });
+  }
+};
+
+/**
+ * Called upon successful reconnect.
+ *
+ * @api private
+ */
+
+Manager.prototype.onreconnect = function(){
+  var attempt = this.backoff.attempts;
+  this.reconnecting = false;
+  this.backoff.reset();
+  this.updateSocketIds();
+  this.emitAll('reconnect', attempt);
+};
+
+},{"./on":117,"./socket":118,"./url":119,"backo2":120,"component-bind":121,"component-emitter":122,"debug":123,"engine.io-client":124,"indexof":156,"object-component":157,"socket.io-parser":160}],117:[function(require,module,exports){
+
+/**
+ * Module exports.
+ */
+
+module.exports = on;
+
+/**
+ * Helper for subscriptions.
+ *
+ * @param {Object|EventEmitter} obj with `Emitter` mixin or `EventEmitter`
+ * @param {String} event name
+ * @param {Function} callback
+ * @api public
+ */
+
+function on(obj, ev, fn) {
+  obj.on(ev, fn);
+  return {
+    destroy: function(){
+      obj.removeListener(ev, fn);
+    }
+  };
+}
+
+},{}],118:[function(require,module,exports){
+
+/**
+ * Module dependencies.
+ */
+
+var parser = require('socket.io-parser');
+var Emitter = require('component-emitter');
+var toArray = require('to-array');
+var on = require('./on');
+var bind = require('component-bind');
+var debug = require('debug')('socket.io-client:socket');
+var hasBin = require('has-binary');
+
+/**
+ * Module exports.
+ */
+
+module.exports = exports = Socket;
+
+/**
+ * Internal events (blacklisted).
+ * These events can't be emitted by the user.
+ *
+ * @api private
+ */
+
+var events = {
+  connect: 1,
+  connect_error: 1,
+  connect_timeout: 1,
+  disconnect: 1,
+  error: 1,
+  reconnect: 1,
+  reconnect_attempt: 1,
+  reconnect_failed: 1,
+  reconnect_error: 1,
+  reconnecting: 1
+};
+
+/**
+ * Shortcut to `Emitter#emit`.
+ */
+
+var emit = Emitter.prototype.emit;
+
+/**
+ * `Socket` constructor.
+ *
+ * @api public
+ */
+
+function Socket(io, nsp){
+  this.io = io;
+  this.nsp = nsp;
+  this.json = this; // compat
+  this.ids = 0;
+  this.acks = {};
+  if (this.io.autoConnect) this.open();
+  this.receiveBuffer = [];
+  this.sendBuffer = [];
+  this.connected = false;
+  this.disconnected = true;
+}
+
+/**
+ * Mix in `Emitter`.
+ */
+
+Emitter(Socket.prototype);
+
+/**
+ * Subscribe to open, close and packet events
+ *
+ * @api private
+ */
+
+Socket.prototype.subEvents = function() {
+  if (this.subs) return;
+
+  var io = this.io;
+  this.subs = [
+    on(io, 'open', bind(this, 'onopen')),
+    on(io, 'packet', bind(this, 'onpacket')),
+    on(io, 'close', bind(this, 'onclose'))
+  ];
+};
+
+/**
+ * "Opens" the socket.
+ *
+ * @api public
+ */
+
+Socket.prototype.open =
+Socket.prototype.connect = function(){
+  if (this.connected) return this;
+
+  this.subEvents();
+  this.io.open(); // ensure open
+  if ('open' == this.io.readyState) this.onopen();
+  return this;
+};
+
+/**
+ * Sends a `message` event.
+ *
+ * @return {Socket} self
+ * @api public
+ */
+
+Socket.prototype.send = function(){
+  var args = toArray(arguments);
+  args.unshift('message');
+  this.emit.apply(this, args);
+  return this;
+};
+
+/**
+ * Override `emit`.
+ * If the event is in `events`, it's emitted normally.
+ *
+ * @param {String} event name
+ * @return {Socket} self
+ * @api public
+ */
+
+Socket.prototype.emit = function(ev){
+  if (events.hasOwnProperty(ev)) {
+    emit.apply(this, arguments);
+    return this;
+  }
+
+  var args = toArray(arguments);
+  var parserType = parser.EVENT; // default
+  if (hasBin(args)) { parserType = parser.BINARY_EVENT; } // binary
+  var packet = { type: parserType, data: args };
+
+  // event ack callback
+  if ('function' == typeof args[args.length - 1]) {
+    debug('emitting packet with ack id %d', this.ids);
+    this.acks[this.ids] = args.pop();
+    packet.id = this.ids++;
+  }
+
+  if (this.connected) {
+    this.packet(packet);
+  } else {
+    this.sendBuffer.push(packet);
+  }
+
+  return this;
+};
+
+/**
+ * Sends a packet.
+ *
+ * @param {Object} packet
+ * @api private
+ */
+
+Socket.prototype.packet = function(packet){
+  packet.nsp = this.nsp;
+  this.io.packet(packet);
+};
+
+/**
+ * Called upon engine `open`.
+ *
+ * @api private
+ */
+
+Socket.prototype.onopen = function(){
+  debug('transport is open - connecting');
+
+  // write connect packet if necessary
+  if ('/' != this.nsp) {
+    this.packet({ type: parser.CONNECT });
+  }
+};
+
+/**
+ * Called upon engine `close`.
+ *
+ * @param {String} reason
+ * @api private
+ */
+
+Socket.prototype.onclose = function(reason){
+  debug('close (%s)', reason);
+  this.connected = false;
+  this.disconnected = true;
+  delete this.id;
+  this.emit('disconnect', reason);
+};
+
+/**
+ * Called with socket packet.
+ *
+ * @param {Object} packet
+ * @api private
+ */
+
+Socket.prototype.onpacket = function(packet){
+  if (packet.nsp != this.nsp) return;
+
+  switch (packet.type) {
+    case parser.CONNECT:
+      this.onconnect();
+      break;
+
+    case parser.EVENT:
+      this.onevent(packet);
+      break;
+
+    case parser.BINARY_EVENT:
+      this.onevent(packet);
+      break;
+
+    case parser.ACK:
+      this.onack(packet);
+      break;
+
+    case parser.BINARY_ACK:
+      this.onack(packet);
+      break;
+
+    case parser.DISCONNECT:
+      this.ondisconnect();
+      break;
+
+    case parser.ERROR:
+      this.emit('error', packet.data);
+      break;
+  }
+};
+
+/**
+ * Called upon a server event.
+ *
+ * @param {Object} packet
+ * @api private
+ */
+
+Socket.prototype.onevent = function(packet){
+  var args = packet.data || [];
+  debug('emitting event %j', args);
+
+  if (null != packet.id) {
+    debug('attaching ack callback to event');
+    args.push(this.ack(packet.id));
+  }
+
+  if (this.connected) {
+    emit.apply(this, args);
+  } else {
+    this.receiveBuffer.push(args);
+  }
+};
+
+/**
+ * Produces an ack callback to emit with an event.
+ *
+ * @api private
+ */
+
+Socket.prototype.ack = function(id){
+  var self = this;
+  var sent = false;
+  return function(){
+    // prevent double callbacks
+    if (sent) return;
+    sent = true;
+    var args = toArray(arguments);
+    debug('sending ack %j', args);
+
+    var type = hasBin(args) ? parser.BINARY_ACK : parser.ACK;
+    self.packet({
+      type: type,
+      id: id,
+      data: args
+    });
+  };
+};
+
+/**
+ * Called upon a server acknowlegement.
+ *
+ * @param {Object} packet
+ * @api private
+ */
+
+Socket.prototype.onack = function(packet){
+  debug('calling ack %s with %j', packet.id, packet.data);
+  var fn = this.acks[packet.id];
+  fn.apply(this, packet.data);
+  delete this.acks[packet.id];
+};
+
+/**
+ * Called upon server connect.
+ *
+ * @api private
+ */
+
+Socket.prototype.onconnect = function(){
+  this.connected = true;
+  this.disconnected = false;
+  this.emit('connect');
+  this.emitBuffered();
+};
+
+/**
+ * Emit buffered events (received and emitted).
+ *
+ * @api private
+ */
+
+Socket.prototype.emitBuffered = function(){
+  var i;
+  for (i = 0; i < this.receiveBuffer.length; i++) {
+    emit.apply(this, this.receiveBuffer[i]);
+  }
+  this.receiveBuffer = [];
+
+  for (i = 0; i < this.sendBuffer.length; i++) {
+    this.packet(this.sendBuffer[i]);
+  }
+  this.sendBuffer = [];
+};
+
+/**
+ * Called upon server disconnect.
+ *
+ * @api private
+ */
+
+Socket.prototype.ondisconnect = function(){
+  debug('server disconnect (%s)', this.nsp);
+  this.destroy();
+  this.onclose('io server disconnect');
+};
+
+/**
+ * Called upon forced client/server side disconnections,
+ * this method ensures the manager stops tracking us and
+ * that reconnections don't get triggered for this.
+ *
+ * @api private.
+ */
+
+Socket.prototype.destroy = function(){
+  if (this.subs) {
+    // clean subscriptions to avoid reconnections
+    for (var i = 0; i < this.subs.length; i++) {
+      this.subs[i].destroy();
+    }
+    this.subs = null;
+  }
+
+  this.io.destroy(this);
+};
+
+/**
+ * Disconnects the socket manually.
+ *
+ * @return {Socket} self
+ * @api public
+ */
+
+Socket.prototype.close =
+Socket.prototype.disconnect = function(){
+  if (this.connected) {
+    debug('performing disconnect (%s)', this.nsp);
+    this.packet({ type: parser.DISCONNECT });
+  }
+
+  // remove socket from pool
+  this.destroy();
+
+  if (this.connected) {
+    // fire events
+    this.onclose('io client disconnect');
+  }
+  return this;
+};
+
+},{"./on":117,"component-bind":121,"component-emitter":122,"debug":123,"has-binary":154,"socket.io-parser":160,"to-array":166}],119:[function(require,module,exports){
+(function (global){
+
+/**
+ * Module dependencies.
+ */
+
+var parseuri = require('parseuri');
+var debug = require('debug')('socket.io-client:url');
+
+/**
+ * Module exports.
+ */
+
+module.exports = url;
+
+/**
+ * URL parser.
+ *
+ * @param {String} url
+ * @param {Object} An object meant to mimic window.location.
+ *                 Defaults to window.location.
+ * @api public
+ */
+
+function url(uri, loc){
+  var obj = uri;
+
+  // default to window.location
+  var loc = loc || global.location;
+  if (null == uri) uri = loc.protocol + '//' + loc.host;
+
+  // relative path support
+  if ('string' == typeof uri) {
+    if ('/' == uri.charAt(0)) {
+      if ('/' == uri.charAt(1)) {
+        uri = loc.protocol + uri;
+      } else {
+        uri = loc.hostname + uri;
+      }
+    }
+
+    if (!/^(https?|wss?):\/\//.test(uri)) {
+      debug('protocol-less url %s', uri);
+      if ('undefined' != typeof loc) {
+        uri = loc.protocol + '//' + uri;
+      } else {
+        uri = 'https://' + uri;
+      }
+    }
+
+    // parse
+    debug('parse %s', uri);
+    obj = parseuri(uri);
+  }
+
+  // make sure we treat `localhost:80` and `localhost` equally
+  if (!obj.port) {
+    if (/^(http|ws)$/.test(obj.protocol)) {
+      obj.port = '80';
+    }
+    else if (/^(http|ws)s$/.test(obj.protocol)) {
+      obj.port = '443';
+    }
+  }
+
+  obj.path = obj.path || '/';
+
+  // define unique id
+  obj.id = obj.protocol + '://' + obj.host + ':' + obj.port;
+  // define href
+  obj.href = obj.protocol + '://' + obj.host + (loc && loc.port == obj.port ? '' : (':' + obj.port));
+
+  return obj;
+}
+
+}).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
+},{"debug":123,"parseuri":158}],120:[function(require,module,exports){
+
+/**
+ * Expose `Backoff`.
+ */
+
+module.exports = Backoff;
+
+/**
+ * Initialize backoff timer with `opts`.
+ *
+ * - `min` initial timeout in milliseconds [100]
+ * - `max` max timeout [10000]
+ * - `jitter` [0]
+ * - `factor` [2]
+ *
+ * @param {Object} opts
+ * @api public
+ */
+
+function Backoff(opts) {
+  opts = opts || {};
+  this.ms = opts.min || 100;
+  this.max = opts.max || 10000;
+  this.factor = opts.factor || 2;
+  this.jitter = opts.jitter > 0 && opts.jitter <= 1 ? opts.jitter : 0;
+  this.attempts = 0;
+}
+
+/**
+ * Return the backoff duration.
+ *
+ * @return {Number}
+ * @api public
+ */
+
+Backoff.prototype.duration = function(){
+  var ms = this.ms * Math.pow(this.factor, this.attempts++);
+  if (this.jitter) {
+    var rand =  Math.random();
+    var deviation = Math.floor(rand * this.jitter * ms);
+    ms = (Math.floor(rand * 10) & 1) == 0  ? ms - deviation : ms + deviation;
+  }
+  return Math.min(ms, this.max) | 0;
+};
+
+/**
+ * Reset the number of attempts.
+ *
+ * @api public
+ */
+
+Backoff.prototype.reset = function(){
+  this.attempts = 0;
+};
+
+/**
+ * Set the minimum duration
+ *
+ * @api public
+ */
+
+Backoff.prototype.setMin = function(min){
+  this.ms = min;
+};
+
+/**
+ * Set the maximum duration
+ *
+ * @api public
+ */
+
+Backoff.prototype.setMax = function(max){
+  this.max = max;
+};
+
+/**
+ * Set the jitter
+ *
+ * @api public
+ */
+
+Backoff.prototype.setJitter = function(jitter){
+  this.jitter = jitter;
+};
+
+
+},{}],121:[function(require,module,exports){
+/**
+ * Slice reference.
+ */
+
+var slice = [].slice;
+
+/**
+ * Bind `obj` to `fn`.
+ *
+ * @param {Object} obj
+ * @param {Function|String} fn or string
+ * @return {Function}
+ * @api public
+ */
+
+module.exports = function(obj, fn){
+  if ('string' == typeof fn) fn = obj[fn];
+  if ('function' != typeof fn) throw new Error('bind() requires a function');
+  var args = slice.call(arguments, 2);
+  return function(){
+    return fn.apply(obj, args.concat(slice.call(arguments)));
+  }
+};
+
+},{}],122:[function(require,module,exports){
+
+/**
+ * Expose `Emitter`.
+ */
+
+module.exports = Emitter;
+
+/**
+ * Initialize a new `Emitter`.
+ *
+ * @api public
+ */
+
+function Emitter(obj) {
+  if (obj) return mixin(obj);
+};
+
+/**
+ * Mixin the emitter properties.
+ *
+ * @param {Object} obj
+ * @return {Object}
+ * @api private
+ */
+
+function mixin(obj) {
+  for (var key in Emitter.prototype) {
+    obj[key] = Emitter.prototype[key];
+  }
+  return obj;
+}
+
+/**
+ * Listen on the given `event` with `fn`.
+ *
+ * @param {String} event
+ * @param {Function} fn
+ * @return {Emitter}
+ * @api public
+ */
+
+Emitter.prototype.on =
+Emitter.prototype.addEventListener = function(event, fn){
+  this._callbacks = this._callbacks || {};
+  (this._callbacks[event] = this._callbacks[event] || [])
+    .push(fn);
+  return this;
+};
+
+/**
+ * Adds an `event` listener that will be invoked a single
+ * time then automatically removed.
+ *
+ * @param {String} event
+ * @param {Function} fn
+ * @return {Emitter}
+ * @api public
+ */
+
+Emitter.prototype.once = function(event, fn){
+  var self = this;
+  this._callbacks = this._callbacks || {};
+
+  function on() {
+    self.off(event, on);
+    fn.apply(this, arguments);
+  }
+
+  on.fn = fn;
+  this.on(event, on);
+  return this;
+};
+
+/**
+ * Remove the given callback for `event` or all
+ * registered callbacks.
+ *
+ * @param {String} event
+ * @param {Function} fn
+ * @return {Emitter}
+ * @api public
+ */
+
+Emitter.prototype.off =
+Emitter.prototype.removeListener =
+Emitter.prototype.removeAllListeners =
+Emitter.prototype.removeEventListener = function(event, fn){
+  this._callbacks = this._callbacks || {};
+
+  // all
+  if (0 == arguments.length) {
+    this._callbacks = {};
+    return this;
+  }
+
+  // specific event
+  var callbacks = this._callbacks[event];
+  if (!callbacks) return this;
+
+  // remove all handlers
+  if (1 == arguments.length) {
+    delete this._callbacks[event];
+    return this;
+  }
+
+  // remove specific handler
+  var cb;
+  for (var i = 0; i < callbacks.length; i++) {
+    cb = callbacks[i];
+    if (cb === fn || cb.fn === fn) {
+      callbacks.splice(i, 1);
+      break;
+    }
+  }
+  return this;
+};
+
+/**
+ * Emit `event` with the given args.
+ *
+ * @param {String} event
+ * @param {Mixed} ...
+ * @return {Emitter}
+ */
+
+Emitter.prototype.emit = function(event){
+  this._callbacks = this._callbacks || {};
+  var args = [].slice.call(arguments, 1)
+    , callbacks = this._callbacks[event];
+
+  if (callbacks) {
+    callbacks = callbacks.slice(0);
+    for (var i = 0, len = callbacks.length; i < len; ++i) {
+      callbacks[i].apply(this, args);
+    }
+  }
+
+  return this;
+};
+
+/**
+ * Return array of callbacks for `event`.
+ *
+ * @param {String} event
+ * @return {Array}
+ * @api public
+ */
+
+Emitter.prototype.listeners = function(event){
+  this._callbacks = this._callbacks || {};
+  return this._callbacks[event] || [];
+};
+
+/**
+ * Check if this emitter has `event` handlers.
+ *
+ * @param {String} event
+ * @return {Boolean}
+ * @api public
+ */
+
+Emitter.prototype.hasListeners = function(event){
+  return !! this.listeners(event).length;
+};
+
+},{}],123:[function(require,module,exports){
+
+/**
+ * Expose `debug()` as the module.
+ */
+
+module.exports = debug;
+
+/**
+ * Create a debugger with the given `name`.
+ *
+ * @param {String} name
+ * @return {Type}
+ * @api public
+ */
+
+function debug(name) {
+  if (!debug.enabled(name)) return function(){};
+
+  return function(fmt){
+    fmt = coerce(fmt);
+
+    var curr = new Date;
+    var ms = curr - (debug[name] || curr);
+    debug[name] = curr;
+
+    fmt = name
+      + ' '
+      + fmt
+      + ' +' + debug.humanize(ms);
+
+    // This hackery is required for IE8
+    // where `console.log` doesn't have 'apply'
+    window.console
+      && console.log
+      && Function.prototype.apply.call(console.log, console, arguments);
+  }
+}
+
+/**
+ * The currently active debug mode names.
+ */
+
+debug.names = [];
+debug.skips = [];
+
+/**
+ * Enables a debug mode by name. This can include modes
+ * separated by a colon and wildcards.
+ *
+ * @param {String} name
+ * @api public
+ */
+
+debug.enable = function(name) {
+  try {
+    localStorage.debug = name;
+  } catch(e){}
+
+  var split = (name || '').split(/[\s,]+/)
+    , len = split.length;
+
+  for (var i = 0; i < len; i++) {
+    name = split[i].replace('*', '.*?');
+    if (name[0] === '-') {
+      debug.skips.push(new RegExp('^' + name.substr(1) + '$'));
+    }
+    else {
+      debug.names.push(new RegExp('^' + name + '$'));
+    }
+  }
+};
+
+/**
+ * Disable debug output.
+ *
+ * @api public
+ */
+
+debug.disable = function(){
+  debug.enable('');
+};
+
+/**
+ * Humanize the given `ms`.
+ *
+ * @param {Number} m
+ * @return {String}
+ * @api private
+ */
+
+debug.humanize = function(ms) {
+  var sec = 1000
+    , min = 60 * 1000
+    , hour = 60 * min;
+
+  if (ms >= hour) return (ms / hour).toFixed(1) + 'h';
+  if (ms >= min) return (ms / min).toFixed(1) + 'm';
+  if (ms >= sec) return (ms / sec | 0) + 's';
+  return ms + 'ms';
+};
+
+/**
+ * Returns true if the given mode name is enabled, false otherwise.
+ *
+ * @param {String} name
+ * @return {Boolean}
+ * @api public
+ */
+
+debug.enabled = function(name) {
+  for (var i = 0, len = debug.skips.length; i < len; i++) {
+    if (debug.skips[i].test(name)) {
+      return false;
+    }
+  }
+  for (var i = 0, len = debug.names.length; i < len; i++) {
+    if (debug.names[i].test(name)) {
+      return true;
+    }
+  }
+  return false;
+};
+
+/**
+ * Coerce `val`.
+ */
+
+function coerce(val) {
+  if (val instanceof Error) return val.stack || val.message;
+  return val;
+}
+
+// persist
+
+try {
+  if (window.localStorage) debug.enable(localStorage.debug);
+} catch(e){}
+
+},{}],124:[function(require,module,exports){
+
+module.exports =  require('./lib/');
+
+},{"./lib/":125}],125:[function(require,module,exports){
+
+module.exports = require('./socket');
+
+/**
+ * Exports parser
+ *
+ * @api public
+ *
+ */
+module.exports.parser = require('engine.io-parser');
+
+},{"./socket":126,"engine.io-parser":139}],126:[function(require,module,exports){
+(function (global){
+/**
+ * Module dependencies.
+ */
+
+var transports = require('./transports');
+var Emitter = require('component-emitter');
+var debug = require('debug')('engine.io-client:socket');
+var index = require('indexof');
+var parser = require('engine.io-parser');
+var parseuri = require('parseuri');
+var parsejson = require('parsejson');
+var parseqs = require('parseqs');
+
+/**
+ * Module exports.
+ */
+
+module.exports = Socket;
+
+/**
+ * Noop function.
+ *
+ * @api private
+ */
+
+function noop(){}
+
+/**
+ * Socket constructor.
+ *
+ * @param {String|Object} uri or options
+ * @param {Object} options
+ * @api public
+ */
+
+function Socket(uri, opts){
+  if (!(this instanceof Socket)) return new Socket(uri, opts);
+
+  opts = opts || {};
+
+  if (uri && 'object' == typeof uri) {
+    opts = uri;
+    uri = null;
+  }
+
+  if (uri) {
+    uri = parseuri(uri);
+    opts.host = uri.host;
+    opts.secure = uri.protocol == 'https' || uri.protocol == 'wss';
+    opts.port = uri.port;
+    if (uri.query) opts.query = uri.query;
+  }
+
+  this.secure = null != opts.secure ? opts.secure :
+    (global.location && 'https:' == location.protocol);
+
+  if (opts.host) {
+    var pieces = opts.host.split(':');
+    opts.hostname = pieces.shift();
+    if (pieces.length) {
+      opts.port = pieces.pop();
+    } else if (!opts.port) {
+      // if no port is specified manually, use the protocol default
+      opts.port = this.secure ? '443' : '80';
+    }
+  }
+
+  this.agent = opts.agent || false;
+  this.hostname = opts.hostname ||
+    (global.location ? location.hostname : 'localhost');
+  this.port = opts.port || (global.location && location.port ?
+       location.port :
+       (this.secure ? 443 : 80));
+  this.query = opts.query || {};
+  if ('string' == typeof this.query) this.query = parseqs.decode(this.query);
+  this.upgrade = false !== opts.upgrade;
+  this.path = (opts.path || '/engine.io').replace(/\/$/, '') + '/';
+  this.forceJSONP = !!opts.forceJSONP;
+  this.jsonp = false !== opts.jsonp;
+  this.forceBase64 = !!opts.forceBase64;
+  this.enablesXDR = !!opts.enablesXDR;
+  this.timestampParam = opts.timestampParam || 't';
+  this.timestampRequests = opts.timestampRequests;
+  this.transports = opts.transports || ['polling', 'websocket'];
+  this.readyState = '';
+  this.writeBuffer = [];
+  this.callbackBuffer = [];
+  this.policyPort = opts.policyPort || 843;
+  this.rememberUpgrade = opts.rememberUpgrade || false;
+  this.binaryType = null;
+  this.onlyBinaryUpgrades = opts.onlyBinaryUpgrades;
+
+  // SSL options for Node.js client
+  this.pfx = opts.pfx || null;
+  this.key = opts.key || null;
+  this.passphrase = opts.passphrase || null;
+  this.cert = opts.cert || null;
+  this.ca = opts.ca || null;
+  this.ciphers = opts.ciphers || null;
+  this.rejectUnauthorized = opts.rejectUnauthorized || null;
+
+  this.open();
+}
+
+Socket.priorWebsocketSuccess = false;
+
+/**
+ * Mix in `Emitter`.
+ */
+
+Emitter(Socket.prototype);
+
+/**
+ * Protocol version.
+ *
+ * @api public
+ */
+
+Socket.protocol = parser.protocol; // this is an int
+
+/**
+ * Expose deps for legacy compatibility
+ * and standalone browser access.
+ */
+
+Socket.Socket = Socket;
+Socket.Transport = require('./transport');
+Socket.transports = require('./transports');
+Socket.parser = require('engine.io-parser');
+
+/**
+ * Creates transport of the given type.
+ *
+ * @param {String} transport name
+ * @return {Transport}
+ * @api private
+ */
+
+Socket.prototype.createTransport = function (name) {
+  debug('creating transport "%s"', name);
+  var query = clone(this.query);
+
+  // append engine.io protocol identifier
+  query.EIO = parser.protocol;
+
+  // transport name
+  query.transport = name;
+
+  // session id if we already have one
+  if (this.id) query.sid = this.id;
+
+  var transport = new transports[name]({
+    agent: this.agent,
+    hostname: this.hostname,
+    port: this.port,
+    secure: this.secure,
+    path: this.path,
+    query: query,
+    forceJSONP: this.forceJSONP,
+    jsonp: this.jsonp,
+    forceBase64: this.forceBase64,
+    enablesXDR: this.enablesXDR,
+    timestampRequests: this.timestampRequests,
+    timestampParam: this.timestampParam,
+    policyPort: this.policyPort,
+    socket: this,
+    pfx: this.pfx,
+    key: this.key,
+    passphrase: this.passphrase,
+    cert: this.cert,
+    ca: this.ca,
+    ciphers: this.ciphers,
+    rejectUnauthorized: this.rejectUnauthorized
+  });
+
+  return transport;
+};
+
+function clone (obj) {
+  var o = {};
+  for (var i in obj) {
+    if (obj.hasOwnProperty(i)) {
+      o[i] = obj[i];
+    }
+  }
+  return o;
+}
+
+/**
+ * Initializes transport to use and starts probe.
+ *
+ * @api private
+ */
+Socket.prototype.open = function () {
+  var transport;
+  if (this.rememberUpgrade && Socket.priorWebsocketSuccess && this.transports.indexOf('websocket') != -1) {
+    transport = 'websocket';
+  } else if (0 == this.transports.length) {
+    // Emit error on next tick so it can be listened to
+    var self = this;
+    setTimeout(function() {
+      self.emit('error', 'No transports available');
+    }, 0);
+    return;
+  } else {
+    transport = this.transports[0];
+  }
+  this.readyState = 'opening';
+
+  // Retry with the next transport if the transport is disabled (jsonp: false)
+  var transport;
+  try {
+    transport = this.createTransport(transport);
+  } catch (e) {
+    this.transports.shift();
+    this.open();
+    return;
+  }
+
+  transport.open();
+  this.setTransport(transport);
+};
+
+/**
+ * Sets the current transport. Disables the existing one (if any).
+ *
+ * @api private
+ */
+
+Socket.prototype.setTransport = function(transport){
+  debug('setting transport %s', transport.name);
+  var self = this;
+
+  if (this.transport) {
+    debug('clearing existing transport %s', this.transport.name);
+    this.transport.removeAllListeners();
+  }
+
+  // set up transport
+  this.transport = transport;
+
+  // set up transport listeners
+  transport
+  .on('drain', function(){
+    self.onDrain();
+  })
+  .on('packet', function(packet){
+    self.onPacket(packet);
+  })
+  .on('error', function(e){
+    self.onError(e);
+  })
+  .on('close', function(){
+    self.onClose('transport close');
+  });
+};
+
+/**
+ * Probes a transport.
+ *
+ * @param {String} transport name
+ * @api private
+ */
+
+Socket.prototype.probe = function (name) {
+  debug('probing transport "%s"', name);
+  var transport = this.createTransport(name, { probe: 1 })
+    , failed = false
+    , self = this;
+
+  Socket.priorWebsocketSuccess = false;
+
+  function onTransportOpen(){
+    if (self.onlyBinaryUpgrades) {
+      var upgradeLosesBinary = !this.supportsBinary && self.transport.supportsBinary;
+      failed = failed || upgradeLosesBinary;
+    }
+    if (failed) return;
+
+    debug('probe transport "%s" opened', name);
+    transport.send([{ type: 'ping', data: 'probe' }]);
+    transport.once('packet', function (msg) {
+      if (failed) return;
+      if ('pong' == msg.type && 'probe' == msg.data) {
+        debug('probe transport "%s" pong', name);
+        self.upgrading = true;
+        self.emit('upgrading', transport);
+        if (!transport) return;
+        Socket.priorWebsocketSuccess = 'websocket' == transport.name;
+
+        debug('pausing current transport "%s"', self.transport.name);
+        self.transport.pause(function () {
+          if (failed) return;
+          if ('closed' == self.readyState) return;
+          debug('changing transport and sending upgrade packet');
+
+          cleanup();
+
+          self.setTransport(transport);
+          transport.send([{ type: 'upgrade' }]);
+          self.emit('upgrade', transport);
+          transport = null;
+          self.upgrading = false;
+          self.flush();
+        });
+      } else {
+        debug('probe transport "%s" failed', name);
+        var err = new Error('probe error');
+        err.transport = transport.name;
+        self.emit('upgradeError', err);
+      }
+    });
+  }
+
+  function freezeTransport() {
+    if (failed) return;
+
+    // Any callback called by transport should be ignored since now
+    failed = true;
+
+    cleanup();
+
+    transport.close();
+    transport = null;
+  }
+
+  //Handle any error that happens while probing
+  function onerror(err) {
+    var error = new Error('probe error: ' + err);
+    error.transport = transport.name;
+
+    freezeTransport();
+
+    debug('probe transport "%s" failed because of error: %s', name, err);
+
+    self.emit('upgradeError', error);
+  }
+
+  function onTransportClose(){
+    onerror("transport closed");
+  }
+
+  //When the socket is closed while we're probing
+  function onclose(){
+    onerror("socket closed");
+  }
+
+  //When the socket is upgraded while we're probing
+  function onupgrade(to){
+    if (transport && to.name != transport.name) {
+      debug('"%s" works - aborting "%s"', to.name, transport.name);
+      freezeTransport();
+    }
+  }
+
+  //Remove all listeners on the transport and on self
+  function cleanup(){
+    transport.removeListener('open', onTransportOpen);
+    transport.removeListener('error', onerror);
+    transport.removeListener('close', onTransportClose);
+    self.removeListener('close', onclose);
+    self.removeListener('upgrading', onupgrade);
+  }
+
+  transport.once('open', onTransportOpen);
+  transport.once('error', onerror);
+  transport.once('close', onTransportClose);
+
+  this.once('close', onclose);
+  this.once('upgrading', onupgrade);
+
+  transport.open();
+
+};
+
+/**
+ * Called when connection is deemed open.
+ *
+ * @api public
+ */
+
+Socket.prototype.onOpen = function () {
+  debug('socket open');
+  this.readyState = 'open';
+  Socket.priorWebsocketSuccess = 'websocket' == this.transport.name;
+  this.emit('open');
+  this.flush();
+
+  // we check for `readyState` in case an `open`
+  // listener already closed the socket
+  if ('open' == this.readyState && this.upgrade && this.transport.pause) {
+    debug('starting upgrade probes');
+    for (var i = 0, l = this.upgrades.length; i < l; i++) {
+      this.probe(this.upgrades[i]);
+    }
+  }
+};
+
+/**
+ * Handles a packet.
+ *
+ * @api private
+ */
+
+Socket.prototype.onPacket = function (packet) {
+  if ('opening' == this.readyState || 'open' == this.readyState) {
+    debug('socket receive: type "%s", data "%s"', packet.type, packet.data);
+
+    this.emit('packet', packet);
+
+    // Socket is live - any packet counts
+    this.emit('heartbeat');
+
+    switch (packet.type) {
+      case 'open':
+        this.onHandshake(parsejson(packet.data));
+        break;
+
+      case 'pong':
+        this.setPing();
+        break;
+
+      case 'error':
+        var err = new Error('server error');
+        err.code = packet.data;
+        this.emit('error', err);
+        break;
+
+      case 'message':
+        this.emit('data', packet.data);
+        this.emit('message', packet.data);
+        break;
+    }
+  } else {
+    debug('packet received with socket readyState "%s"', this.readyState);
+  }
+};
+
+/**
+ * Called upon handshake completion.
+ *
+ * @param {Object} handshake obj
+ * @api private
+ */
+
+Socket.prototype.onHandshake = function (data) {
+  this.emit('handshake', data);
+  this.id = data.sid;
+  this.transport.query.sid = data.sid;
+  this.upgrades = this.filterUpgrades(data.upgrades);
+  this.pingInterval = data.pingInterval;
+  this.pingTimeout = data.pingTimeout;
+  this.onOpen();
+  // In case open handler closes socket
+  if  ('closed' == this.readyState) return;
+  this.setPing();
+
+  // Prolong liveness of socket on heartbeat
+  this.removeListener('heartbeat', this.onHeartbeat);
+  this.on('heartbeat', this.onHeartbeat);
+};
+
+/**
+ * Resets ping timeout.
+ *
+ * @api private
+ */
+
+Socket.prototype.onHeartbeat = function (timeout) {
+  clearTimeout(this.pingTimeoutTimer);
+  var self = this;
+  self.pingTimeoutTimer = setTimeout(function () {
+    if ('closed' == self.readyState) return;
+    self.onClose('ping timeout');
+  }, timeout || (self.pingInterval + self.pingTimeout));
+};
+
+/**
+ * Pings server every `this.pingInterval` and expects response
+ * within `this.pingTimeout` or closes connection.
+ *
+ * @api private
+ */
+
+Socket.prototype.setPing = function () {
+  var self = this;
+  clearTimeout(self.pingIntervalTimer);
+  self.pingIntervalTimer = setTimeout(function () {
+    debug('writing ping packet - expecting pong within %sms', self.pingTimeout);
+    self.ping();
+    self.onHeartbeat(self.pingTimeout);
+  }, self.pingInterval);
+};
+
+/**
+* Sends a ping packet.
+*
+* @api public
+*/
+
+Socket.prototype.ping = function () {
+  this.sendPacket('ping');
+};
+
+/**
+ * Called on `drain` event
+ *
+ * @api private
+ */
+
+Socket.prototype.onDrain = function() {
+  for (var i = 0; i < this.prevBufferLen; i++) {
+    if (this.callbackBuffer[i]) {
+      this.callbackBuffer[i]();
+    }
+  }
+
+  this.writeBuffer.splice(0, this.prevBufferLen);
+  this.callbackBuffer.splice(0, this.prevBufferLen);
+
+  // setting prevBufferLen = 0 is very important
+  // for example, when upgrading, upgrade packet is sent over,
+  // and a nonzero prevBufferLen could cause problems on `drain`
+  this.prevBufferLen = 0;
+
+  if (this.writeBuffer.length == 0) {
+    this.emit('drain');
+  } else {
+    this.flush();
+  }
+};
+
+/**
+ * Flush write buffers.
+ *
+ * @api private
+ */
+
+Socket.prototype.flush = function () {
+  if ('closed' != this.readyState && this.transport.writable &&
+    !this.upgrading && this.writeBuffer.length) {
+    debug('flushing %d packets in socket', this.writeBuffer.length);
+    this.transport.send(this.writeBuffer);
+    // keep track of current length of writeBuffer
+    // splice writeBuffer and callbackBuffer on `drain`
+    this.prevBufferLen = this.writeBuffer.length;
+    this.emit('flush');
+  }
+};
+
+/**
+ * Sends a message.
+ *
+ * @param {String} message.
+ * @param {Function} callback function.
+ * @return {Socket} for chaining.
+ * @api public
+ */
+
+Socket.prototype.write =
+Socket.prototype.send = function (msg, fn) {
+  this.sendPacket('message', msg, fn);
+  return this;
+};
+
+/**
+ * Sends a packet.
+ *
+ * @param {String} packet type.
+ * @param {String} data.
+ * @param {Function} callback function.
+ * @api private
+ */
+
+Socket.prototype.sendPacket = function (type, data, fn) {
+  if ('closing' == this.readyState || 'closed' == this.readyState) {
+    return;
+  }
+
+  var packet = { type: type, data: data };
+  this.emit('packetCreate', packet);
+  this.writeBuffer.push(packet);
+  this.callbackBuffer.push(fn);
+  this.flush();
+};
+
+/**
+ * Closes the connection.
+ *
+ * @api private
+ */
+
+Socket.prototype.close = function () {
+  if ('opening' == this.readyState || 'open' == this.readyState) {
+    this.readyState = 'closing';
+
+    var self = this;
+
+    function close() {
+      self.onClose('forced close');
+      debug('socket closing - telling transport to close');
+      self.transport.close();
+    }
+
+    function cleanupAndClose() {
+      self.removeListener('upgrade', cleanupAndClose);
+      self.removeListener('upgradeError', cleanupAndClose);
+      close();
+    }
+
+    function waitForUpgrade() {
+      // wait for upgrade to finish since we can't send packets while pausing a transport
+      self.once('upgrade', cleanupAndClose);
+      self.once('upgradeError', cleanupAndClose);
+    }
+
+    if (this.writeBuffer.length) {
+      this.once('drain', function() {
+        if (this.upgrading) {
+          waitForUpgrade();
+        } else {
+          close();
+        }
+      });
+    } else if (this.upgrading) {
+      waitForUpgrade();
+    } else {
+      close();
+    }
+  }
+
+  return this;
+};
+
+/**
+ * Called upon transport error
+ *
+ * @api private
+ */
+
+Socket.prototype.onError = function (err) {
+  debug('socket error %j', err);
+  Socket.priorWebsocketSuccess = false;
+  this.emit('error', err);
+  this.onClose('transport error', err);
+};
+
+/**
+ * Called upon transport close.
+ *
+ * @api private
+ */
+
+Socket.prototype.onClose = function (reason, desc) {
+  if ('opening' == this.readyState || 'open' == this.readyState || 'closing' == this.readyState) {
+    debug('socket close with reason: "%s"', reason);
+    var self = this;
+
+    // clear timers
+    clearTimeout(this.pingIntervalTimer);
+    clearTimeout(this.pingTimeoutTimer);
+
+    // clean buffers in next tick, so developers can still
+    // grab the buffers on `close` event
+    setTimeout(function() {
+      self.writeBuffer = [];
+      self.callbackBuffer = [];
+      self.prevBufferLen = 0;
+    }, 0);
+
+    // stop event from firing again for transport
+    this.transport.removeAllListeners('close');
+
+    // ensure transport won't stay open
+    this.transport.close();
+
+    // ignore further transport communication
+    this.transport.removeAllListeners();
+
+    // set ready state
+    this.readyState = 'closed';
+
+    // clear session id
+    this.id = null;
+
+    // emit close event
+    this.emit('close', reason, desc);
+  }
+};
+
+/**
+ * Filters upgrades, returning only those matching client transports.
+ *
+ * @param {Array} server upgrades
+ * @api private
+ *
+ */
+
+Socket.prototype.filterUpgrades = function (upgrades) {
+  var filteredUpgrades = [];
+  for (var i = 0, j = upgrades.length; i<j; i++) {
+    if (~index(this.transports, upgrades[i])) filteredUpgrades.push(upgrades[i]);
+  }
+  return filteredUpgrades;
+};
+
+}).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
+},{"./transport":127,"./transports":128,"component-emitter":134,"debug":136,"engine.io-parser":139,"indexof":156,"parsejson":150,"parseqs":151,"parseuri":152}],127:[function(require,module,exports){
+/**
+ * Module dependencies.
+ */
+
+var parser = require('engine.io-parser');
+var Emitter = require('component-emitter');
+
+/**
+ * Module exports.
+ */
+
+module.exports = Transport;
+
+/**
+ * Transport abstract constructor.
+ *
+ * @param {Object} options.
+ * @api private
+ */
+
+function Transport (opts) {
+  this.path = opts.path;
+  this.hostname = opts.hostname;
+  this.port = opts.port;
+  this.secure = opts.secure;
+  this.query = opts.query;
+  this.timestampParam = opts.timestampParam;
+  this.timestampRequests = opts.timestampRequests;
+  this.readyState = '';
+  this.agent = opts.agent || false;
+  this.socket = opts.socket;
+  this.enablesXDR = opts.enablesXDR;
+
+  // SSL options for Node.js client
+  this.pfx = opts.pfx;
+  this.key = opts.key;
+  this.passphrase = opts.passphrase;
+  this.cert = opts.cert;
+  this.ca = opts.ca;
+  this.ciphers = opts.ciphers;
+  this.rejectUnauthorized = opts.rejectUnauthorized;
+}
+
+/**
+ * Mix in `Emitter`.
+ */
+
+Emitter(Transport.prototype);
+
+/**
+ * A counter used to prevent collisions in the timestamps used
+ * for cache busting.
+ */
+
+Transport.timestamps = 0;
+
+/**
+ * Emits an error.
+ *
+ * @param {String} str
+ * @return {Transport} for chaining
+ * @api public
+ */
+
+Transport.prototype.onError = function (msg, desc) {
+  var err = new Error(msg);
+  err.type = 'TransportError';
+  err.description = desc;
+  this.emit('error', err);
+  return this;
+};
+
+/**
+ * Opens the transport.
+ *
+ * @api public
+ */
+
+Transport.prototype.open = function () {
+  if ('closed' == this.readyState || '' == this.readyState) {
+    this.readyState = 'opening';
+    this.doOpen();
+  }
+
+  return this;
+};
+
+/**
+ * Closes the transport.
+ *
+ * @api private
+ */
+
+Transport.prototype.close = function () {
+  if ('opening' == this.readyState || 'open' == this.readyState) {
+    this.doClose();
+    this.onClose();
+  }
+
+  return this;
+};
+
+/**
+ * Sends multiple packets.
+ *
+ * @param {Array} packets
+ * @api private
+ */
+
+Transport.prototype.send = function(packets){
+  if ('open' == this.readyState) {
+    this.write(packets);
+  } else {
+    throw new Error('Transport not open');
+  }
+};
+
+/**
+ * Called upon open
+ *
+ * @api private
+ */
+
+Transport.prototype.onOpen = function () {
+  this.readyState = 'open';
+  this.writable = true;
+  this.emit('open');
+};
+
+/**
+ * Called with data.
+ *
+ * @param {String} data
+ * @api private
+ */
+
+Transport.prototype.onData = function(data){
+  var packet = parser.decodePacket(data, this.socket.binaryType);
+  this.onPacket(packet);
+};
+
+/**
+ * Called with a decoded packet.
+ */
+
+Transport.prototype.onPacket = function (packet) {
+  this.emit('packet', packet);
+};
+
+/**
+ * Called upon close.
+ *
+ * @api private
+ */
+
+Transport.prototype.onClose = function () {
+  this.readyState = 'closed';
+  this.emit('close');
+};
+
+},{"component-emitter":134,"engine.io-parser":139}],128:[function(require,module,exports){
+(function (global){
+/**
+ * Module dependencies
+ */
+
+var XMLHttpRequest = require('xmlhttprequest');
+var XHR = require('./polling-xhr');
+var JSONP = require('./polling-jsonp');
+var websocket = require('./websocket');
+
+/**
+ * Export transports.
+ */
+
+exports.polling = polling;
+exports.websocket = websocket;
+
+/**
+ * Polling transport polymorphic constructor.
+ * Decides on xhr vs jsonp based on feature detection.
+ *
+ * @api private
+ */
+
+function polling(opts){
+  var xhr;
+  var xd = false;
+  var xs = false;
+  var jsonp = false !== opts.jsonp;
+
+  if (global.location) {
+    var isSSL = 'https:' == location.protocol;
+    var port = location.port;
+
+    // some user agents have empty `location.port`
+    if (!port) {
+      port = isSSL ? 443 : 80;
+    }
+
+    xd = opts.hostname != location.hostname || port != opts.port;
+    xs = opts.secure != isSSL;
+  }
+
+  opts.xdomain = xd;
+  opts.xscheme = xs;
+  xhr = new XMLHttpRequest(opts);
+
+  if ('open' in xhr && !opts.forceJSONP) {
+    return new XHR(opts);
+  } else {
+    if (!jsonp) throw new Error('JSONP disabled');
+    return new JSONP(opts);
+  }
+}
+
+}).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
+},{"./polling-jsonp":129,"./polling-xhr":130,"./websocket":132,"xmlhttprequest":133}],129:[function(require,module,exports){
+(function (global){
+
+/**
+ * Module requirements.
+ */
+
+var Polling = require('./polling');
+var inherit = require('component-inherit');
+
+/**
+ * Module exports.
+ */
+
+module.exports = JSONPPolling;
+
+/**
+ * Cached regular expressions.
+ */
+
+var rNewline = /\n/g;
+var rEscapedNewline = /\\n/g;
+
+/**
+ * Global JSONP callbacks.
+ */
+
+var callbacks;
+
+/**
+ * Callbacks count.
+ */
+
+var index = 0;
+
+/**
+ * Noop.
+ */
+
+function empty () { }
+
+/**
+ * JSONP Polling constructor.
+ *
+ * @param {Object} opts.
+ * @api public
+ */
+
+function JSONPPolling (opts) {
+  Polling.call(this, opts);
+
+  this.query = this.query || {};
+
+  // define global callbacks array if not present
+  // we do this here (lazily) to avoid unneeded global pollution
+  if (!callbacks) {
+    // we need to consider multiple engines in the same page
+    if (!global.___eio) global.___eio = [];
+    callbacks = global.___eio;
+  }
+
+  // callback identifier
+  this.index = callbacks.length;
+
+  // add callback to jsonp global
+  var self = this;
+  callbacks.push(function (msg) {
+    self.onData(msg);
+  });
+
+  // append to query string
+  this.query.j = this.index;
+
+  // prevent spurious errors from being emitted when the window is unloaded
+  if (global.document && global.addEventListener) {
+    global.addEventListener('beforeunload', function () {
+      if (self.script) self.script.onerror = empty;
+    }, false);
+  }
+}
+
+/**
+ * Inherits from Polling.
+ */
+
+inherit(JSONPPolling, Polling);
+
+/*
+ * JSONP only supports binary as base64 encoded strings
+ */
+
+JSONPPolling.prototype.supportsBinary = false;
+
+/**
+ * Closes the socket.
+ *
+ * @api private
+ */
+
+JSONPPolling.prototype.doClose = function () {
+  if (this.script) {
+    this.script.parentNode.removeChild(this.script);
+    this.script = null;
+  }
+
+  if (this.form) {
+    this.form.parentNode.removeChild(this.form);
+    this.form = null;
+    this.iframe = null;
+  }
+
+  Polling.prototype.doClose.call(this);
+};
+
+/**
+ * Starts a poll cycle.
+ *
+ * @api private
+ */
+
+JSONPPolling.prototype.doPoll = function () {
+  var self = this;
+  var script = document.createElement('script');
+
+  if (this.script) {
+    this.script.parentNode.removeChild(this.script);
+    this.script = null;
+  }
+
+  script.async = true;
+  script.src = this.uri();
+  script.onerror = function(e){
+    self.onError('jsonp poll error',e);
+  };
+
+  var insertAt = document.getElementsByTagName('script')[0];
+  insertAt.parentNode.insertBefore(script, insertAt);
+  this.script = script;
+
+  var isUAgecko = 'undefined' != typeof navigator && /gecko/i.test(navigator.userAgent);
+  
+  if (isUAgecko) {
+    setTimeout(function () {
+      var iframe = document.createElement('iframe');
+      document.body.appendChild(iframe);
+      document.body.removeChild(iframe);
+    }, 100);
+  }
+};
+
+/**
+ * Writes with a hidden iframe.
+ *
+ * @param {String} data to send
+ * @param {Function} called upon flush.
+ * @api private
+ */
+
+JSONPPolling.prototype.doWrite = function (data, fn) {
+  var self = this;
+
+  if (!this.form) {
+    var form = document.createElement('form');
+    var area = document.createElement('textarea');
+    var id = this.iframeId = 'eio_iframe_' + this.index;
+    var iframe;
+
+    form.className = 'socketio';
+    form.style.position = 'absolute';
+    form.style.top = '-1000px';
+    form.style.left = '-1000px';
+    form.target = id;
+    form.method = 'POST';
+    form.setAttribute('accept-charset', 'utf-8');
+    area.name = 'd';
+    form.appendChild(area);
+    document.body.appendChild(form);
+
+    this.form = form;
+    this.area = area;
+  }
+
+  this.form.action = this.uri();
+
+  function complete () {
+    initIframe();
+    fn();
+  }
+
+  function initIframe () {
+    if (self.iframe) {
+      try {
+        self.form.removeChild(self.iframe);
+      } catch (e) {
+        self.onError('jsonp polling iframe removal error', e);
+      }
+    }
+
+    try {
+      // ie6 dynamic iframes with target="" support (thanks Chris Lambacher)
+      var html = '<iframe src="javascript:0" name="'+ self.iframeId +'">';
+      iframe = document.createElement(html);
+    } catch (e) {
+      iframe = document.createElement('iframe');
+      iframe.name = self.iframeId;
+      iframe.src = 'javascript:0';
+    }
+
+    iframe.id = self.iframeId;
+
+    self.form.appendChild(iframe);
+    self.iframe = iframe;
+  }
+
+  initIframe();
+
+  // escape \n to prevent it from being converted into \r\n by some UAs
+  // double escaping is required for escaped new lines because unescaping of new lines can be done safely on server-side
+  data = data.replace(rEscapedNewline, '\\\n');
+  this.area.value = data.replace(rNewline, '\\n');
+
+  try {
+    this.form.submit();
+  } catch(e) {}
+
+  if (this.iframe.attachEvent) {
+    this.iframe.onreadystatechange = function(){
+      if (self.iframe.readyState == 'complete') {
+        complete();
+      }
+    };
+  } else {
+    this.iframe.onload = complete;
+  }
+};
+
+}).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
+},{"./polling":131,"component-inherit":135}],130:[function(require,module,exports){
+(function (global){
+/**
+ * Module requirements.
+ */
+
+var XMLHttpRequest = require('xmlhttprequest');
+var Polling = require('./polling');
+var Emitter = require('component-emitter');
+var inherit = require('component-inherit');
+var debug = require('debug')('engine.io-client:polling-xhr');
+
+/**
+ * Module exports.
+ */
+
+module.exports = XHR;
+module.exports.Request = Request;
+
+/**
+ * Empty function
+ */
+
+function empty(){}
+
+/**
+ * XHR Polling constructor.
+ *
+ * @param {Object} opts
+ * @api public
+ */
+
+function XHR(opts){
+  Polling.call(this, opts);
+
+  if (global.location) {
+    var isSSL = 'https:' == location.protocol;
+    var port = location.port;
+
+    // some user agents have empty `location.port`
+    if (!port) {
+      port = isSSL ? 443 : 80;
+    }
+
+    this.xd = opts.hostname != global.location.hostname ||
+      port != opts.port;
+    this.xs = opts.secure != isSSL;
+  }
+}
+
+/**
+ * Inherits from Polling.
+ */
+
+inherit(XHR, Polling);
+
+/**
+ * XHR supports binary
+ */
+
+XHR.prototype.supportsBinary = true;
+
+/**
+ * Creates a request.
+ *
+ * @param {String} method
+ * @api private
+ */
+
+XHR.prototype.request = function(opts){
+  opts = opts || {};
+  opts.uri = this.uri();
+  opts.xd = this.xd;
+  opts.xs = this.xs;
+  opts.agent = this.agent || false;
+  opts.supportsBinary = this.supportsBinary;
+  opts.enablesXDR = this.enablesXDR;
+
+  // SSL options for Node.js client
+  opts.pfx = this.pfx;
+  opts.key = this.key;
+  opts.passphrase = this.passphrase;
+  opts.cert = this.cert;
+  opts.ca = this.ca;
+  opts.ciphers = this.ciphers;
+  opts.rejectUnauthorized = this.rejectUnauthorized;
+
+  return new Request(opts);
+};
+
+/**
+ * Sends data.
+ *
+ * @param {String} data to send.
+ * @param {Function} called upon flush.
+ * @api private
+ */
+
+XHR.prototype.doWrite = function(data, fn){
+  var isBinary = typeof data !== 'string' && data !== undefined;
+  var req = this.request({ method: 'POST', data: data, isBinary: isBinary });
+  var self = this;
+  req.on('success', fn);
+  req.on('error', function(err){
+    self.onError('xhr post error', err);
+  });
+  this.sendXhr = req;
+};
+
+/**
+ * Starts a poll cycle.
+ *
+ * @api private
+ */
+
+XHR.prototype.doPoll = function(){
+  debug('xhr poll');
+  var req = this.request();
+  var self = this;
+  req.on('data', function(data){
+    self.onData(data);
+  });
+  req.on('error', function(err){
+    self.onError('xhr poll error', err);
+  });
+  this.pollXhr = req;
+};
+
+/**
+ * Request constructor
+ *
+ * @param {Object} options
+ * @api public
+ */
+
+function Request(opts){
+  this.method = opts.method || 'GET';
+  this.uri = opts.uri;
+  this.xd = !!opts.xd;
+  this.xs = !!opts.xs;
+  this.async = false !== opts.async;
+  this.data = undefined != opts.data ? opts.data : null;
+  this.agent = opts.agent;
+  this.isBinary = opts.isBinary;
+  this.supportsBinary = opts.supportsBinary;
+  this.enablesXDR = opts.enablesXDR;
+
+  // SSL options for Node.js client
+  this.pfx = opts.pfx;
+  this.key = opts.key;
+  this.passphrase = opts.passphrase;
+  this.cert = opts.cert;
+  this.ca = opts.ca;
+  this.ciphers = opts.ciphers;
+  this.rejectUnauthorized = opts.rejectUnauthorized;
+
+  this.create();
+}
+
+/**
+ * Mix in `Emitter`.
+ */
+
+Emitter(Request.prototype);
+
+/**
+ * Creates the XHR object and sends the request.
+ *
+ * @api private
+ */
+
+Request.prototype.create = function(){
+  var opts = { agent: this.agent, xdomain: this.xd, xscheme: this.xs, enablesXDR: this.enablesXDR };
+
+  // SSL options for Node.js client
+  opts.pfx = this.pfx;
+  opts.key = this.key;
+  opts.passphrase = this.passphrase;
+  opts.cert = this.cert;
+  opts.ca = this.ca;
+  opts.ciphers = this.ciphers;
+  opts.rejectUnauthorized = this.rejectUnauthorized;
+
+  var xhr = this.xhr = new XMLHttpRequest(opts);
+  var self = this;
+
+  try {
+    debug('xhr open %s: %s', this.method, this.uri);
+    xhr.open(this.method, this.uri, this.async);
+    if (this.supportsBinary) {
+      // This has to be done after open because Firefox is stupid
+      // http://stackoverflow.com/questions/13216903/get-binary-data-with-xmlhttprequest-in-a-firefox-extension
+      xhr.responseType = 'arraybuffer';
+    }
+
+    if ('POST' == this.method) {
+      try {
+        if (this.isBinary) {
+          xhr.setRequestHeader('Content-type', 'application/octet-stream');
+        } else {
+          xhr.setRequestHeader('Content-type', 'text/plain;charset=UTF-8');
+        }
+      } catch (e) {}
+    }
+
+    // ie6 check
+    if ('withCredentials' in xhr) {
+      xhr.withCredentials = true;
+    }
+
+    if (this.hasXDR()) {
+      xhr.onload = function(){
+        self.onLoad();
+      };
+      xhr.onerror = function(){
+        self.onError(xhr.responseText);
+      };
+    } else {
+      xhr.onreadystatechange = function(){
+        if (4 != xhr.readyState) return;
+        if (200 == xhr.status || 1223 == xhr.status) {
+          self.onLoad();
+        } else {
+          // make sure the `error` event handler that's user-set
+          // does not throw in the same tick and gets caught here
+          setTimeout(function(){
+            self.onError(xhr.status);
+          }, 0);
+        }
+      };
+    }
+
+    debug('xhr data %s', this.data);
+    xhr.send(this.data);
+  } catch (e) {
+    // Need to defer since .create() is called directly fhrom the constructor
+    // and thus the 'error' event can only be only bound *after* this exception
+    // occurs.  Therefore, also, we cannot throw here at all.
+    setTimeout(function() {
+      self.onError(e);
+    }, 0);
+    return;
+  }
+
+  if (global.document) {
+    this.index = Request.requestsCount++;
+    Request.requests[this.index] = this;
+  }
+};
+
+/**
+ * Called upon successful response.
+ *
+ * @api private
+ */
+
+Request.prototype.onSuccess = function(){
+  this.emit('success');
+  this.cleanup();
+};
+
+/**
+ * Called if we have data.
+ *
+ * @api private
+ */
+
+Request.prototype.onData = function(data){
+  this.emit('data', data);
+  this.onSuccess();
+};
+
+/**
+ * Called upon error.
+ *
+ * @api private
+ */
+
+Request.prototype.onError = function(err){
+  this.emit('error', err);
+  this.cleanup(true);
+};
+
+/**
+ * Cleans up house.
+ *
+ * @api private
+ */
+
+Request.prototype.cleanup = function(fromError){
+  if ('undefined' == typeof this.xhr || null === this.xhr) {
+    return;
+  }
+  // xmlhttprequest
+  if (this.hasXDR()) {
+    this.xhr.onload = this.xhr.onerror = empty;
+  } else {
+    this.xhr.onreadystatechange = empty;
+  }
+
+  if (fromError) {
+    try {
+      this.xhr.abort();
+    } catch(e) {}
+  }
+
+  if (global.document) {
+    delete Request.requests[this.index];
+  }
+
+  this.xhr = null;
+};
+
+/**
+ * Called upon load.
+ *
+ * @api private
+ */
+
+Request.prototype.onLoad = function(){
+  var data;
+  try {
+    var contentType;
+    try {
+      contentType = this.xhr.getResponseHeader('Content-Type').split(';')[0];
+    } catch (e) {}
+    if (contentType === 'application/octet-stream') {
+      data = this.xhr.response;
+    } else {
+      if (!this.supportsBinary) {
+        data = this.xhr.responseText;
+      } else {
+        data = 'ok';
+      }
+    }
+  } catch (e) {
+    this.onError(e);
+  }
+  if (null != data) {
+    this.onData(data);
+  }
+};
+
+/**
+ * Check if it has XDomainRequest.
+ *
+ * @api private
+ */
+
+Request.prototype.hasXDR = function(){
+  return 'undefined' !== typeof global.XDomainRequest && !this.xs && this.enablesXDR;
+};
+
+/**
+ * Aborts the request.
+ *
+ * @api public
+ */
+
+Request.prototype.abort = function(){
+  this.cleanup();
+};
+
+/**
+ * Aborts pending requests when unloading the window. This is needed to prevent
+ * memory leaks (e.g. when using IE) and to ensure that no spurious error is
+ * emitted.
+ */
+
+if (global.document) {
+  Request.requestsCount = 0;
+  Request.requests = {};
+  if (global.attachEvent) {
+    global.attachEvent('onunload', unloadHandler);
+  } else if (global.addEventListener) {
+    global.addEventListener('beforeunload', unloadHandler, false);
+  }
+}
+
+function unloadHandler() {
+  for (var i in Request.requests) {
+    if (Request.requests.hasOwnProperty(i)) {
+      Request.requests[i].abort();
+    }
+  }
+}
+
+}).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
+},{"./polling":131,"component-emitter":134,"component-inherit":135,"debug":136,"xmlhttprequest":133}],131:[function(require,module,exports){
+/**
+ * Module dependencies.
+ */
+
+var Transport = require('../transport');
+var parseqs = require('parseqs');
+var parser = require('engine.io-parser');
+var inherit = require('component-inherit');
+var debug = require('debug')('engine.io-client:polling');
+
+/**
+ * Module exports.
+ */
+
+module.exports = Polling;
+
+/**
+ * Is XHR2 supported?
+ */
+
+var hasXHR2 = (function() {
+  var XMLHttpRequest = require('xmlhttprequest');
+  var xhr = new XMLHttpRequest({ xdomain: false });
+  return null != xhr.responseType;
+})();
+
+/**
+ * Polling interface.
+ *
+ * @param {Object} opts
+ * @api private
+ */
+
+function Polling(opts){
+  var forceBase64 = (opts && opts.forceBase64);
+  if (!hasXHR2 || forceBase64) {
+    this.supportsBinary = false;
+  }
+  Transport.call(this, opts);
+}
+
+/**
+ * Inherits from Transport.
+ */
+
+inherit(Polling, Transport);
+
+/**
+ * Transport name.
+ */
+
+Polling.prototype.name = 'polling';
+
+/**
+ * Opens the socket (triggers polling). We write a PING message to determine
+ * when the transport is open.
+ *
+ * @api private
+ */
+
+Polling.prototype.doOpen = function(){
+  this.poll();
+};
+
+/**
+ * Pauses polling.
+ *
+ * @param {Function} callback upon buffers are flushed and transport is paused
+ * @api private
+ */
+
+Polling.prototype.pause = function(onPause){
+  var pending = 0;
+  var self = this;
+
+  this.readyState = 'pausing';
+
+  function pause(){
+    debug('paused');
+    self.readyState = 'paused';
+    onPause();
+  }
+
+  if (this.polling || !this.writable) {
+    var total = 0;
+
+    if (this.polling) {
+      debug('we are currently polling - waiting to pause');
+      total++;
+      this.once('pollComplete', function(){
+        debug('pre-pause polling complete');
+        --total || pause();
+      });
+    }
+
+    if (!this.writable) {
+      debug('we are currently writing - waiting to pause');
+      total++;
+      this.once('drain', function(){
+        debug('pre-pause writing complete');
+        --total || pause();
+      });
+    }
+  } else {
+    pause();
+  }
+};
+
+/**
+ * Starts polling cycle.
+ *
+ * @api public
+ */
+
+Polling.prototype.poll = function(){
+  debug('polling');
+  this.polling = true;
+  this.doPoll();
+  this.emit('poll');
+};
+
+/**
+ * Overloads onData to detect payloads.
+ *
+ * @api private
+ */
+
+Polling.prototype.onData = function(data){
+  var self = this;
+  debug('polling got data %s', data);
+  var callback = function(packet, index, total) {
+    // if its the first message we consider the transport open
+    if ('opening' == self.readyState) {
+      self.onOpen();
+    }
+
+    // if its a close packet, we close the ongoing requests
+    if ('close' == packet.type) {
+      self.onClose();
+      return false;
+    }
+
+    // otherwise bypass onData and handle the message
+    self.onPacket(packet);
+  };
+
+  // decode payload
+  parser.decodePayload(data, this.socket.binaryType, callback);
+
+  // if an event did not trigger closing
+  if ('closed' != this.readyState) {
+    // if we got data we're not polling
+    this.polling = false;
+    this.emit('pollComplete');
+
+    if ('open' == this.readyState) {
+      this.poll();
+    } else {
+      debug('ignoring poll - transport state "%s"', this.readyState);
+    }
+  }
+};
+
+/**
+ * For polling, send a close packet.
+ *
+ * @api private
+ */
+
+Polling.prototype.doClose = function(){
+  var self = this;
+
+  function close(){
+    debug('writing close packet');
+    self.write([{ type: 'close' }]);
+  }
+
+  if ('open' == this.readyState) {
+    debug('transport open - closing');
+    close();
+  } else {
+    // in case we're trying to close while
+    // handshaking is in progress (GH-164)
+    debug('transport not open - deferring close');
+    this.once('open', close);
+  }
+};
+
+/**
+ * Writes a packets payload.
+ *
+ * @param {Array} data packets
+ * @param {Function} drain callback
+ * @api private
+ */
+
+Polling.prototype.write = function(packets){
+  var self = this;
+  this.writable = false;
+  var callbackfn = function() {
+    self.writable = true;
+    self.emit('drain');
+  };
+
+  var self = this;
+  parser.encodePayload(packets, this.supportsBinary, function(data) {
+    self.doWrite(data, callbackfn);
+  });
+};
+
+/**
+ * Generates uri for connection.
+ *
+ * @api private
+ */
+
+Polling.prototype.uri = function(){
+  var query = this.query || {};
+  var schema = this.secure ? 'https' : 'http';
+  var port = '';
+
+  // cache busting is forced
+  if (false !== this.timestampRequests) {
+    query[this.timestampParam] = +new Date + '-' + Transport.timestamps++;
+  }
+
+  if (!this.supportsBinary && !query.sid) {
+    query.b64 = 1;
+  }
+
+  query = parseqs.encode(query);
+
+  // avoid port if default for schema
+  if (this.port && (('https' == schema && this.port != 443) ||
+     ('http' == schema && this.port != 80))) {
+    port = ':' + this.port;
+  }
+
+  // prepend ? to query
+  if (query.length) {
+    query = '?' + query;
+  }
+
+  return schema + '://' + this.hostname + port + this.path + query;
+};
+
+},{"../transport":127,"component-inherit":135,"debug":136,"engine.io-parser":139,"parseqs":151,"xmlhttprequest":133}],132:[function(require,module,exports){
+/**
+ * Module dependencies.
+ */
+
+var Transport = require('../transport');
+var parser = require('engine.io-parser');
+var parseqs = require('parseqs');
+var inherit = require('component-inherit');
+var debug = require('debug')('engine.io-client:websocket');
+
+/**
+ * `ws` exposes a WebSocket-compatible interface in
+ * Node, or the `WebSocket` or `MozWebSocket` globals
+ * in the browser.
+ */
+
+var WebSocket = require('ws');
+
+/**
+ * Module exports.
+ */
+
+module.exports = WS;
+
+/**
+ * WebSocket transport constructor.
+ *
+ * @api {Object} connection options
+ * @api public
+ */
+
+function WS(opts){
+  var forceBase64 = (opts && opts.forceBase64);
+  if (forceBase64) {
+    this.supportsBinary = false;
+  }
+  Transport.call(this, opts);
+}
+
+/**
+ * Inherits from Transport.
+ */
+
+inherit(WS, Transport);
+
+/**
+ * Transport name.
+ *
+ * @api public
+ */
+
+WS.prototype.name = 'websocket';
+
+/*
+ * WebSockets support binary
+ */
+
+WS.prototype.supportsBinary = true;
+
+/**
+ * Opens socket.
+ *
+ * @api private
+ */
+
+WS.prototype.doOpen = function(){
+  if (!this.check()) {
+    // let probe timeout
+    return;
+  }
+
+  var self = this;
+  var uri = this.uri();
+  var protocols = void(0);
+  var opts = { agent: this.agent };
+
+  // SSL options for Node.js client
+  opts.pfx = this.pfx;
+  opts.key = this.key;
+  opts.passphrase = this.passphrase;
+  opts.cert = this.cert;
+  opts.ca = this.ca;
+  opts.ciphers = this.ciphers;
+  opts.rejectUnauthorized = this.rejectUnauthorized;
+
+  this.ws = new WebSocket(uri, protocols, opts);
+
+  if (this.ws.binaryType === undefined) {
+    this.supportsBinary = false;
+  }
+
+  this.ws.binaryType = 'arraybuffer';
+  this.addEventListeners();
+};
+
+/**
+ * Adds event listeners to the socket
+ *
+ * @api private
+ */
+
+WS.prototype.addEventListeners = function(){
+  var self = this;
+
+  this.ws.onopen = function(){
+    self.onOpen();
+  };
+  this.ws.onclose = function(){
+    self.onClose();
+  };
+  this.ws.onmessage = function(ev){
+    self.onData(ev.data);
+  };
+  this.ws.onerror = function(e){
+    self.onError('websocket error', e);
+  };
+};
+
+/**
+ * Override `onData` to use a timer on iOS.
+ * See: https://gist.github.com/mloughran/2052006
+ *
+ * @api private
+ */
+
+if ('undefined' != typeof navigator
+  && /iPad|iPhone|iPod/i.test(navigator.userAgent)) {
+  WS.prototype.onData = function(data){
+    var self = this;
+    setTimeout(function(){
+      Transport.prototype.onData.call(self, data);
+    }, 0);
+  };
+}
+
+/**
+ * Writes data to socket.
+ *
+ * @param {Array} array of packets.
+ * @api private
+ */
+
+WS.prototype.write = function(packets){
+  var self = this;
+  this.writable = false;
+  // encodePacket efficient as it uses WS framing
+  // no need for encodePayload
+  for (var i = 0, l = packets.length; i < l; i++) {
+    parser.encodePacket(packets[i], this.supportsBinary, function(data) {
+      //Sometimes the websocket has already been closed but the browser didn't
+      //have a chance of informing us about it yet, in that case send will
+      //throw an error
+      try {
+        self.ws.send(data);
+      } catch (e){
+        debug('websocket closed before onclose event');
+      }
+    });
+  }
+
+  function ondrain() {
+    self.writable = true;
+    self.emit('drain');
+  }
+  // fake drain
+  // defer to next tick to allow Socket to clear writeBuffer
+  setTimeout(ondrain, 0);
+};
+
+/**
+ * Called upon close
+ *
+ * @api private
+ */
+
+WS.prototype.onClose = function(){
+  Transport.prototype.onClose.call(this);
+};
+
+/**
+ * Closes socket.
+ *
+ * @api private
+ */
+
+WS.prototype.doClose = function(){
+  if (typeof this.ws !== 'undefined') {
+    this.ws.close();
+  }
+};
+
+/**
+ * Generates uri for connection.
+ *
+ * @api private
+ */
+
+WS.prototype.uri = function(){
+  var query = this.query || {};
+  var schema = this.secure ? 'wss' : 'ws';
+  var port = '';
+
+  // avoid port if default for schema
+  if (this.port && (('wss' == schema && this.port != 443)
+    || ('ws' == schema && this.port != 80))) {
+    port = ':' + this.port;
+  }
+
+  // append timestamp to URI
+  if (this.timestampRequests) {
+    query[this.timestampParam] = +new Date;
+  }
+
+  // communicate binary support capabilities
+  if (!this.supportsBinary) {
+    query.b64 = 1;
+  }
+
+  query = parseqs.encode(query);
+
+  // prepend ? to query
+  if (query.length) {
+    query = '?' + query;
+  }
+
+  return schema + '://' + this.hostname + port + this.path + query;
+};
+
+/**
+ * Feature detection for WebSocket.
+ *
+ * @return {Boolean} whether this transport is available.
+ * @api public
+ */
+
+WS.prototype.check = function(){
+  return !!WebSocket && !('__initialize' in WebSocket && this.name === WS.prototype.name);
+};
+
+},{"../transport":127,"component-inherit":135,"debug":136,"engine.io-parser":139,"parseqs":151,"ws":153}],133:[function(require,module,exports){
+// browser shim for xmlhttprequest module
+var hasCORS = require('has-cors');
+
+module.exports = function(opts) {
+  var xdomain = opts.xdomain;
+
+  // scheme must be same when usign XDomainRequest
+  // http://blogs.msdn.com/b/ieinternals/archive/2010/05/13/xdomainrequest-restrictions-limitations-and-workarounds.aspx
+  var xscheme = opts.xscheme;
+
+  // XDomainRequest has a flow of not sending cookie, therefore it should be disabled as a default.
+  // https://github.com/Automattic/engine.io-client/pull/217
+  var enablesXDR = opts.enablesXDR;
+
+  // XMLHttpRequest can be disabled on IE
+  try {
+    if ('undefined' != typeof XMLHttpRequest && (!xdomain || hasCORS)) {
+      return new XMLHttpRequest();
+    }
+  } catch (e) { }
+
+  // Use XDomainRequest for IE8 if enablesXDR is true
+  // because loading bar keeps flashing when using jsonp-polling
+  // https://github.com/yujiosaka/socke.io-ie8-loading-example
+  try {
+    if ('undefined' != typeof XDomainRequest && !xscheme && enablesXDR) {
+      return new XDomainRequest();
+    }
+  } catch (e) { }
+
+  if (!xdomain) {
+    try {
+      return new ActiveXObject('Microsoft.XMLHTTP');
+    } catch(e) { }
+  }
+}
+
+},{"has-cors":148}],134:[function(require,module,exports){
+arguments[4][122][0].apply(exports,arguments)
+},{"dup":122}],135:[function(require,module,exports){
+
+module.exports = function(a, b){
+  var fn = function(){};
+  fn.prototype = b.prototype;
+  a.prototype = new fn;
+  a.prototype.constructor = a;
+};
+},{}],136:[function(require,module,exports){
+
+/**
+ * This is the web browser implementation of `debug()`.
+ *
+ * Expose `debug()` as the module.
+ */
+
+exports = module.exports = require('./debug');
+exports.log = log;
+exports.formatArgs = formatArgs;
+exports.save = save;
+exports.load = load;
+exports.useColors = useColors;
+
+/**
+ * Colors.
+ */
+
+exports.colors = [
+  'lightseagreen',
+  'forestgreen',
+  'goldenrod',
+  'dodgerblue',
+  'darkorchid',
+  'crimson'
+];
+
+/**
+ * Currently only WebKit-based Web Inspectors, Firefox >= v31,
+ * and the Firebug extension (any Firefox version) are known
+ * to support "%c" CSS customizations.
+ *
+ * TODO: add a `localStorage` variable to explicitly enable/disable colors
+ */
+
+function useColors() {
+  // is webkit? http://stackoverflow.com/a/16459606/376773
+  return ('WebkitAppearance' in document.documentElement.style) ||
+    // is firebug? http://stackoverflow.com/a/398120/376773
+    (window.console && (console.firebug || (console.exception && console.table))) ||
+    // is firefox >= v31?
+    // https://developer.mozilla.org/en-US/docs/Tools/Web_Console#Styling_messages
+    (navigator.userAgent.toLowerCase().match(/firefox\/(\d+)/) && parseInt(RegExp.$1, 10) >= 31);
+}
+
+/**
+ * Map %j to `JSON.stringify()`, since no Web Inspectors do that by default.
+ */
+
+exports.formatters.j = function(v) {
+  return JSON.stringify(v);
+};
+
+
+/**
+ * Colorize log arguments if enabled.
+ *
+ * @api public
+ */
+
+function formatArgs() {
+  var args = arguments;
+  var useColors = this.useColors;
+
+  args[0] = (useColors ? '%c' : '')
+    + this.namespace
+    + (useColors ? ' %c' : ' ')
+    + args[0]
+    + (useColors ? '%c ' : ' ')
+    + '+' + exports.humanize(this.diff);
+
+  if (!useColors) return args;
+
+  var c = 'color: ' + this.color;
+  args = [args[0], c, 'color: inherit'].concat(Array.prototype.slice.call(args, 1));
+
+  // the final "%c" is somewhat tricky, because there could be other
+  // arguments passed either before or after the %c, so we need to
+  // figure out the correct index to insert the CSS into
+  var index = 0;
+  var lastC = 0;
+  args[0].replace(/%[a-z%]/g, function(match) {
+    if ('%%' === match) return;
+    index++;
+    if ('%c' === match) {
+      // we only are interested in the *last* %c
+      // (the user may have provided their own)
+      lastC = index;
+    }
+  });
+
+  args.splice(lastC, 0, c);
+  return args;
+}
+
+/**
+ * Invokes `console.log()` when available.
+ * No-op when `console.log` is not a "function".
+ *
+ * @api public
+ */
+
+function log() {
+  // This hackery is required for IE8,
+  // where the `console.log` function doesn't have 'apply'
+  return 'object' == typeof console
+    && 'function' == typeof console.log
+    && Function.prototype.apply.call(console.log, console, arguments);
+}
+
+/**
+ * Save `namespaces`.
+ *
+ * @param {String} namespaces
+ * @api private
+ */
+
+function save(namespaces) {
+  try {
+    if (null == namespaces) {
+      localStorage.removeItem('debug');
+    } else {
+      localStorage.debug = namespaces;
+    }
+  } catch(e) {}
+}
+
+/**
+ * Load `namespaces`.
+ *
+ * @return {String} returns the previously persisted debug modes
+ * @api private
+ */
+
+function load() {
+  var r;
+  try {
+    r = localStorage.debug;
+  } catch(e) {}
+  return r;
+}
+
+/**
+ * Enable namespaces listed in `localStorage.debug` initially.
+ */
+
+exports.enable(load());
+
+},{"./debug":137}],137:[function(require,module,exports){
+
+/**
+ * This is the common logic for both the Node.js and web browser
+ * implementations of `debug()`.
+ *
+ * Expose `debug()` as the module.
+ */
+
+exports = module.exports = debug;
+exports.coerce = coerce;
+exports.disable = disable;
+exports.enable = enable;
+exports.enabled = enabled;
+exports.humanize = require('ms');
+
+/**
+ * The currently active debug mode names, and names to skip.
+ */
+
+exports.names = [];
+exports.skips = [];
+
+/**
+ * Map of special "%n" handling functions, for the debug "format" argument.
+ *
+ * Valid key names are a single, lowercased letter, i.e. "n".
+ */
+
+exports.formatters = {};
+
+/**
+ * Previously assigned color.
+ */
+
+var prevColor = 0;
+
+/**
+ * Previous log timestamp.
+ */
+
+var prevTime;
+
+/**
+ * Select a color.
+ *
+ * @return {Number}
+ * @api private
+ */
+
+function selectColor() {
+  return exports.colors[prevColor++ % exports.colors.length];
+}
+
+/**
+ * Create a debugger with the given `namespace`.
+ *
+ * @param {String} namespace
+ * @return {Function}
+ * @api public
+ */
+
+function debug(namespace) {
+
+  // define the `disabled` version
+  function disabled() {
+  }
+  disabled.enabled = false;
+
+  // define the `enabled` version
+  function enabled() {
+
+    var self = enabled;
+
+    // set `diff` timestamp
+    var curr = +new Date();
+    var ms = curr - (prevTime || curr);
+    self.diff = ms;
+    self.prev = prevTime;
+    self.curr = curr;
+    prevTime = curr;
+
+    // add the `color` if not set
+    if (null == self.useColors) self.useColors = exports.useColors();
+    if (null == self.color && self.useColors) self.color = selectColor();
+
+    var args = Array.prototype.slice.call(arguments);
+
+    args[0] = exports.coerce(args[0]);
+
+    if ('string' !== typeof args[0]) {
+      // anything else let's inspect with %o
+      args = ['%o'].concat(args);
+    }
+
+    // apply any `formatters` transformations
+    var index = 0;
+    args[0] = args[0].replace(/%([a-z%])/g, function(match, format) {
+      // if we encounter an escaped % then don't increase the array index
+      if (match === '%%') return match;
+      index++;
+      var formatter = exports.formatters[format];
+      if ('function' === typeof formatter) {
+        var val = args[index];
+        match = formatter.call(self, val);
+
+        // now we need to remove `args[index]` since it's inlined in the `format`
+        args.splice(index, 1);
+        index--;
+      }
+      return match;
+    });
+
+    if ('function' === typeof exports.formatArgs) {
+      args = exports.formatArgs.apply(self, args);
+    }
+    var logFn = enabled.log || exports.log || console.log.bind(console);
+    logFn.apply(self, args);
+  }
+  enabled.enabled = true;
+
+  var fn = exports.enabled(namespace) ? enabled : disabled;
+
+  fn.namespace = namespace;
+
+  return fn;
+}
+
+/**
+ * Enables a debug mode by namespaces. This can include modes
+ * separated by a colon and wildcards.
+ *
+ * @param {String} namespaces
+ * @api public
+ */
+
+function enable(namespaces) {
+  exports.save(namespaces);
+
+  var split = (namespaces || '').split(/[\s,]+/);
+  var len = split.length;
+
+  for (var i = 0; i < len; i++) {
+    if (!split[i]) continue; // ignore empty strings
+    namespaces = split[i].replace(/\*/g, '.*?');
+    if (namespaces[0] === '-') {
+      exports.skips.push(new RegExp('^' + namespaces.substr(1) + '$'));
+    } else {
+      exports.names.push(new RegExp('^' + namespaces + '$'));
+    }
+  }
+}
+
+/**
+ * Disable debug output.
+ *
+ * @api public
+ */
+
+function disable() {
+  exports.enable('');
+}
+
+/**
+ * Returns true if the given mode name is enabled, false otherwise.
+ *
+ * @param {String} name
+ * @return {Boolean}
+ * @api public
+ */
+
+function enabled(name) {
+  var i, len;
+  for (i = 0, len = exports.skips.length; i < len; i++) {
+    if (exports.skips[i].test(name)) {
+      return false;
+    }
+  }
+  for (i = 0, len = exports.names.length; i < len; i++) {
+    if (exports.names[i].test(name)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Coerce `val`.
+ *
+ * @param {Mixed} val
+ * @return {Mixed}
+ * @api private
+ */
+
+function coerce(val) {
+  if (val instanceof Error) return val.stack || val.message;
+  return val;
+}
+
+},{"ms":138}],138:[function(require,module,exports){
+/**
+ * Helpers.
+ */
+
+var s = 1000;
+var m = s * 60;
+var h = m * 60;
+var d = h * 24;
+var y = d * 365.25;
+
+/**
+ * Parse or format the given `val`.
+ *
+ * Options:
+ *
+ *  - `long` verbose formatting [false]
+ *
+ * @param {String|Number} val
+ * @param {Object} options
+ * @return {String|Number}
+ * @api public
+ */
+
+module.exports = function(val, options){
+  options = options || {};
+  if ('string' == typeof val) return parse(val);
+  return options.long
+    ? long(val)
+    : short(val);
+};
+
+/**
+ * Parse the given `str` and return milliseconds.
+ *
+ * @param {String} str
+ * @return {Number}
+ * @api private
+ */
+
+function parse(str) {
+  var match = /^((?:\d+)?\.?\d+) *(ms|seconds?|s|minutes?|m|hours?|h|days?|d|years?|y)?$/i.exec(str);
+  if (!match) return;
+  var n = parseFloat(match[1]);
+  var type = (match[2] || 'ms').toLowerCase();
+  switch (type) {
+    case 'years':
+    case 'year':
+    case 'y':
+      return n * y;
+    case 'days':
+    case 'day':
+    case 'd':
+      return n * d;
+    case 'hours':
+    case 'hour':
+    case 'h':
+      return n * h;
+    case 'minutes':
+    case 'minute':
+    case 'm':
+      return n * m;
+    case 'seconds':
+    case 'second':
+    case 's':
+      return n * s;
+    case 'ms':
+      return n;
+  }
+}
+
+/**
+ * Short format for `ms`.
+ *
+ * @param {Number} ms
+ * @return {String}
+ * @api private
+ */
+
+function short(ms) {
+  if (ms >= d) return Math.round(ms / d) + 'd';
+  if (ms >= h) return Math.round(ms / h) + 'h';
+  if (ms >= m) return Math.round(ms / m) + 'm';
+  if (ms >= s) return Math.round(ms / s) + 's';
+  return ms + 'ms';
+}
+
+/**
+ * Long format for `ms`.
+ *
+ * @param {Number} ms
+ * @return {String}
+ * @api private
+ */
+
+function long(ms) {
+  return plural(ms, d, 'day')
+    || plural(ms, h, 'hour')
+    || plural(ms, m, 'minute')
+    || plural(ms, s, 'second')
+    || ms + ' ms';
+}
+
+/**
+ * Pluralization helper.
+ */
+
+function plural(ms, n, name) {
+  if (ms < n) return;
+  if (ms < n * 1.5) return Math.floor(ms / n) + ' ' + name;
+  return Math.ceil(ms / n) + ' ' + name + 's';
+}
+
+},{}],139:[function(require,module,exports){
+(function (global){
+/**
+ * Module dependencies.
+ */
+
+var keys = require('./keys');
+var hasBinary = require('has-binary');
+var sliceBuffer = require('arraybuffer.slice');
+var base64encoder = require('base64-arraybuffer');
+var after = require('after');
+var utf8 = require('utf8');
+
+/**
+ * Check if we are running an android browser. That requires us to use
+ * ArrayBuffer with polling transports...
+ *
+ * http://ghinda.net/jpeg-blob-ajax-android/
+ */
+
+var isAndroid = navigator.userAgent.match(/Android/i);
+
+/**
+ * Check if we are running in PhantomJS.
+ * Uploading a Blob with PhantomJS does not work correctly, as reported here:
+ * https://github.com/ariya/phantomjs/issues/11395
+ * @type boolean
+ */
+var isPhantomJS = /PhantomJS/i.test(navigator.userAgent);
+
+/**
+ * When true, avoids using Blobs to encode payloads.
+ * @type boolean
+ */
+var dontSendBlobs = isAndroid || isPhantomJS;
+
+/**
+ * Current protocol version.
+ */
+
+exports.protocol = 3;
+
+/**
+ * Packet types.
+ */
+
+var packets = exports.packets = {
+    open:     0    // non-ws
+  , close:    1    // non-ws
+  , ping:     2
+  , pong:     3
+  , message:  4
+  , upgrade:  5
+  , noop:     6
+};
+
+var packetslist = keys(packets);
+
+/**
+ * Premade error packet.
+ */
+
+var err = { type: 'error', data: 'parser error' };
+
+/**
+ * Create a blob api even for blob builder when vendor prefixes exist
+ */
+
+var Blob = require('blob');
+
+/**
+ * Encodes a packet.
+ *
+ *     <packet type id> [ <data> ]
+ *
+ * Example:
+ *
+ *     5hello world
+ *     3
+ *     4
+ *
+ * Binary is encoded in an identical principle
+ *
+ * @api private
+ */
+
+exports.encodePacket = function (packet, supportsBinary, utf8encode, callback) {
+  if ('function' == typeof supportsBinary) {
+    callback = supportsBinary;
+    supportsBinary = false;
+  }
+
+  if ('function' == typeof utf8encode) {
+    callback = utf8encode;
+    utf8encode = null;
+  }
+
+  var data = (packet.data === undefined)
+    ? undefined
+    : packet.data.buffer || packet.data;
+
+  if (global.ArrayBuffer && data instanceof ArrayBuffer) {
+    return encodeArrayBuffer(packet, supportsBinary, callback);
+  } else if (Blob && data instanceof global.Blob) {
+    return encodeBlob(packet, supportsBinary, callback);
+  }
+
+  // might be an object with { base64: true, data: dataAsBase64String }
+  if (data && data.base64) {
+    return encodeBase64Object(packet, callback);
+  }
+
+  // Sending data as a utf-8 string
+  var encoded = packets[packet.type];
+
+  // data fragment is optional
+  if (undefined !== packet.data) {
+    encoded += utf8encode ? utf8.encode(String(packet.data)) : String(packet.data);
+  }
+
+  return callback('' + encoded);
+
+};
+
+function encodeBase64Object(packet, callback) {
+  // packet data is an object { base64: true, data: dataAsBase64String }
+  var message = 'b' + exports.packets[packet.type] + packet.data.data;
+  return callback(message);
+}
+
+/**
+ * Encode packet helpers for binary types
+ */
+
+function encodeArrayBuffer(packet, supportsBinary, callback) {
+  if (!supportsBinary) {
+    return exports.encodeBase64Packet(packet, callback);
+  }
+
+  var data = packet.data;
+  var contentArray = new Uint8Array(data);
+  var resultBuffer = new Uint8Array(1 + data.byteLength);
+
+  resultBuffer[0] = packets[packet.type];
+  for (var i = 0; i < contentArray.length; i++) {
+    resultBuffer[i+1] = contentArray[i];
+  }
+
+  return callback(resultBuffer.buffer);
+}
+
+function encodeBlobAsArrayBuffer(packet, supportsBinary, callback) {
+  if (!supportsBinary) {
+    return exports.encodeBase64Packet(packet, callback);
+  }
+
+  var fr = new FileReader();
+  fr.onload = function() {
+    packet.data = fr.result;
+    exports.encodePacket(packet, supportsBinary, true, callback);
+  };
+  return fr.readAsArrayBuffer(packet.data);
+}
+
+function encodeBlob(packet, supportsBinary, callback) {
+  if (!supportsBinary) {
+    return exports.encodeBase64Packet(packet, callback);
+  }
+
+  if (dontSendBlobs) {
+    return encodeBlobAsArrayBuffer(packet, supportsBinary, callback);
+  }
+
+  var length = new Uint8Array(1);
+  length[0] = packets[packet.type];
+  var blob = new Blob([length.buffer, packet.data]);
+
+  return callback(blob);
+}
+
+/**
+ * Encodes a packet with binary data in a base64 string
+ *
+ * @param {Object} packet, has `type` and `data`
+ * @return {String} base64 encoded message
+ */
+
+exports.encodeBase64Packet = function(packet, callback) {
+  var message = 'b' + exports.packets[packet.type];
+  if (Blob && packet.data instanceof Blob) {
+    var fr = new FileReader();
+    fr.onload = function() {
+      var b64 = fr.result.split(',')[1];
+      callback(message + b64);
+    };
+    return fr.readAsDataURL(packet.data);
+  }
+
+  var b64data;
+  try {
+    b64data = String.fromCharCode.apply(null, new Uint8Array(packet.data));
+  } catch (e) {
+    // iPhone Safari doesn't let you apply with typed arrays
+    var typed = new Uint8Array(packet.data);
+    var basic = new Array(typed.length);
+    for (var i = 0; i < typed.length; i++) {
+      basic[i] = typed[i];
+    }
+    b64data = String.fromCharCode.apply(null, basic);
+  }
+  message += global.btoa(b64data);
+  return callback(message);
+};
+
+/**
+ * Decodes a packet. Changes format to Blob if requested.
+ *
+ * @return {Object} with `type` and `data` (if any)
+ * @api private
+ */
+
+exports.decodePacket = function (data, binaryType, utf8decode) {
+  // String data
+  if (typeof data == 'string' || data === undefined) {
+    if (data.charAt(0) == 'b') {
+      return exports.decodeBase64Packet(data.substr(1), binaryType);
+    }
+
+    if (utf8decode) {
+      try {
+        data = utf8.decode(data);
+      } catch (e) {
+        return err;
+      }
+    }
+    var type = data.charAt(0);
+
+    if (Number(type) != type || !packetslist[type]) {
+      return err;
+    }
+
+    if (data.length > 1) {
+      return { type: packetslist[type], data: data.substring(1) };
+    } else {
+      return { type: packetslist[type] };
+    }
+  }
+
+  var asArray = new Uint8Array(data);
+  var type = asArray[0];
+  var rest = sliceBuffer(data, 1);
+  if (Blob && binaryType === 'blob') {
+    rest = new Blob([rest]);
+  }
+  return { type: packetslist[type], data: rest };
+};
+
+/**
+ * Decodes a packet encoded in a base64 string
+ *
+ * @param {String} base64 encoded message
+ * @return {Object} with `type` and `data` (if any)
+ */
+
+exports.decodeBase64Packet = function(msg, binaryType) {
+  var type = packetslist[msg.charAt(0)];
+  if (!global.ArrayBuffer) {
+    return { type: type, data: { base64: true, data: msg.substr(1) } };
+  }
+
+  var data = base64encoder.decode(msg.substr(1));
+
+  if (binaryType === 'blob' && Blob) {
+    data = new Blob([data]);
+  }
+
+  return { type: type, data: data };
+};
+
+/**
+ * Encodes multiple messages (payload).
+ *
+ *     <length>:data
+ *
+ * Example:
+ *
+ *     11:hello world2:hi
+ *
+ * If any contents are binary, they will be encoded as base64 strings. Base64
+ * encoded strings are marked with a b before the length specifier
+ *
+ * @param {Array} packets
+ * @api private
+ */
+
+exports.encodePayload = function (packets, supportsBinary, callback) {
+  if (typeof supportsBinary == 'function') {
+    callback = supportsBinary;
+    supportsBinary = null;
+  }
+
+  var isBinary = hasBinary(packets);
+
+  if (supportsBinary && isBinary) {
+    if (Blob && !dontSendBlobs) {
+      return exports.encodePayloadAsBlob(packets, callback);
+    }
+
+    return exports.encodePayloadAsArrayBuffer(packets, callback);
+  }
+
+  if (!packets.length) {
+    return callback('0:');
+  }
+
+  function setLengthHeader(message) {
+    return message.length + ':' + message;
+  }
+
+  function encodeOne(packet, doneCallback) {
+    exports.encodePacket(packet, !isBinary ? false : supportsBinary, true, function(message) {
+      doneCallback(null, setLengthHeader(message));
+    });
+  }
+
+  map(packets, encodeOne, function(err, results) {
+    return callback(results.join(''));
+  });
+};
+
+/**
+ * Async array map using after
+ */
+
+function map(ary, each, done) {
+  var result = new Array(ary.length);
+  var next = after(ary.length, done);
+
+  var eachWithIndex = function(i, el, cb) {
+    each(el, function(error, msg) {
+      result[i] = msg;
+      cb(error, result);
+    });
+  };
+
+  for (var i = 0; i < ary.length; i++) {
+    eachWithIndex(i, ary[i], next);
+  }
+}
+
+/*
+ * Decodes data when a payload is maybe expected. Possible binary contents are
+ * decoded from their base64 representation
+ *
+ * @param {String} data, callback method
+ * @api public
+ */
+
+exports.decodePayload = function (data, binaryType, callback) {
+  if (typeof data != 'string') {
+    return exports.decodePayloadAsBinary(data, binaryType, callback);
+  }
+
+  if (typeof binaryType === 'function') {
+    callback = binaryType;
+    binaryType = null;
+  }
+
+  var packet;
+  if (data == '') {
+    // parser error - ignoring payload
+    return callback(err, 0, 1);
+  }
+
+  var length = ''
+    , n, msg;
+
+  for (var i = 0, l = data.length; i < l; i++) {
+    var chr = data.charAt(i);
+
+    if (':' != chr) {
+      length += chr;
+    } else {
+      if ('' == length || (length != (n = Number(length)))) {
+        // parser error - ignoring payload
+        return callback(err, 0, 1);
+      }
+
+      msg = data.substr(i + 1, n);
+
+      if (length != msg.length) {
+        // parser error - ignoring payload
+        return callback(err, 0, 1);
+      }
+
+      if (msg.length) {
+        packet = exports.decodePacket(msg, binaryType, true);
+
+        if (err.type == packet.type && err.data == packet.data) {
+          // parser error in individual packet - ignoring payload
+          return callback(err, 0, 1);
+        }
+
+        var ret = callback(packet, i + n, l);
+        if (false === ret) return;
+      }
+
+      // advance cursor
+      i += n;
+      length = '';
+    }
+  }
+
+  if (length != '') {
+    // parser error - ignoring payload
+    return callback(err, 0, 1);
+  }
+
+};
+
+/**
+ * Encodes multiple messages (payload) as binary.
+ *
+ * <1 = binary, 0 = string><number from 0-9><number from 0-9>[...]<number
+ * 255><data>
+ *
+ * Example:
+ * 1 3 255 1 2 3, if the binary contents are interpreted as 8 bit integers
+ *
+ * @param {Array} packets
+ * @return {ArrayBuffer} encoded payload
+ * @api private
+ */
+
+exports.encodePayloadAsArrayBuffer = function(packets, callback) {
+  if (!packets.length) {
+    return callback(new ArrayBuffer(0));
+  }
+
+  function encodeOne(packet, doneCallback) {
+    exports.encodePacket(packet, true, true, function(data) {
+      return doneCallback(null, data);
+    });
+  }
+
+  map(packets, encodeOne, function(err, encodedPackets) {
+    var totalLength = encodedPackets.reduce(function(acc, p) {
+      var len;
+      if (typeof p === 'string'){
+        len = p.length;
+      } else {
+        len = p.byteLength;
+      }
+      return acc + len.toString().length + len + 2; // string/binary identifier + separator = 2
+    }, 0);
+
+    var resultArray = new Uint8Array(totalLength);
+
+    var bufferIndex = 0;
+    encodedPackets.forEach(function(p) {
+      var isString = typeof p === 'string';
+      var ab = p;
+      if (isString) {
+        var view = new Uint8Array(p.length);
+        for (var i = 0; i < p.length; i++) {
+          view[i] = p.charCodeAt(i);
+        }
+        ab = view.buffer;
+      }
+
+      if (isString) { // not true binary
+        resultArray[bufferIndex++] = 0;
+      } else { // true binary
+        resultArray[bufferIndex++] = 1;
+      }
+
+      var lenStr = ab.byteLength.toString();
+      for (var i = 0; i < lenStr.length; i++) {
+        resultArray[bufferIndex++] = parseInt(lenStr[i]);
+      }
+      resultArray[bufferIndex++] = 255;
+
+      var view = new Uint8Array(ab);
+      for (var i = 0; i < view.length; i++) {
+        resultArray[bufferIndex++] = view[i];
+      }
+    });
+
+    return callback(resultArray.buffer);
+  });
+};
+
+/**
+ * Encode as Blob
+ */
+
+exports.encodePayloadAsBlob = function(packets, callback) {
+  function encodeOne(packet, doneCallback) {
+    exports.encodePacket(packet, true, true, function(encoded) {
+      var binaryIdentifier = new Uint8Array(1);
+      binaryIdentifier[0] = 1;
+      if (typeof encoded === 'string') {
+        var view = new Uint8Array(encoded.length);
+        for (var i = 0; i < encoded.length; i++) {
+          view[i] = encoded.charCodeAt(i);
+        }
+        encoded = view.buffer;
+        binaryIdentifier[0] = 0;
+      }
+
+      var len = (encoded instanceof ArrayBuffer)
+        ? encoded.byteLength
+        : encoded.size;
+
+      var lenStr = len.toString();
+      var lengthAry = new Uint8Array(lenStr.length + 1);
+      for (var i = 0; i < lenStr.length; i++) {
+        lengthAry[i] = parseInt(lenStr[i]);
+      }
+      lengthAry[lenStr.length] = 255;
+
+      if (Blob) {
+        var blob = new Blob([binaryIdentifier.buffer, lengthAry.buffer, encoded]);
+        doneCallback(null, blob);
+      }
+    });
+  }
+
+  map(packets, encodeOne, function(err, results) {
+    return callback(new Blob(results));
+  });
+};
+
+/*
+ * Decodes data when a payload is maybe expected. Strings are decoded by
+ * interpreting each byte as a key code for entries marked to start with 0. See
+ * description of encodePayloadAsBinary
+ *
+ * @param {ArrayBuffer} data, callback method
+ * @api public
+ */
+
+exports.decodePayloadAsBinary = function (data, binaryType, callback) {
+  if (typeof binaryType === 'function') {
+    callback = binaryType;
+    binaryType = null;
+  }
+
+  var bufferTail = data;
+  var buffers = [];
+
+  var numberTooLong = false;
+  while (bufferTail.byteLength > 0) {
+    var tailArray = new Uint8Array(bufferTail);
+    var isString = tailArray[0] === 0;
+    var msgLength = '';
+
+    for (var i = 1; ; i++) {
+      if (tailArray[i] == 255) break;
+
+      if (msgLength.length > 310) {
+        numberTooLong = true;
+        break;
+      }
+
+      msgLength += tailArray[i];
+    }
+
+    if(numberTooLong) return callback(err, 0, 1);
+
+    bufferTail = sliceBuffer(bufferTail, 2 + msgLength.length);
+    msgLength = parseInt(msgLength);
+
+    var msg = sliceBuffer(bufferTail, 0, msgLength);
+    if (isString) {
+      try {
+        msg = String.fromCharCode.apply(null, new Uint8Array(msg));
+      } catch (e) {
+        // iPhone Safari doesn't let you apply to typed arrays
+        var typed = new Uint8Array(msg);
+        msg = '';
+        for (var i = 0; i < typed.length; i++) {
+          msg += String.fromCharCode(typed[i]);
+        }
+      }
+    }
+
+    buffers.push(msg);
+    bufferTail = sliceBuffer(bufferTail, msgLength);
+  }
+
+  var total = buffers.length;
+  buffers.forEach(function(buffer, i) {
+    callback(exports.decodePacket(buffer, binaryType, true), i, total);
+  });
+};
+
+}).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
+},{"./keys":140,"after":141,"arraybuffer.slice":142,"base64-arraybuffer":143,"blob":144,"has-binary":145,"utf8":147}],140:[function(require,module,exports){
+
+/**
+ * Gets the keys for an object.
+ *
+ * @return {Array} keys
+ * @api private
+ */
+
+module.exports = Object.keys || function keys (obj){
+  var arr = [];
+  var has = Object.prototype.hasOwnProperty;
+
+  for (var i in obj) {
+    if (has.call(obj, i)) {
+      arr.push(i);
+    }
+  }
+  return arr;
+};
+
+},{}],141:[function(require,module,exports){
+module.exports = after
+
+function after(count, callback, err_cb) {
+    var bail = false
+    err_cb = err_cb || noop
+    proxy.count = count
+
+    return (count === 0) ? callback() : proxy
+
+    function proxy(err, result) {
+        if (proxy.count <= 0) {
+            throw new Error('after called too many times')
+        }
+        --proxy.count
+
+        // after first error, rest are passed to err_cb
+        if (err) {
+            bail = true
+            callback(err)
+            // future error callbacks will go to error handler
+            callback = err_cb
+        } else if (proxy.count === 0 && !bail) {
+            callback(null, result)
+        }
+    }
+}
+
+function noop() {}
+
+},{}],142:[function(require,module,exports){
+/**
+ * An abstraction for slicing an arraybuffer even when
+ * ArrayBuffer.prototype.slice is not supported
+ *
+ * @api public
+ */
+
+module.exports = function(arraybuffer, start, end) {
+  var bytes = arraybuffer.byteLength;
+  start = start || 0;
+  end = end || bytes;
+
+  if (arraybuffer.slice) { return arraybuffer.slice(start, end); }
+
+  if (start < 0) { start += bytes; }
+  if (end < 0) { end += bytes; }
+  if (end > bytes) { end = bytes; }
+
+  if (start >= bytes || start >= end || bytes === 0) {
+    return new ArrayBuffer(0);
+  }
+
+  var abv = new Uint8Array(arraybuffer);
+  var result = new Uint8Array(end - start);
+  for (var i = start, ii = 0; i < end; i++, ii++) {
+    result[ii] = abv[i];
+  }
+  return result.buffer;
+};
+
+},{}],143:[function(require,module,exports){
+/*
+ * base64-arraybuffer
+ * https://github.com/niklasvh/base64-arraybuffer
+ *
+ * Copyright (c) 2012 Niklas von Hertzen
+ * Licensed under the MIT license.
+ */
+(function(chars){
+  "use strict";
+
+  exports.encode = function(arraybuffer) {
+    var bytes = new Uint8Array(arraybuffer),
+    i, len = bytes.length, base64 = "";
+
+    for (i = 0; i < len; i+=3) {
+      base64 += chars[bytes[i] >> 2];
+      base64 += chars[((bytes[i] & 3) << 4) | (bytes[i + 1] >> 4)];
+      base64 += chars[((bytes[i + 1] & 15) << 2) | (bytes[i + 2] >> 6)];
+      base64 += chars[bytes[i + 2] & 63];
+    }
+
+    if ((len % 3) === 2) {
+      base64 = base64.substring(0, base64.length - 1) + "=";
+    } else if (len % 3 === 1) {
+      base64 = base64.substring(0, base64.length - 2) + "==";
+    }
+
+    return base64;
+  };
+
+  exports.decode =  function(base64) {
+    var bufferLength = base64.length * 0.75,
+    len = base64.length, i, p = 0,
+    encoded1, encoded2, encoded3, encoded4;
+
+    if (base64[base64.length - 1] === "=") {
+      bufferLength--;
+      if (base64[base64.length - 2] === "=") {
+        bufferLength--;
+      }
+    }
+
+    var arraybuffer = new ArrayBuffer(bufferLength),
+    bytes = new Uint8Array(arraybuffer);
+
+    for (i = 0; i < len; i+=4) {
+      encoded1 = chars.indexOf(base64[i]);
+      encoded2 = chars.indexOf(base64[i+1]);
+      encoded3 = chars.indexOf(base64[i+2]);
+      encoded4 = chars.indexOf(base64[i+3]);
+
+      bytes[p++] = (encoded1 << 2) | (encoded2 >> 4);
+      bytes[p++] = ((encoded2 & 15) << 4) | (encoded3 >> 2);
+      bytes[p++] = ((encoded3 & 3) << 6) | (encoded4 & 63);
+    }
+
+    return arraybuffer;
+  };
+})("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/");
+
+},{}],144:[function(require,module,exports){
+(function (global){
+/**
+ * Create a blob builder even when vendor prefixes exist
+ */
+
+var BlobBuilder = global.BlobBuilder
+  || global.WebKitBlobBuilder
+  || global.MSBlobBuilder
+  || global.MozBlobBuilder;
+
+/**
+ * Check if Blob constructor is supported
+ */
+
+var blobSupported = (function() {
+  try {
+    var b = new Blob(['hi']);
+    return b.size == 2;
+  } catch(e) {
+    return false;
+  }
+})();
+
+/**
+ * Check if BlobBuilder is supported
+ */
+
+var blobBuilderSupported = BlobBuilder
+  && BlobBuilder.prototype.append
+  && BlobBuilder.prototype.getBlob;
+
+function BlobBuilderConstructor(ary, options) {
+  options = options || {};
+
+  var bb = new BlobBuilder();
+  for (var i = 0; i < ary.length; i++) {
+    bb.append(ary[i]);
+  }
+  return (options.type) ? bb.getBlob(options.type) : bb.getBlob();
+};
+
+module.exports = (function() {
+  if (blobSupported) {
+    return global.Blob;
+  } else if (blobBuilderSupported) {
+    return BlobBuilderConstructor;
+  } else {
+    return undefined;
+  }
+})();
+
+}).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
+},{}],145:[function(require,module,exports){
+(function (global){
+
+/*
+ * Module requirements.
+ */
+
+var isArray = require('isarray');
+
+/**
+ * Module exports.
+ */
+
+module.exports = hasBinary;
+
+/**
+ * Checks for binary data.
+ *
+ * Right now only Buffer and ArrayBuffer are supported..
+ *
+ * @param {Object} anything
+ * @api public
+ */
+
+function hasBinary(data) {
+
+  function _hasBinary(obj) {
+    if (!obj) return false;
+
+    if ( (global.Buffer && global.Buffer.isBuffer(obj)) ||
+         (global.ArrayBuffer && obj instanceof ArrayBuffer) ||
+         (global.Blob && obj instanceof Blob) ||
+         (global.File && obj instanceof File)
+        ) {
+      return true;
+    }
+
+    if (isArray(obj)) {
+      for (var i = 0; i < obj.length; i++) {
+          if (_hasBinary(obj[i])) {
+              return true;
+          }
+      }
+    } else if (obj && 'object' == typeof obj) {
+      if (obj.toJSON) {
+        obj = obj.toJSON();
+      }
+
+      for (var key in obj) {
+        if (obj.hasOwnProperty(key) && _hasBinary(obj[key])) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  return _hasBinary(data);
+}
+
+}).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
+},{"isarray":146}],146:[function(require,module,exports){
+module.exports = Array.isArray || function (arr) {
+  return Object.prototype.toString.call(arr) == '[object Array]';
+};
+
+},{}],147:[function(require,module,exports){
+(function (global){
+/*! http://mths.be/utf8js v2.0.0 by @mathias */
+;(function(root) {
+
+	// Detect free variables `exports`
+	var freeExports = typeof exports == 'object' && exports;
+
+	// Detect free variable `module`
+	var freeModule = typeof module == 'object' && module &&
+		module.exports == freeExports && module;
+
+	// Detect free variable `global`, from Node.js or Browserified code,
+	// and use it as `root`
+	var freeGlobal = typeof global == 'object' && global;
+	if (freeGlobal.global === freeGlobal || freeGlobal.window === freeGlobal) {
+		root = freeGlobal;
+	}
+
+	/*--------------------------------------------------------------------------*/
+
+	var stringFromCharCode = String.fromCharCode;
+
+	// Taken from http://mths.be/punycode
+	function ucs2decode(string) {
+		var output = [];
+		var counter = 0;
+		var length = string.length;
+		var value;
+		var extra;
+		while (counter < length) {
+			value = string.charCodeAt(counter++);
+			if (value >= 0xD800 && value <= 0xDBFF && counter < length) {
+				// high surrogate, and there is a next character
+				extra = string.charCodeAt(counter++);
+				if ((extra & 0xFC00) == 0xDC00) { // low surrogate
+					output.push(((value & 0x3FF) << 10) + (extra & 0x3FF) + 0x10000);
+				} else {
+					// unmatched surrogate; only append this code unit, in case the next
+					// code unit is the high surrogate of a surrogate pair
+					output.push(value);
+					counter--;
+				}
+			} else {
+				output.push(value);
+			}
+		}
+		return output;
+	}
+
+	// Taken from http://mths.be/punycode
+	function ucs2encode(array) {
+		var length = array.length;
+		var index = -1;
+		var value;
+		var output = '';
+		while (++index < length) {
+			value = array[index];
+			if (value > 0xFFFF) {
+				value -= 0x10000;
+				output += stringFromCharCode(value >>> 10 & 0x3FF | 0xD800);
+				value = 0xDC00 | value & 0x3FF;
+			}
+			output += stringFromCharCode(value);
+		}
+		return output;
+	}
+
+	/*--------------------------------------------------------------------------*/
+
+	function createByte(codePoint, shift) {
+		return stringFromCharCode(((codePoint >> shift) & 0x3F) | 0x80);
+	}
+
+	function encodeCodePoint(codePoint) {
+		if ((codePoint & 0xFFFFFF80) == 0) { // 1-byte sequence
+			return stringFromCharCode(codePoint);
+		}
+		var symbol = '';
+		if ((codePoint & 0xFFFFF800) == 0) { // 2-byte sequence
+			symbol = stringFromCharCode(((codePoint >> 6) & 0x1F) | 0xC0);
+		}
+		else if ((codePoint & 0xFFFF0000) == 0) { // 3-byte sequence
+			symbol = stringFromCharCode(((codePoint >> 12) & 0x0F) | 0xE0);
+			symbol += createByte(codePoint, 6);
+		}
+		else if ((codePoint & 0xFFE00000) == 0) { // 4-byte sequence
+			symbol = stringFromCharCode(((codePoint >> 18) & 0x07) | 0xF0);
+			symbol += createByte(codePoint, 12);
+			symbol += createByte(codePoint, 6);
+		}
+		symbol += stringFromCharCode((codePoint & 0x3F) | 0x80);
+		return symbol;
+	}
+
+	function utf8encode(string) {
+		var codePoints = ucs2decode(string);
+
+		// console.log(JSON.stringify(codePoints.map(function(x) {
+		// 	return 'U+' + x.toString(16).toUpperCase();
+		// })));
+
+		var length = codePoints.length;
+		var index = -1;
+		var codePoint;
+		var byteString = '';
+		while (++index < length) {
+			codePoint = codePoints[index];
+			byteString += encodeCodePoint(codePoint);
+		}
+		return byteString;
+	}
+
+	/*--------------------------------------------------------------------------*/
+
+	function readContinuationByte() {
+		if (byteIndex >= byteCount) {
+			throw Error('Invalid byte index');
+		}
+
+		var continuationByte = byteArray[byteIndex] & 0xFF;
+		byteIndex++;
+
+		if ((continuationByte & 0xC0) == 0x80) {
+			return continuationByte & 0x3F;
+		}
+
+		// If we end up here, it’s not a continuation byte
+		throw Error('Invalid continuation byte');
+	}
+
+	function decodeSymbol() {
+		var byte1;
+		var byte2;
+		var byte3;
+		var byte4;
+		var codePoint;
+
+		if (byteIndex > byteCount) {
+			throw Error('Invalid byte index');
+		}
+
+		if (byteIndex == byteCount) {
+			return false;
+		}
+
+		// Read first byte
+		byte1 = byteArray[byteIndex] & 0xFF;
+		byteIndex++;
+
+		// 1-byte sequence (no continuation bytes)
+		if ((byte1 & 0x80) == 0) {
+			return byte1;
+		}
+
+		// 2-byte sequence
+		if ((byte1 & 0xE0) == 0xC0) {
+			var byte2 = readContinuationByte();
+			codePoint = ((byte1 & 0x1F) << 6) | byte2;
+			if (codePoint >= 0x80) {
+				return codePoint;
+			} else {
+				throw Error('Invalid continuation byte');
+			}
+		}
+
+		// 3-byte sequence (may include unpaired surrogates)
+		if ((byte1 & 0xF0) == 0xE0) {
+			byte2 = readContinuationByte();
+			byte3 = readContinuationByte();
+			codePoint = ((byte1 & 0x0F) << 12) | (byte2 << 6) | byte3;
+			if (codePoint >= 0x0800) {
+				return codePoint;
+			} else {
+				throw Error('Invalid continuation byte');
+			}
+		}
+
+		// 4-byte sequence
+		if ((byte1 & 0xF8) == 0xF0) {
+			byte2 = readContinuationByte();
+			byte3 = readContinuationByte();
+			byte4 = readContinuationByte();
+			codePoint = ((byte1 & 0x0F) << 0x12) | (byte2 << 0x0C) |
+				(byte3 << 0x06) | byte4;
+			if (codePoint >= 0x010000 && codePoint <= 0x10FFFF) {
+				return codePoint;
+			}
+		}
+
+		throw Error('Invalid UTF-8 detected');
+	}
+
+	var byteArray;
+	var byteCount;
+	var byteIndex;
+	function utf8decode(byteString) {
+		byteArray = ucs2decode(byteString);
+		byteCount = byteArray.length;
+		byteIndex = 0;
+		var codePoints = [];
+		var tmp;
+		while ((tmp = decodeSymbol()) !== false) {
+			codePoints.push(tmp);
+		}
+		return ucs2encode(codePoints);
+	}
+
+	/*--------------------------------------------------------------------------*/
+
+	var utf8 = {
+		'version': '2.0.0',
+		'encode': utf8encode,
+		'decode': utf8decode
+	};
+
+	// Some AMD build optimizers, like r.js, check for specific condition patterns
+	// like the following:
+	if (
+		typeof define == 'function' &&
+		typeof define.amd == 'object' &&
+		define.amd
+	) {
+		define(function() {
+			return utf8;
+		});
+	}	else if (freeExports && !freeExports.nodeType) {
+		if (freeModule) { // in Node.js or RingoJS v0.8.0+
+			freeModule.exports = utf8;
+		} else { // in Narwhal or RingoJS v0.7.0-
+			var object = {};
+			var hasOwnProperty = object.hasOwnProperty;
+			for (var key in utf8) {
+				hasOwnProperty.call(utf8, key) && (freeExports[key] = utf8[key]);
+			}
+		}
+	} else { // in Rhino or a web browser
+		root.utf8 = utf8;
+	}
+
+}(this));
+
+}).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
+},{}],148:[function(require,module,exports){
+
+/**
+ * Module dependencies.
+ */
+
+var global = require('global');
+
+/**
+ * Module exports.
+ *
+ * Logic borrowed from Modernizr:
+ *
+ *   - https://github.com/Modernizr/Modernizr/blob/master/feature-detects/cors.js
+ */
+
+try {
+  module.exports = 'XMLHttpRequest' in global &&
+    'withCredentials' in new global.XMLHttpRequest();
+} catch (err) {
+  // if XMLHttp support is disabled in IE then it will throw
+  // when trying to create
+  module.exports = false;
+}
+
+},{"global":149}],149:[function(require,module,exports){
+
+/**
+ * Returns `this`. Execute this without a "context" (i.e. without it being
+ * attached to an object of the left-hand side), and `this` points to the
+ * "global" scope of the current JS execution.
+ */
+
+module.exports = (function () { return this; })();
+
+},{}],150:[function(require,module,exports){
+(function (global){
+/**
+ * JSON parse.
+ *
+ * @see Based on jQuery#parseJSON (MIT) and JSON2
+ * @api private
+ */
+
+var rvalidchars = /^[\],:{}\s]*$/;
+var rvalidescape = /\\(?:["\\\/bfnrt]|u[0-9a-fA-F]{4})/g;
+var rvalidtokens = /"[^"\\\n\r]*"|true|false|null|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?/g;
+var rvalidbraces = /(?:^|:|,)(?:\s*\[)+/g;
+var rtrimLeft = /^\s+/;
+var rtrimRight = /\s+$/;
+
+module.exports = function parsejson(data) {
+  if ('string' != typeof data || !data) {
+    return null;
+  }
+
+  data = data.replace(rtrimLeft, '').replace(rtrimRight, '');
+
+  // Attempt to parse using the native JSON parser first
+  if (global.JSON && JSON.parse) {
+    return JSON.parse(data);
+  }
+
+  if (rvalidchars.test(data.replace(rvalidescape, '@')
+      .replace(rvalidtokens, ']')
+      .replace(rvalidbraces, ''))) {
+    return (new Function('return ' + data))();
+  }
+};
+}).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
+},{}],151:[function(require,module,exports){
+/**
+ * Compiles a querystring
+ * Returns string representation of the object
+ *
+ * @param {Object}
+ * @api private
+ */
+
+exports.encode = function (obj) {
+  var str = '';
+
+  for (var i in obj) {
+    if (obj.hasOwnProperty(i)) {
+      if (str.length) str += '&';
+      str += encodeURIComponent(i) + '=' + encodeURIComponent(obj[i]);
+    }
+  }
+
+  return str;
+};
+
+/**
+ * Parses a simple querystring into an object
+ *
+ * @param {String} qs
+ * @api private
+ */
+
+exports.decode = function(qs){
+  var qry = {};
+  var pairs = qs.split('&');
+  for (var i = 0, l = pairs.length; i < l; i++) {
+    var pair = pairs[i].split('=');
+    qry[decodeURIComponent(pair[0])] = decodeURIComponent(pair[1]);
+  }
+  return qry;
+};
+
+},{}],152:[function(require,module,exports){
+/**
+ * Parses an URI
+ *
+ * @author Steven Levithan <stevenlevithan.com> (MIT license)
+ * @api private
+ */
+
+var re = /^(?:(?![^:@]+:[^:@\/]*@)(http|https|ws|wss):\/\/)?((?:(([^:@]*)(?::([^:@]*))?)?@)?((?:[a-f0-9]{0,4}:){2,7}[a-f0-9]{0,4}|[^:\/?#]*)(?::(\d*))?)(((\/(?:[^?#](?![^?#\/]*\.[^?#\/.]+(?:[?#]|$)))*\/?)?([^?#\/]*))(?:\?([^#]*))?(?:#(.*))?)/;
+
+var parts = [
+    'source', 'protocol', 'authority', 'userInfo', 'user', 'password', 'host', 'port', 'relative', 'path', 'directory', 'file', 'query', 'anchor'
+];
+
+module.exports = function parseuri(str) {
+    var src = str,
+        b = str.indexOf('['),
+        e = str.indexOf(']');
+
+    if (b != -1 && e != -1) {
+        str = str.substring(0, b) + str.substring(b, e).replace(/:/g, ';') + str.substring(e, str.length);
+    }
+
+    var m = re.exec(str || ''),
+        uri = {},
+        i = 14;
+
+    while (i--) {
+        uri[parts[i]] = m[i] || '';
+    }
+
+    if (b != -1 && e != -1) {
+        uri.source = src;
+        uri.host = uri.host.substring(1, uri.host.length - 1).replace(/;/g, ':');
+        uri.authority = uri.authority.replace('[', '').replace(']', '').replace(/;/g, ':');
+        uri.ipv6uri = true;
+    }
+
+    return uri;
+};
+
+},{}],153:[function(require,module,exports){
+
+/**
+ * Module dependencies.
+ */
+
+var global = (function() { return this; })();
+
+/**
+ * WebSocket constructor.
+ */
+
+var WebSocket = global.WebSocket || global.MozWebSocket;
+
+/**
+ * Module exports.
+ */
+
+module.exports = WebSocket ? ws : null;
+
+/**
+ * WebSocket constructor.
+ *
+ * The third `opts` options object gets ignored in web browsers, since it's
+ * non-standard, and throws a TypeError if passed to the constructor.
+ * See: https://github.com/einaros/ws/issues/227
+ *
+ * @param {String} uri
+ * @param {Array} protocols (optional)
+ * @param {Object) opts (optional)
+ * @api public
+ */
+
+function ws(uri, protocols, opts) {
+  var instance;
+  if (protocols) {
+    instance = new WebSocket(uri, protocols);
+  } else {
+    instance = new WebSocket(uri);
+  }
+  return instance;
+}
+
+if (WebSocket) ws.prototype = WebSocket.prototype;
+
+},{}],154:[function(require,module,exports){
+(function (global){
+
+/*
+ * Module requirements.
+ */
+
+var isArray = require('isarray');
+
+/**
+ * Module exports.
+ */
+
+module.exports = hasBinary;
+
+/**
+ * Checks for binary data.
+ *
+ * Right now only Buffer and ArrayBuffer are supported..
+ *
+ * @param {Object} anything
+ * @api public
+ */
+
+function hasBinary(data) {
+
+  function _hasBinary(obj) {
+    if (!obj) return false;
+
+    if ( (global.Buffer && global.Buffer.isBuffer(obj)) ||
+         (global.ArrayBuffer && obj instanceof ArrayBuffer) ||
+         (global.Blob && obj instanceof Blob) ||
+         (global.File && obj instanceof File)
+        ) {
+      return true;
+    }
+
+    if (isArray(obj)) {
+      for (var i = 0; i < obj.length; i++) {
+          if (_hasBinary(obj[i])) {
+              return true;
+          }
+      }
+    } else if (obj && 'object' == typeof obj) {
+      if (obj.toJSON) {
+        obj = obj.toJSON();
+      }
+
+      for (var key in obj) {
+        if (Object.prototype.hasOwnProperty.call(obj, key) && _hasBinary(obj[key])) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  return _hasBinary(data);
+}
+
+}).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
+},{"isarray":155}],155:[function(require,module,exports){
+arguments[4][146][0].apply(exports,arguments)
+},{"dup":146}],156:[function(require,module,exports){
+
+var indexOf = [].indexOf;
+
+module.exports = function(arr, obj){
+  if (indexOf) return arr.indexOf(obj);
+  for (var i = 0; i < arr.length; ++i) {
+    if (arr[i] === obj) return i;
+  }
+  return -1;
+};
+},{}],157:[function(require,module,exports){
+
+/**
+ * HOP ref.
+ */
+
+var has = Object.prototype.hasOwnProperty;
+
+/**
+ * Return own keys in `obj`.
+ *
+ * @param {Object} obj
+ * @return {Array}
+ * @api public
+ */
+
+exports.keys = Object.keys || function(obj){
+  var keys = [];
+  for (var key in obj) {
+    if (has.call(obj, key)) {
+      keys.push(key);
+    }
+  }
+  return keys;
+};
+
+/**
+ * Return own values in `obj`.
+ *
+ * @param {Object} obj
+ * @return {Array}
+ * @api public
+ */
+
+exports.values = function(obj){
+  var vals = [];
+  for (var key in obj) {
+    if (has.call(obj, key)) {
+      vals.push(obj[key]);
+    }
+  }
+  return vals;
+};
+
+/**
+ * Merge `b` into `a`.
+ *
+ * @param {Object} a
+ * @param {Object} b
+ * @return {Object} a
+ * @api public
+ */
+
+exports.merge = function(a, b){
+  for (var key in b) {
+    if (has.call(b, key)) {
+      a[key] = b[key];
+    }
+  }
+  return a;
+};
+
+/**
+ * Return length of `obj`.
+ *
+ * @param {Object} obj
+ * @return {Number}
+ * @api public
+ */
+
+exports.length = function(obj){
+  return exports.keys(obj).length;
+};
+
+/**
+ * Check if `obj` is empty.
+ *
+ * @param {Object} obj
+ * @return {Boolean}
+ * @api public
+ */
+
+exports.isEmpty = function(obj){
+  return 0 == exports.length(obj);
+};
+},{}],158:[function(require,module,exports){
+/**
+ * Parses an URI
+ *
+ * @author Steven Levithan <stevenlevithan.com> (MIT license)
+ * @api private
+ */
+
+var re = /^(?:(?![^:@]+:[^:@\/]*@)(http|https|ws|wss):\/\/)?((?:(([^:@]*)(?::([^:@]*))?)?@)?((?:[a-f0-9]{0,4}:){2,7}[a-f0-9]{0,4}|[^:\/?#]*)(?::(\d*))?)(((\/(?:[^?#](?![^?#\/]*\.[^?#\/.]+(?:[?#]|$)))*\/?)?([^?#\/]*))(?:\?([^#]*))?(?:#(.*))?)/;
+
+var parts = [
+    'source', 'protocol', 'authority', 'userInfo', 'user', 'password', 'host'
+  , 'port', 'relative', 'path', 'directory', 'file', 'query', 'anchor'
+];
+
+module.exports = function parseuri(str) {
+  var m = re.exec(str || '')
+    , uri = {}
+    , i = 14;
+
+  while (i--) {
+    uri[parts[i]] = m[i] || '';
+  }
+
+  return uri;
+};
+
+},{}],159:[function(require,module,exports){
+(function (global){
+/*global Blob,File*/
+
+/**
+ * Module requirements
+ */
+
+var isArray = require('isarray');
+var isBuf = require('./is-buffer');
+
+/**
+ * Replaces every Buffer | ArrayBuffer in packet with a numbered placeholder.
+ * Anything with blobs or files should be fed through removeBlobs before coming
+ * here.
+ *
+ * @param {Object} packet - socket.io event packet
+ * @return {Object} with deconstructed packet and list of buffers
+ * @api public
+ */
+
+exports.deconstructPacket = function(packet){
+  var buffers = [];
+  var packetData = packet.data;
+
+  function _deconstructPacket(data) {
+    if (!data) return data;
+
+    if (isBuf(data)) {
+      var placeholder = { _placeholder: true, num: buffers.length };
+      buffers.push(data);
+      return placeholder;
+    } else if (isArray(data)) {
+      var newData = new Array(data.length);
+      for (var i = 0; i < data.length; i++) {
+        newData[i] = _deconstructPacket(data[i]);
+      }
+      return newData;
+    } else if ('object' == typeof data && !(data instanceof Date)) {
+      var newData = {};
+      for (var key in data) {
+        newData[key] = _deconstructPacket(data[key]);
+      }
+      return newData;
+    }
+    return data;
+  }
+
+  var pack = packet;
+  pack.data = _deconstructPacket(packetData);
+  pack.attachments = buffers.length; // number of binary 'attachments'
+  return {packet: pack, buffers: buffers};
+};
+
+/**
+ * Reconstructs a binary packet from its placeholder packet and buffers
+ *
+ * @param {Object} packet - event packet with placeholders
+ * @param {Array} buffers - binary buffers to put in placeholder positions
+ * @return {Object} reconstructed packet
+ * @api public
+ */
+
+exports.reconstructPacket = function(packet, buffers) {
+  var curPlaceHolder = 0;
+
+  function _reconstructPacket(data) {
+    if (data && data._placeholder) {
+      var buf = buffers[data.num]; // appropriate buffer (should be natural order anyway)
+      return buf;
+    } else if (isArray(data)) {
+      for (var i = 0; i < data.length; i++) {
+        data[i] = _reconstructPacket(data[i]);
+      }
+      return data;
+    } else if (data && 'object' == typeof data) {
+      for (var key in data) {
+        data[key] = _reconstructPacket(data[key]);
+      }
+      return data;
+    }
+    return data;
+  }
+
+  packet.data = _reconstructPacket(packet.data);
+  packet.attachments = undefined; // no longer useful
+  return packet;
+};
+
+/**
+ * Asynchronously removes Blobs or Files from data via
+ * FileReader's readAsArrayBuffer method. Used before encoding
+ * data as msgpack. Calls callback with the blobless data.
+ *
+ * @param {Object} data
+ * @param {Function} callback
+ * @api private
+ */
+
+exports.removeBlobs = function(data, callback) {
+  function _removeBlobs(obj, curKey, containingObject) {
+    if (!obj) return obj;
+
+    // convert any blob
+    if ((global.Blob && obj instanceof Blob) ||
+        (global.File && obj instanceof File)) {
+      pendingBlobs++;
+
+      // async filereader
+      var fileReader = new FileReader();
+      fileReader.onload = function() { // this.result == arraybuffer
+        if (containingObject) {
+          containingObject[curKey] = this.result;
+        }
+        else {
+          bloblessData = this.result;
+        }
+
+        // if nothing pending its callback time
+        if(! --pendingBlobs) {
+          callback(bloblessData);
+        }
+      };
+
+      fileReader.readAsArrayBuffer(obj); // blob -> arraybuffer
+    } else if (isArray(obj)) { // handle array
+      for (var i = 0; i < obj.length; i++) {
+        _removeBlobs(obj[i], i, obj);
+      }
+    } else if (obj && 'object' == typeof obj && !isBuf(obj)) { // and object
+      for (var key in obj) {
+        _removeBlobs(obj[key], key, obj);
+      }
+    }
+  }
+
+  var pendingBlobs = 0;
+  var bloblessData = data;
+  _removeBlobs(bloblessData);
+  if (!pendingBlobs) {
+    callback(bloblessData);
+  }
+};
+
+}).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
+},{"./is-buffer":161,"isarray":164}],160:[function(require,module,exports){
+
+/**
+ * Module dependencies.
+ */
+
+var debug = require('debug')('socket.io-parser');
+var json = require('json3');
+var isArray = require('isarray');
+var Emitter = require('component-emitter');
+var binary = require('./binary');
+var isBuf = require('./is-buffer');
+
+/**
+ * Protocol version.
+ *
+ * @api public
+ */
+
+exports.protocol = 4;
+
+/**
+ * Packet types.
+ *
+ * @api public
+ */
+
+exports.types = [
+  'CONNECT',
+  'DISCONNECT',
+  'EVENT',
+  'BINARY_EVENT',
+  'ACK',
+  'BINARY_ACK',
+  'ERROR'
+];
+
+/**
+ * Packet type `connect`.
+ *
+ * @api public
+ */
+
+exports.CONNECT = 0;
+
+/**
+ * Packet type `disconnect`.
+ *
+ * @api public
+ */
+
+exports.DISCONNECT = 1;
+
+/**
+ * Packet type `event`.
+ *
+ * @api public
+ */
+
+exports.EVENT = 2;
+
+/**
+ * Packet type `ack`.
+ *
+ * @api public
+ */
+
+exports.ACK = 3;
+
+/**
+ * Packet type `error`.
+ *
+ * @api public
+ */
+
+exports.ERROR = 4;
+
+/**
+ * Packet type 'binary event'
+ *
+ * @api public
+ */
+
+exports.BINARY_EVENT = 5;
+
+/**
+ * Packet type `binary ack`. For acks with binary arguments.
+ *
+ * @api public
+ */
+
+exports.BINARY_ACK = 6;
+
+/**
+ * Encoder constructor.
+ *
+ * @api public
+ */
+
+exports.Encoder = Encoder;
+
+/**
+ * Decoder constructor.
+ *
+ * @api public
+ */
+
+exports.Decoder = Decoder;
+
+/**
+ * A socket.io Encoder instance
+ *
+ * @api public
+ */
+
+function Encoder() {}
+
+/**
+ * Encode a packet as a single string if non-binary, or as a
+ * buffer sequence, depending on packet type.
+ *
+ * @param {Object} obj - packet object
+ * @param {Function} callback - function to handle encodings (likely engine.write)
+ * @return Calls callback with Array of encodings
+ * @api public
+ */
+
+Encoder.prototype.encode = function(obj, callback){
+  debug('encoding packet %j', obj);
+
+  if (exports.BINARY_EVENT == obj.type || exports.BINARY_ACK == obj.type) {
+    encodeAsBinary(obj, callback);
+  }
+  else {
+    var encoding = encodeAsString(obj);
+    callback([encoding]);
+  }
+};
+
+/**
+ * Encode packet as string.
+ *
+ * @param {Object} packet
+ * @return {String} encoded
+ * @api private
+ */
+
+function encodeAsString(obj) {
+  var str = '';
+  var nsp = false;
+
+  // first is type
+  str += obj.type;
+
+  // attachments if we have them
+  if (exports.BINARY_EVENT == obj.type || exports.BINARY_ACK == obj.type) {
+    str += obj.attachments;
+    str += '-';
+  }
+
+  // if we have a namespace other than `/`
+  // we append it followed by a comma `,`
+  if (obj.nsp && '/' != obj.nsp) {
+    nsp = true;
+    str += obj.nsp;
+  }
+
+  // immediately followed by the id
+  if (null != obj.id) {
+    if (nsp) {
+      str += ',';
+      nsp = false;
+    }
+    str += obj.id;
+  }
+
+  // json data
+  if (null != obj.data) {
+    if (nsp) str += ',';
+    str += json.stringify(obj.data);
+  }
+
+  debug('encoded %j as %s', obj, str);
+  return str;
+}
+
+/**
+ * Encode packet as 'buffer sequence' by removing blobs, and
+ * deconstructing packet into object with placeholders and
+ * a list of buffers.
+ *
+ * @param {Object} packet
+ * @return {Buffer} encoded
+ * @api private
+ */
+
+function encodeAsBinary(obj, callback) {
+
+  function writeEncoding(bloblessData) {
+    var deconstruction = binary.deconstructPacket(bloblessData);
+    var pack = encodeAsString(deconstruction.packet);
+    var buffers = deconstruction.buffers;
+
+    buffers.unshift(pack); // add packet info to beginning of data list
+    callback(buffers); // write all the buffers
+  }
+
+  binary.removeBlobs(obj, writeEncoding);
+}
+
+/**
+ * A socket.io Decoder instance
+ *
+ * @return {Object} decoder
+ * @api public
+ */
+
+function Decoder() {
+  this.reconstructor = null;
+}
+
+/**
+ * Mix in `Emitter` with Decoder.
+ */
+
+Emitter(Decoder.prototype);
+
+/**
+ * Decodes an ecoded packet string into packet JSON.
+ *
+ * @param {String} obj - encoded packet
+ * @return {Object} packet
+ * @api public
+ */
+
+Decoder.prototype.add = function(obj) {
+  var packet;
+  if ('string' == typeof obj) {
+    packet = decodeString(obj);
+    if (exports.BINARY_EVENT == packet.type || exports.BINARY_ACK == packet.type) { // binary packet's json
+      this.reconstructor = new BinaryReconstructor(packet);
+
+      // no attachments, labeled binary but no binary data to follow
+      if (this.reconstructor.reconPack.attachments === 0) {
+        this.emit('decoded', packet);
+      }
+    } else { // non-binary full packet
+      this.emit('decoded', packet);
+    }
+  }
+  else if (isBuf(obj) || obj.base64) { // raw binary data
+    if (!this.reconstructor) {
+      throw new Error('got binary data when not reconstructing a packet');
+    } else {
+      packet = this.reconstructor.takeBinaryData(obj);
+      if (packet) { // received final buffer
+        this.reconstructor = null;
+        this.emit('decoded', packet);
       }
     }
   }
   else {
-    args.push(location[obj.name]);
+    throw new Error('Unknown type: ' + obj);
   }
-  return format.apply(null, args);
 };
 
-// RFC specified order
-// TODO: extend this with all the rest
-var defaultOuterOrder = [
-  'v', 'o', 's', 'i',
-  'u', 'e', 'p', 'c',
-  'b', 't', 'r', 'z', 'a'
-];
-var defaultInnerOrder = ['i', 'c', 'b', 'a'];
+/**
+ * Decode a packet String (JSON data)
+ *
+ * @param {String} str
+ * @return {Object} packet
+ * @api private
+ */
 
+function decodeString(str) {
+  var p = {};
+  var i = 0;
 
-module.exports = function (session, opts) {
-  opts = opts || {};
-  // ensure certain properties exist
-  if (session.version == null) {
-    session.version = 0; // "v=0" must be there (only defined version atm)
-  }
-  if (session.name == null) {
-    session.name = " "; // "s= " must be there if no meaningful name set
-  }
-  session.media.forEach(function (mLine) {
-    if (mLine.payloads == null) {
-      mLine.payloads = "";
+  // look up type
+  p.type = Number(str.charAt(0));
+  if (null == exports.types[p.type]) return error();
+
+  // look up attachments if type binary
+  if (exports.BINARY_EVENT == p.type || exports.BINARY_ACK == p.type) {
+    var buf = '';
+    while (str.charAt(++i) != '-') {
+      buf += str.charAt(i);
+      if (i == str.length) break;
     }
-  });
+    if (buf != Number(buf) || str.charAt(i) != '-') {
+      throw new Error('Illegal attachments');
+    }
+    p.attachments = Number(buf);
+  }
 
-  var outerOrder = opts.outerOrder || defaultOuterOrder;
-  var innerOrder = opts.innerOrder || defaultInnerOrder;
-  var sdp = [];
+  // look up namespace (if any)
+  if ('/' == str.charAt(i + 1)) {
+    p.nsp = '';
+    while (++i) {
+      var c = str.charAt(i);
+      if (',' == c) break;
+      p.nsp += c;
+      if (i == str.length) break;
+    }
+  } else {
+    p.nsp = '/';
+  }
 
-  // loop through outerOrder for matching properties on session
-  outerOrder.forEach(function (type) {
-    grammar[type].forEach(function (obj) {
-      if (obj.name in session && session[obj.name] != null) {
-        sdp.push(makeLine(type, obj, session));
+  // look up id
+  var next = str.charAt(i + 1);
+  if ('' !== next && Number(next) == next) {
+    p.id = '';
+    while (++i) {
+      var c = str.charAt(i);
+      if (null == c || Number(c) != c) {
+        --i;
+        break;
       }
-      else if (obj.push in session && session[obj.push] != null) {
-        session[obj.push].forEach(function (el) {
-          sdp.push(makeLine(type, obj, el));
-        });
-      }
-    });
-  });
+      p.id += str.charAt(i);
+      if (i == str.length) break;
+    }
+    p.id = Number(p.id);
+  }
 
-  // then for each media line, follow the innerOrder
-  session.media.forEach(function (mLine) {
-    sdp.push(makeLine('m', grammar.m[0], mLine));
+  // look up json data
+  if (str.charAt(++i)) {
+    try {
+      p.data = json.parse(str.substr(i));
+    } catch(e){
+      return error();
+    }
+  }
 
-    innerOrder.forEach(function (type) {
-      grammar[type].forEach(function (obj) {
-        if (obj.name in mLine && mLine[obj.name] != null) {
-          sdp.push(makeLine(type, obj, mLine));
-        }
-        else if (obj.push in mLine && mLine[obj.push] != null) {
-          mLine[obj.push].forEach(function (el) {
-            sdp.push(makeLine(type, obj, el));
-          });
-        }
-      });
-    });
-  });
+  debug('decoded %s as %j', str, p);
+  return p;
+}
 
-  return sdp.join('\r\n') + '\r\n';
+/**
+ * Deallocates a parser's resources
+ *
+ * @api public
+ */
+
+Decoder.prototype.destroy = function() {
+  if (this.reconstructor) {
+    this.reconstructor.finishedReconstruction();
+  }
 };
 
-},{"./grammar":91}],95:[function(require,module,exports){
+/**
+ * A manager of a binary event's 'buffer sequence'. Should
+ * be constructed whenever a packet of type BINARY_EVENT is
+ * decoded.
+ *
+ * @param {Object} packet
+ * @return {BinaryReconstructor} initialized reconstructor
+ * @api private
+ */
+
+function BinaryReconstructor(packet) {
+  this.reconPack = packet;
+  this.buffers = [];
+}
+
+/**
+ * Method to be called when binary data received from connection
+ * after a BINARY_EVENT packet.
+ *
+ * @param {Buffer | ArrayBuffer} binData - the raw binary data received
+ * @return {null | Object} returns null if more binary data is expected or
+ *   a reconstructed packet object if all buffers have been received.
+ * @api private
+ */
+
+BinaryReconstructor.prototype.takeBinaryData = function(binData) {
+  this.buffers.push(binData);
+  if (this.buffers.length == this.reconPack.attachments) { // done with buffer list
+    var packet = binary.reconstructPacket(this.reconPack, this.buffers);
+    this.finishedReconstruction();
+    return packet;
+  }
+  return null;
+};
+
+/**
+ * Cleans up binary packet reconstruction variables.
+ *
+ * @api private
+ */
+
+BinaryReconstructor.prototype.finishedReconstruction = function() {
+  this.reconPack = null;
+  this.buffers = [];
+};
+
+function error(data){
+  return {
+    type: exports.ERROR,
+    data: 'parser error'
+  };
+}
+
+},{"./binary":159,"./is-buffer":161,"component-emitter":162,"debug":163,"isarray":164,"json3":165}],161:[function(require,module,exports){
+(function (global){
+
+module.exports = isBuf;
+
+/**
+ * Returns true if obj is a buffer or an arraybuffer.
+ *
+ * @api private
+ */
+
+function isBuf(obj) {
+  return (global.Buffer && global.Buffer.isBuffer(obj)) ||
+         (global.ArrayBuffer && obj instanceof ArrayBuffer);
+}
+
+}).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
+},{}],162:[function(require,module,exports){
+arguments[4][122][0].apply(exports,arguments)
+},{"dup":122}],163:[function(require,module,exports){
+arguments[4][123][0].apply(exports,arguments)
+},{"dup":123}],164:[function(require,module,exports){
+arguments[4][146][0].apply(exports,arguments)
+},{"dup":146}],165:[function(require,module,exports){
+/*! JSON v3.2.6 | http://bestiejs.github.io/json3 | Copyright 2012-2013, Kit Cambridge | http://kit.mit-license.org */
+;(function (window) {
+  // Convenience aliases.
+  var getClass = {}.toString, isProperty, forEach, undef;
+
+  // Detect the `define` function exposed by asynchronous module loaders. The
+  // strict `define` check is necessary for compatibility with `r.js`.
+  var isLoader = typeof define === "function" && define.amd;
+
+  // Detect native implementations.
+  var nativeJSON = typeof JSON == "object" && JSON;
+
+  // Set up the JSON 3 namespace, preferring the CommonJS `exports` object if
+  // available.
+  var JSON3 = typeof exports == "object" && exports && !exports.nodeType && exports;
+
+  if (JSON3 && nativeJSON) {
+    // Explicitly delegate to the native `stringify` and `parse`
+    // implementations in CommonJS environments.
+    JSON3.stringify = nativeJSON.stringify;
+    JSON3.parse = nativeJSON.parse;
+  } else {
+    // Export for web browsers, JavaScript engines, and asynchronous module
+    // loaders, using the global `JSON` object if available.
+    JSON3 = window.JSON = nativeJSON || {};
+  }
+
+  // Test the `Date#getUTC*` methods. Based on work by @Yaffle.
+  var isExtended = new Date(-3509827334573292);
+  try {
+    // The `getUTCFullYear`, `Month`, and `Date` methods return nonsensical
+    // results for certain dates in Opera >= 10.53.
+    isExtended = isExtended.getUTCFullYear() == -109252 && isExtended.getUTCMonth() === 0 && isExtended.getUTCDate() === 1 &&
+      // Safari < 2.0.2 stores the internal millisecond time value correctly,
+      // but clips the values returned by the date methods to the range of
+      // signed 32-bit integers ([-2 ** 31, 2 ** 31 - 1]).
+      isExtended.getUTCHours() == 10 && isExtended.getUTCMinutes() == 37 && isExtended.getUTCSeconds() == 6 && isExtended.getUTCMilliseconds() == 708;
+  } catch (exception) {}
+
+  // Internal: Determines whether the native `JSON.stringify` and `parse`
+  // implementations are spec-compliant. Based on work by Ken Snyder.
+  function has(name) {
+    if (has[name] !== undef) {
+      // Return cached feature test result.
+      return has[name];
+    }
+
+    var isSupported;
+    if (name == "bug-string-char-index") {
+      // IE <= 7 doesn't support accessing string characters using square
+      // bracket notation. IE 8 only supports this for primitives.
+      isSupported = "a"[0] != "a";
+    } else if (name == "json") {
+      // Indicates whether both `JSON.stringify` and `JSON.parse` are
+      // supported.
+      isSupported = has("json-stringify") && has("json-parse");
+    } else {
+      var value, serialized = '{"a":[1,true,false,null,"\\u0000\\b\\n\\f\\r\\t"]}';
+      // Test `JSON.stringify`.
+      if (name == "json-stringify") {
+        var stringify = JSON3.stringify, stringifySupported = typeof stringify == "function" && isExtended;
+        if (stringifySupported) {
+          // A test function object with a custom `toJSON` method.
+          (value = function () {
+            return 1;
+          }).toJSON = value;
+          try {
+            stringifySupported =
+              // Firefox 3.1b1 and b2 serialize string, number, and boolean
+              // primitives as object literals.
+              stringify(0) === "0" &&
+              // FF 3.1b1, b2, and JSON 2 serialize wrapped primitives as object
+              // literals.
+              stringify(new Number()) === "0" &&
+              stringify(new String()) == '""' &&
+              // FF 3.1b1, 2 throw an error if the value is `null`, `undefined`, or
+              // does not define a canonical JSON representation (this applies to
+              // objects with `toJSON` properties as well, *unless* they are nested
+              // within an object or array).
+              stringify(getClass) === undef &&
+              // IE 8 serializes `undefined` as `"undefined"`. Safari <= 5.1.7 and
+              // FF 3.1b3 pass this test.
+              stringify(undef) === undef &&
+              // Safari <= 5.1.7 and FF 3.1b3 throw `Error`s and `TypeError`s,
+              // respectively, if the value is omitted entirely.
+              stringify() === undef &&
+              // FF 3.1b1, 2 throw an error if the given value is not a number,
+              // string, array, object, Boolean, or `null` literal. This applies to
+              // objects with custom `toJSON` methods as well, unless they are nested
+              // inside object or array literals. YUI 3.0.0b1 ignores custom `toJSON`
+              // methods entirely.
+              stringify(value) === "1" &&
+              stringify([value]) == "[1]" &&
+              // Prototype <= 1.6.1 serializes `[undefined]` as `"[]"` instead of
+              // `"[null]"`.
+              stringify([undef]) == "[null]" &&
+              // YUI 3.0.0b1 fails to serialize `null` literals.
+              stringify(null) == "null" &&
+              // FF 3.1b1, 2 halts serialization if an array contains a function:
+              // `[1, true, getClass, 1]` serializes as "[1,true,],". FF 3.1b3
+              // elides non-JSON values from objects and arrays, unless they
+              // define custom `toJSON` methods.
+              stringify([undef, getClass, null]) == "[null,null,null]" &&
+              // Simple serialization test. FF 3.1b1 uses Unicode escape sequences
+              // where character escape codes are expected (e.g., `\b` => `\u0008`).
+              stringify({ "a": [value, true, false, null, "\x00\b\n\f\r\t"] }) == serialized &&
+              // FF 3.1b1 and b2 ignore the `filter` and `width` arguments.
+              stringify(null, value) === "1" &&
+              stringify([1, 2], null, 1) == "[\n 1,\n 2\n]" &&
+              // JSON 2, Prototype <= 1.7, and older WebKit builds incorrectly
+              // serialize extended years.
+              stringify(new Date(-8.64e15)) == '"-271821-04-20T00:00:00.000Z"' &&
+              // The milliseconds are optional in ES 5, but required in 5.1.
+              stringify(new Date(8.64e15)) == '"+275760-09-13T00:00:00.000Z"' &&
+              // Firefox <= 11.0 incorrectly serializes years prior to 0 as negative
+              // four-digit years instead of six-digit years. Credits: @Yaffle.
+              stringify(new Date(-621987552e5)) == '"-000001-01-01T00:00:00.000Z"' &&
+              // Safari <= 5.1.5 and Opera >= 10.53 incorrectly serialize millisecond
+              // values less than 1000. Credits: @Yaffle.
+              stringify(new Date(-1)) == '"1969-12-31T23:59:59.999Z"';
+          } catch (exception) {
+            stringifySupported = false;
+          }
+        }
+        isSupported = stringifySupported;
+      }
+      // Test `JSON.parse`.
+      if (name == "json-parse") {
+        var parse = JSON3.parse;
+        if (typeof parse == "function") {
+          try {
+            // FF 3.1b1, b2 will throw an exception if a bare literal is provided.
+            // Conforming implementations should also coerce the initial argument to
+            // a string prior to parsing.
+            if (parse("0") === 0 && !parse(false)) {
+              // Simple parsing test.
+              value = parse(serialized);
+              var parseSupported = value["a"].length == 5 && value["a"][0] === 1;
+              if (parseSupported) {
+                try {
+                  // Safari <= 5.1.2 and FF 3.1b1 allow unescaped tabs in strings.
+                  parseSupported = !parse('"\t"');
+                } catch (exception) {}
+                if (parseSupported) {
+                  try {
+                    // FF 4.0 and 4.0.1 allow leading `+` signs and leading
+                    // decimal points. FF 4.0, 4.0.1, and IE 9-10 also allow
+                    // certain octal literals.
+                    parseSupported = parse("01") !== 1;
+                  } catch (exception) {}
+                }
+                if (parseSupported) {
+                  try {
+                    // FF 4.0, 4.0.1, and Rhino 1.7R3-R4 allow trailing decimal
+                    // points. These environments, along with FF 3.1b1 and 2,
+                    // also allow trailing commas in JSON objects and arrays.
+                    parseSupported = parse("1.") !== 1;
+                  } catch (exception) {}
+                }
+              }
+            }
+          } catch (exception) {
+            parseSupported = false;
+          }
+        }
+        isSupported = parseSupported;
+      }
+    }
+    return has[name] = !!isSupported;
+  }
+
+  if (!has("json")) {
+    // Common `[[Class]]` name aliases.
+    var functionClass = "[object Function]";
+    var dateClass = "[object Date]";
+    var numberClass = "[object Number]";
+    var stringClass = "[object String]";
+    var arrayClass = "[object Array]";
+    var booleanClass = "[object Boolean]";
+
+    // Detect incomplete support for accessing string characters by index.
+    var charIndexBuggy = has("bug-string-char-index");
+
+    // Define additional utility methods if the `Date` methods are buggy.
+    if (!isExtended) {
+      var floor = Math.floor;
+      // A mapping between the months of the year and the number of days between
+      // January 1st and the first of the respective month.
+      var Months = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+      // Internal: Calculates the number of days between the Unix epoch and the
+      // first day of the given month.
+      var getDay = function (year, month) {
+        return Months[month] + 365 * (year - 1970) + floor((year - 1969 + (month = +(month > 1))) / 4) - floor((year - 1901 + month) / 100) + floor((year - 1601 + month) / 400);
+      };
+    }
+
+    // Internal: Determines if a property is a direct property of the given
+    // object. Delegates to the native `Object#hasOwnProperty` method.
+    if (!(isProperty = {}.hasOwnProperty)) {
+      isProperty = function (property) {
+        var members = {}, constructor;
+        if ((members.__proto__ = null, members.__proto__ = {
+          // The *proto* property cannot be set multiple times in recent
+          // versions of Firefox and SeaMonkey.
+          "toString": 1
+        }, members).toString != getClass) {
+          // Safari <= 2.0.3 doesn't implement `Object#hasOwnProperty`, but
+          // supports the mutable *proto* property.
+          isProperty = function (property) {
+            // Capture and break the object's prototype chain (see section 8.6.2
+            // of the ES 5.1 spec). The parenthesized expression prevents an
+            // unsafe transformation by the Closure Compiler.
+            var original = this.__proto__, result = property in (this.__proto__ = null, this);
+            // Restore the original prototype chain.
+            this.__proto__ = original;
+            return result;
+          };
+        } else {
+          // Capture a reference to the top-level `Object` constructor.
+          constructor = members.constructor;
+          // Use the `constructor` property to simulate `Object#hasOwnProperty` in
+          // other environments.
+          isProperty = function (property) {
+            var parent = (this.constructor || constructor).prototype;
+            return property in this && !(property in parent && this[property] === parent[property]);
+          };
+        }
+        members = null;
+        return isProperty.call(this, property);
+      };
+    }
+
+    // Internal: A set of primitive types used by `isHostType`.
+    var PrimitiveTypes = {
+      'boolean': 1,
+      'number': 1,
+      'string': 1,
+      'undefined': 1
+    };
+
+    // Internal: Determines if the given object `property` value is a
+    // non-primitive.
+    var isHostType = function (object, property) {
+      var type = typeof object[property];
+      return type == 'object' ? !!object[property] : !PrimitiveTypes[type];
+    };
+
+    // Internal: Normalizes the `for...in` iteration algorithm across
+    // environments. Each enumerated key is yielded to a `callback` function.
+    forEach = function (object, callback) {
+      var size = 0, Properties, members, property;
+
+      // Tests for bugs in the current environment's `for...in` algorithm. The
+      // `valueOf` property inherits the non-enumerable flag from
+      // `Object.prototype` in older versions of IE, Netscape, and Mozilla.
+      (Properties = function () {
+        this.valueOf = 0;
+      }).prototype.valueOf = 0;
+
+      // Iterate over a new instance of the `Properties` class.
+      members = new Properties();
+      for (property in members) {
+        // Ignore all properties inherited from `Object.prototype`.
+        if (isProperty.call(members, property)) {
+          size++;
+        }
+      }
+      Properties = members = null;
+
+      // Normalize the iteration algorithm.
+      if (!size) {
+        // A list of non-enumerable properties inherited from `Object.prototype`.
+        members = ["valueOf", "toString", "toLocaleString", "propertyIsEnumerable", "isPrototypeOf", "hasOwnProperty", "constructor"];
+        // IE <= 8, Mozilla 1.0, and Netscape 6.2 ignore shadowed non-enumerable
+        // properties.
+        forEach = function (object, callback) {
+          var isFunction = getClass.call(object) == functionClass, property, length;
+          var hasProperty = !isFunction && typeof object.constructor != 'function' && isHostType(object, 'hasOwnProperty') ? object.hasOwnProperty : isProperty;
+          for (property in object) {
+            // Gecko <= 1.0 enumerates the `prototype` property of functions under
+            // certain conditions; IE does not.
+            if (!(isFunction && property == "prototype") && hasProperty.call(object, property)) {
+              callback(property);
+            }
+          }
+          // Manually invoke the callback for each non-enumerable property.
+          for (length = members.length; property = members[--length]; hasProperty.call(object, property) && callback(property));
+        };
+      } else if (size == 2) {
+        // Safari <= 2.0.4 enumerates shadowed properties twice.
+        forEach = function (object, callback) {
+          // Create a set of iterated properties.
+          var members = {}, isFunction = getClass.call(object) == functionClass, property;
+          for (property in object) {
+            // Store each property name to prevent double enumeration. The
+            // `prototype` property of functions is not enumerated due to cross-
+            // environment inconsistencies.
+            if (!(isFunction && property == "prototype") && !isProperty.call(members, property) && (members[property] = 1) && isProperty.call(object, property)) {
+              callback(property);
+            }
+          }
+        };
+      } else {
+        // No bugs detected; use the standard `for...in` algorithm.
+        forEach = function (object, callback) {
+          var isFunction = getClass.call(object) == functionClass, property, isConstructor;
+          for (property in object) {
+            if (!(isFunction && property == "prototype") && isProperty.call(object, property) && !(isConstructor = property === "constructor")) {
+              callback(property);
+            }
+          }
+          // Manually invoke the callback for the `constructor` property due to
+          // cross-environment inconsistencies.
+          if (isConstructor || isProperty.call(object, (property = "constructor"))) {
+            callback(property);
+          }
+        };
+      }
+      return forEach(object, callback);
+    };
+
+    // Public: Serializes a JavaScript `value` as a JSON string. The optional
+    // `filter` argument may specify either a function that alters how object and
+    // array members are serialized, or an array of strings and numbers that
+    // indicates which properties should be serialized. The optional `width`
+    // argument may be either a string or number that specifies the indentation
+    // level of the output.
+    if (!has("json-stringify")) {
+      // Internal: A map of control characters and their escaped equivalents.
+      var Escapes = {
+        92: "\\\\",
+        34: '\\"',
+        8: "\\b",
+        12: "\\f",
+        10: "\\n",
+        13: "\\r",
+        9: "\\t"
+      };
+
+      // Internal: Converts `value` into a zero-padded string such that its
+      // length is at least equal to `width`. The `width` must be <= 6.
+      var leadingZeroes = "000000";
+      var toPaddedString = function (width, value) {
+        // The `|| 0` expression is necessary to work around a bug in
+        // Opera <= 7.54u2 where `0 == -0`, but `String(-0) !== "0"`.
+        return (leadingZeroes + (value || 0)).slice(-width);
+      };
+
+      // Internal: Double-quotes a string `value`, replacing all ASCII control
+      // characters (characters with code unit values between 0 and 31) with
+      // their escaped equivalents. This is an implementation of the
+      // `Quote(value)` operation defined in ES 5.1 section 15.12.3.
+      var unicodePrefix = "\\u00";
+      var quote = function (value) {
+        var result = '"', index = 0, length = value.length, isLarge = length > 10 && charIndexBuggy, symbols;
+        if (isLarge) {
+          symbols = value.split("");
+        }
+        for (; index < length; index++) {
+          var charCode = value.charCodeAt(index);
+          // If the character is a control character, append its Unicode or
+          // shorthand escape sequence; otherwise, append the character as-is.
+          switch (charCode) {
+            case 8: case 9: case 10: case 12: case 13: case 34: case 92:
+              result += Escapes[charCode];
+              break;
+            default:
+              if (charCode < 32) {
+                result += unicodePrefix + toPaddedString(2, charCode.toString(16));
+                break;
+              }
+              result += isLarge ? symbols[index] : charIndexBuggy ? value.charAt(index) : value[index];
+          }
+        }
+        return result + '"';
+      };
+
+      // Internal: Recursively serializes an object. Implements the
+      // `Str(key, holder)`, `JO(value)`, and `JA(value)` operations.
+      var serialize = function (property, object, callback, properties, whitespace, indentation, stack) {
+        var value, className, year, month, date, time, hours, minutes, seconds, milliseconds, results, element, index, length, prefix, result;
+        try {
+          // Necessary for host object support.
+          value = object[property];
+        } catch (exception) {}
+        if (typeof value == "object" && value) {
+          className = getClass.call(value);
+          if (className == dateClass && !isProperty.call(value, "toJSON")) {
+            if (value > -1 / 0 && value < 1 / 0) {
+              // Dates are serialized according to the `Date#toJSON` method
+              // specified in ES 5.1 section 15.9.5.44. See section 15.9.1.15
+              // for the ISO 8601 date time string format.
+              if (getDay) {
+                // Manually compute the year, month, date, hours, minutes,
+                // seconds, and milliseconds if the `getUTC*` methods are
+                // buggy. Adapted from @Yaffle's `date-shim` project.
+                date = floor(value / 864e5);
+                for (year = floor(date / 365.2425) + 1970 - 1; getDay(year + 1, 0) <= date; year++);
+                for (month = floor((date - getDay(year, 0)) / 30.42); getDay(year, month + 1) <= date; month++);
+                date = 1 + date - getDay(year, month);
+                // The `time` value specifies the time within the day (see ES
+                // 5.1 section 15.9.1.2). The formula `(A % B + B) % B` is used
+                // to compute `A modulo B`, as the `%` operator does not
+                // correspond to the `modulo` operation for negative numbers.
+                time = (value % 864e5 + 864e5) % 864e5;
+                // The hours, minutes, seconds, and milliseconds are obtained by
+                // decomposing the time within the day. See section 15.9.1.10.
+                hours = floor(time / 36e5) % 24;
+                minutes = floor(time / 6e4) % 60;
+                seconds = floor(time / 1e3) % 60;
+                milliseconds = time % 1e3;
+              } else {
+                year = value.getUTCFullYear();
+                month = value.getUTCMonth();
+                date = value.getUTCDate();
+                hours = value.getUTCHours();
+                minutes = value.getUTCMinutes();
+                seconds = value.getUTCSeconds();
+                milliseconds = value.getUTCMilliseconds();
+              }
+              // Serialize extended years correctly.
+              value = (year <= 0 || year >= 1e4 ? (year < 0 ? "-" : "+") + toPaddedString(6, year < 0 ? -year : year) : toPaddedString(4, year)) +
+                "-" + toPaddedString(2, month + 1) + "-" + toPaddedString(2, date) +
+                // Months, dates, hours, minutes, and seconds should have two
+                // digits; milliseconds should have three.
+                "T" + toPaddedString(2, hours) + ":" + toPaddedString(2, minutes) + ":" + toPaddedString(2, seconds) +
+                // Milliseconds are optional in ES 5.0, but required in 5.1.
+                "." + toPaddedString(3, milliseconds) + "Z";
+            } else {
+              value = null;
+            }
+          } else if (typeof value.toJSON == "function" && ((className != numberClass && className != stringClass && className != arrayClass) || isProperty.call(value, "toJSON"))) {
+            // Prototype <= 1.6.1 adds non-standard `toJSON` methods to the
+            // `Number`, `String`, `Date`, and `Array` prototypes. JSON 3
+            // ignores all `toJSON` methods on these objects unless they are
+            // defined directly on an instance.
+            value = value.toJSON(property);
+          }
+        }
+        if (callback) {
+          // If a replacement function was provided, call it to obtain the value
+          // for serialization.
+          value = callback.call(object, property, value);
+        }
+        if (value === null) {
+          return "null";
+        }
+        className = getClass.call(value);
+        if (className == booleanClass) {
+          // Booleans are represented literally.
+          return "" + value;
+        } else if (className == numberClass) {
+          // JSON numbers must be finite. `Infinity` and `NaN` are serialized as
+          // `"null"`.
+          return value > -1 / 0 && value < 1 / 0 ? "" + value : "null";
+        } else if (className == stringClass) {
+          // Strings are double-quoted and escaped.
+          return quote("" + value);
+        }
+        // Recursively serialize objects and arrays.
+        if (typeof value == "object") {
+          // Check for cyclic structures. This is a linear search; performance
+          // is inversely proportional to the number of unique nested objects.
+          for (length = stack.length; length--;) {
+            if (stack[length] === value) {
+              // Cyclic structures cannot be serialized by `JSON.stringify`.
+              throw TypeError();
+            }
+          }
+          // Add the object to the stack of traversed objects.
+          stack.push(value);
+          results = [];
+          // Save the current indentation level and indent one additional level.
+          prefix = indentation;
+          indentation += whitespace;
+          if (className == arrayClass) {
+            // Recursively serialize array elements.
+            for (index = 0, length = value.length; index < length; index++) {
+              element = serialize(index, value, callback, properties, whitespace, indentation, stack);
+              results.push(element === undef ? "null" : element);
+            }
+            result = results.length ? (whitespace ? "[\n" + indentation + results.join(",\n" + indentation) + "\n" + prefix + "]" : ("[" + results.join(",") + "]")) : "[]";
+          } else {
+            // Recursively serialize object members. Members are selected from
+            // either a user-specified list of property names, or the object
+            // itself.
+            forEach(properties || value, function (property) {
+              var element = serialize(property, value, callback, properties, whitespace, indentation, stack);
+              if (element !== undef) {
+                // According to ES 5.1 section 15.12.3: "If `gap` {whitespace}
+                // is not the empty string, let `member` {quote(property) + ":"}
+                // be the concatenation of `member` and the `space` character."
+                // The "`space` character" refers to the literal space
+                // character, not the `space` {width} argument provided to
+                // `JSON.stringify`.
+                results.push(quote(property) + ":" + (whitespace ? " " : "") + element);
+              }
+            });
+            result = results.length ? (whitespace ? "{\n" + indentation + results.join(",\n" + indentation) + "\n" + prefix + "}" : ("{" + results.join(",") + "}")) : "{}";
+          }
+          // Remove the object from the traversed object stack.
+          stack.pop();
+          return result;
+        }
+      };
+
+      // Public: `JSON.stringify`. See ES 5.1 section 15.12.3.
+      JSON3.stringify = function (source, filter, width) {
+        var whitespace, callback, properties, className;
+        if (typeof filter == "function" || typeof filter == "object" && filter) {
+          if ((className = getClass.call(filter)) == functionClass) {
+            callback = filter;
+          } else if (className == arrayClass) {
+            // Convert the property names array into a makeshift set.
+            properties = {};
+            for (var index = 0, length = filter.length, value; index < length; value = filter[index++], ((className = getClass.call(value)), className == stringClass || className == numberClass) && (properties[value] = 1));
+          }
+        }
+        if (width) {
+          if ((className = getClass.call(width)) == numberClass) {
+            // Convert the `width` to an integer and create a string containing
+            // `width` number of space characters.
+            if ((width -= width % 1) > 0) {
+              for (whitespace = "", width > 10 && (width = 10); whitespace.length < width; whitespace += " ");
+            }
+          } else if (className == stringClass) {
+            whitespace = width.length <= 10 ? width : width.slice(0, 10);
+          }
+        }
+        // Opera <= 7.54u2 discards the values associated with empty string keys
+        // (`""`) only if they are used directly within an object member list
+        // (e.g., `!("" in { "": 1})`).
+        return serialize("", (value = {}, value[""] = source, value), callback, properties, whitespace, "", []);
+      };
+    }
+
+    // Public: Parses a JSON source string.
+    if (!has("json-parse")) {
+      var fromCharCode = String.fromCharCode;
+
+      // Internal: A map of escaped control characters and their unescaped
+      // equivalents.
+      var Unescapes = {
+        92: "\\",
+        34: '"',
+        47: "/",
+        98: "\b",
+        116: "\t",
+        110: "\n",
+        102: "\f",
+        114: "\r"
+      };
+
+      // Internal: Stores the parser state.
+      var Index, Source;
+
+      // Internal: Resets the parser state and throws a `SyntaxError`.
+      var abort = function() {
+        Index = Source = null;
+        throw SyntaxError();
+      };
+
+      // Internal: Returns the next token, or `"$"` if the parser has reached
+      // the end of the source string. A token may be a string, number, `null`
+      // literal, or Boolean literal.
+      var lex = function () {
+        var source = Source, length = source.length, value, begin, position, isSigned, charCode;
+        while (Index < length) {
+          charCode = source.charCodeAt(Index);
+          switch (charCode) {
+            case 9: case 10: case 13: case 32:
+              // Skip whitespace tokens, including tabs, carriage returns, line
+              // feeds, and space characters.
+              Index++;
+              break;
+            case 123: case 125: case 91: case 93: case 58: case 44:
+              // Parse a punctuator token (`{`, `}`, `[`, `]`, `:`, or `,`) at
+              // the current position.
+              value = charIndexBuggy ? source.charAt(Index) : source[Index];
+              Index++;
+              return value;
+            case 34:
+              // `"` delimits a JSON string; advance to the next character and
+              // begin parsing the string. String tokens are prefixed with the
+              // sentinel `@` character to distinguish them from punctuators and
+              // end-of-string tokens.
+              for (value = "@", Index++; Index < length;) {
+                charCode = source.charCodeAt(Index);
+                if (charCode < 32) {
+                  // Unescaped ASCII control characters (those with a code unit
+                  // less than the space character) are not permitted.
+                  abort();
+                } else if (charCode == 92) {
+                  // A reverse solidus (`\`) marks the beginning of an escaped
+                  // control character (including `"`, `\`, and `/`) or Unicode
+                  // escape sequence.
+                  charCode = source.charCodeAt(++Index);
+                  switch (charCode) {
+                    case 92: case 34: case 47: case 98: case 116: case 110: case 102: case 114:
+                      // Revive escaped control characters.
+                      value += Unescapes[charCode];
+                      Index++;
+                      break;
+                    case 117:
+                      // `\u` marks the beginning of a Unicode escape sequence.
+                      // Advance to the first character and validate the
+                      // four-digit code point.
+                      begin = ++Index;
+                      for (position = Index + 4; Index < position; Index++) {
+                        charCode = source.charCodeAt(Index);
+                        // A valid sequence comprises four hexdigits (case-
+                        // insensitive) that form a single hexadecimal value.
+                        if (!(charCode >= 48 && charCode <= 57 || charCode >= 97 && charCode <= 102 || charCode >= 65 && charCode <= 70)) {
+                          // Invalid Unicode escape sequence.
+                          abort();
+                        }
+                      }
+                      // Revive the escaped character.
+                      value += fromCharCode("0x" + source.slice(begin, Index));
+                      break;
+                    default:
+                      // Invalid escape sequence.
+                      abort();
+                  }
+                } else {
+                  if (charCode == 34) {
+                    // An unescaped double-quote character marks the end of the
+                    // string.
+                    break;
+                  }
+                  charCode = source.charCodeAt(Index);
+                  begin = Index;
+                  // Optimize for the common case where a string is valid.
+                  while (charCode >= 32 && charCode != 92 && charCode != 34) {
+                    charCode = source.charCodeAt(++Index);
+                  }
+                  // Append the string as-is.
+                  value += source.slice(begin, Index);
+                }
+              }
+              if (source.charCodeAt(Index) == 34) {
+                // Advance to the next character and return the revived string.
+                Index++;
+                return value;
+              }
+              // Unterminated string.
+              abort();
+            default:
+              // Parse numbers and literals.
+              begin = Index;
+              // Advance past the negative sign, if one is specified.
+              if (charCode == 45) {
+                isSigned = true;
+                charCode = source.charCodeAt(++Index);
+              }
+              // Parse an integer or floating-point value.
+              if (charCode >= 48 && charCode <= 57) {
+                // Leading zeroes are interpreted as octal literals.
+                if (charCode == 48 && ((charCode = source.charCodeAt(Index + 1)), charCode >= 48 && charCode <= 57)) {
+                  // Illegal octal literal.
+                  abort();
+                }
+                isSigned = false;
+                // Parse the integer component.
+                for (; Index < length && ((charCode = source.charCodeAt(Index)), charCode >= 48 && charCode <= 57); Index++);
+                // Floats cannot contain a leading decimal point; however, this
+                // case is already accounted for by the parser.
+                if (source.charCodeAt(Index) == 46) {
+                  position = ++Index;
+                  // Parse the decimal component.
+                  for (; position < length && ((charCode = source.charCodeAt(position)), charCode >= 48 && charCode <= 57); position++);
+                  if (position == Index) {
+                    // Illegal trailing decimal.
+                    abort();
+                  }
+                  Index = position;
+                }
+                // Parse exponents. The `e` denoting the exponent is
+                // case-insensitive.
+                charCode = source.charCodeAt(Index);
+                if (charCode == 101 || charCode == 69) {
+                  charCode = source.charCodeAt(++Index);
+                  // Skip past the sign following the exponent, if one is
+                  // specified.
+                  if (charCode == 43 || charCode == 45) {
+                    Index++;
+                  }
+                  // Parse the exponential component.
+                  for (position = Index; position < length && ((charCode = source.charCodeAt(position)), charCode >= 48 && charCode <= 57); position++);
+                  if (position == Index) {
+                    // Illegal empty exponent.
+                    abort();
+                  }
+                  Index = position;
+                }
+                // Coerce the parsed value to a JavaScript number.
+                return +source.slice(begin, Index);
+              }
+              // A negative sign may only precede numbers.
+              if (isSigned) {
+                abort();
+              }
+              // `true`, `false`, and `null` literals.
+              if (source.slice(Index, Index + 4) == "true") {
+                Index += 4;
+                return true;
+              } else if (source.slice(Index, Index + 5) == "false") {
+                Index += 5;
+                return false;
+              } else if (source.slice(Index, Index + 4) == "null") {
+                Index += 4;
+                return null;
+              }
+              // Unrecognized token.
+              abort();
+          }
+        }
+        // Return the sentinel `$` character if the parser has reached the end
+        // of the source string.
+        return "$";
+      };
+
+      // Internal: Parses a JSON `value` token.
+      var get = function (value) {
+        var results, hasMembers;
+        if (value == "$") {
+          // Unexpected end of input.
+          abort();
+        }
+        if (typeof value == "string") {
+          if ((charIndexBuggy ? value.charAt(0) : value[0]) == "@") {
+            // Remove the sentinel `@` character.
+            return value.slice(1);
+          }
+          // Parse object and array literals.
+          if (value == "[") {
+            // Parses a JSON array, returning a new JavaScript array.
+            results = [];
+            for (;; hasMembers || (hasMembers = true)) {
+              value = lex();
+              // A closing square bracket marks the end of the array literal.
+              if (value == "]") {
+                break;
+              }
+              // If the array literal contains elements, the current token
+              // should be a comma separating the previous element from the
+              // next.
+              if (hasMembers) {
+                if (value == ",") {
+                  value = lex();
+                  if (value == "]") {
+                    // Unexpected trailing `,` in array literal.
+                    abort();
+                  }
+                } else {
+                  // A `,` must separate each array element.
+                  abort();
+                }
+              }
+              // Elisions and leading commas are not permitted.
+              if (value == ",") {
+                abort();
+              }
+              results.push(get(value));
+            }
+            return results;
+          } else if (value == "{") {
+            // Parses a JSON object, returning a new JavaScript object.
+            results = {};
+            for (;; hasMembers || (hasMembers = true)) {
+              value = lex();
+              // A closing curly brace marks the end of the object literal.
+              if (value == "}") {
+                break;
+              }
+              // If the object literal contains members, the current token
+              // should be a comma separator.
+              if (hasMembers) {
+                if (value == ",") {
+                  value = lex();
+                  if (value == "}") {
+                    // Unexpected trailing `,` in object literal.
+                    abort();
+                  }
+                } else {
+                  // A `,` must separate each object member.
+                  abort();
+                }
+              }
+              // Leading commas are not permitted, object property names must be
+              // double-quoted strings, and a `:` must separate each property
+              // name and value.
+              if (value == "," || typeof value != "string" || (charIndexBuggy ? value.charAt(0) : value[0]) != "@" || lex() != ":") {
+                abort();
+              }
+              results[value.slice(1)] = get(lex());
+            }
+            return results;
+          }
+          // Unexpected token encountered.
+          abort();
+        }
+        return value;
+      };
+
+      // Internal: Updates a traversed object member.
+      var update = function(source, property, callback) {
+        var element = walk(source, property, callback);
+        if (element === undef) {
+          delete source[property];
+        } else {
+          source[property] = element;
+        }
+      };
+
+      // Internal: Recursively traverses a parsed JSON object, invoking the
+      // `callback` function for each value. This is an implementation of the
+      // `Walk(holder, name)` operation defined in ES 5.1 section 15.12.2.
+      var walk = function (source, property, callback) {
+        var value = source[property], length;
+        if (typeof value == "object" && value) {
+          // `forEach` can't be used to traverse an array in Opera <= 8.54
+          // because its `Object#hasOwnProperty` implementation returns `false`
+          // for array indices (e.g., `![1, 2, 3].hasOwnProperty("0")`).
+          if (getClass.call(value) == arrayClass) {
+            for (length = value.length; length--;) {
+              update(value, length, callback);
+            }
+          } else {
+            forEach(value, function (property) {
+              update(value, property, callback);
+            });
+          }
+        }
+        return callback.call(source, property, value);
+      };
+
+      // Public: `JSON.parse`. See ES 5.1 section 15.12.2.
+      JSON3.parse = function (source, callback) {
+        var result, value;
+        Index = 0;
+        Source = "" + source;
+        result = get(lex());
+        // If a JSON string contains multiple tokens, it is invalid.
+        if (lex() != "$") {
+          abort();
+        }
+        // Reset the parser state.
+        Index = Source = null;
+        return callback && getClass.call(callback) == functionClass ? walk((value = {}, value[""] = result, value), "", callback) : result;
+      };
+    }
+  }
+
+  // Export for asynchronous module loaders.
+  if (isLoader) {
+    define(function () {
+      return JSON3;
+    });
+  }
+}(this));
+
+},{}],166:[function(require,module,exports){
+module.exports = toArray
+
+function toArray(list, index) {
+    var array = []
+
+    index = index || 0
+
+    for (var i = index || 0; i < list.length; i++) {
+        array[i - index] = list[i]
+    }
+
+    return array
+}
+
+},{}],167:[function(require,module,exports){
 var MediaStreamType = {
     VIDEO_TYPE: "Video",
 
     AUDIO_TYPE: "Audio"
 };
 module.exports = MediaStreamType;
-},{}],96:[function(require,module,exports){
-var RTCBrowserType = {
-    RTC_BROWSER_CHROME: "rtc_browser.chrome",
-
-    RTC_BROWSER_FIREFOX: "rtc_browser.firefox"
-};
-
-module.exports = RTCBrowserType;
-},{}],97:[function(require,module,exports){
+},{}],168:[function(require,module,exports){
 var RTCEvents = {
+    RTC_READY: "rtc.ready",
+    DATA_CHANNEL_OPEN: "rtc.data_channel_open",
     LASTN_CHANGED: "rtc.lastn_changed",
     DOMINANTSPEAKER_CHANGED: "rtc.dominantspeaker_changed",
     LASTN_ENDPOINT_CHANGED: "rtc.lastn_endpoint_changed",
-    AVAILABLE_DEVICES_CHANGED: "rtc.available_devices_changed"
+    AVAILABLE_DEVICES_CHANGED: "rtc.available_devices_changed",
+    AUDIO_MUTE: "rtc.audio_mute",
+    VIDEO_MUTE: "rtc.video_mute"
 };
 
 module.exports = RTCEvents;
-},{}],98:[function(require,module,exports){
+},{}],169:[function(require,module,exports){
 var Resolutions = {
     "1080": {
         width: 1920,
@@ -28106,7 +38585,7 @@ var Resolutions = {
     }
 };
 module.exports = Resolutions;
-},{}],99:[function(require,module,exports){
+},{}],170:[function(require,module,exports){
 var StreamEventTypes = {
     EVENT_TYPE_LOCAL_CREATED: "stream.local_created",
 
@@ -28116,20 +38595,19 @@ var StreamEventTypes = {
 
     EVENT_TYPE_REMOTE_CREATED: "stream.remote_created",
 
-    EVENT_TYPE_REMOTE_ENDED: "stream.remote_ended",
-
-    EVENT_TYPE_REMOTE_CHANGED: "stream.changed"
+    EVENT_TYPE_REMOTE_ENDED: "stream.remote_ended"
 };
 
 module.exports = StreamEventTypes;
-},{}],100:[function(require,module,exports){
+},{}],171:[function(require,module,exports){
 var UIEvents = {
     NICKNAME_CHANGED: "UI.nickname_changed",
     SELECTED_ENDPOINT: "UI.selected_endpoint",
-    PINNED_ENDPOINT: "UI.pinned_endpoint"
+    PINNED_ENDPOINT: "UI.pinned_endpoint",
+    LARGEVIDEO_INIT: "UI.largevideo_init"
 };
 module.exports = UIEvents;
-},{}],101:[function(require,module,exports){
+},{}],172:[function(require,module,exports){
 var AuthenticationEvents = {
     /**
      * Event callback arguments:
@@ -28143,7 +38621,7 @@ var AuthenticationEvents = {
 };
 module.exports = AuthenticationEvents;
 
-},{}],102:[function(require,module,exports){
+},{}],173:[function(require,module,exports){
 var CQEvents = {
     LOCALSTATS_UPDATED: "cq.localstats_updated",
     REMOTESTATS_UPDATED: "cq.remotestats_updated",
@@ -28151,7 +38629,7 @@ var CQEvents = {
 };
 
 module.exports = CQEvents;
-},{}],103:[function(require,module,exports){
+},{}],174:[function(require,module,exports){
 var DesktopSharingEventTypes = {
     INIT: "ds.init",
 
@@ -28161,14 +38639,14 @@ var DesktopSharingEventTypes = {
 };
 
 module.exports = DesktopSharingEventTypes;
-},{}],104:[function(require,module,exports){
+},{}],175:[function(require,module,exports){
 var Events = {
     DTMF_SUPPORT_CHANGED: "members.dtmf_support_changed"
 };
 
 module.exports = Events;
 
-},{}],105:[function(require,module,exports){
+},{}],176:[function(require,module,exports){
 module.exports = {
     getLanguages : function () {
         var languages = [];
@@ -28185,432 +38663,98 @@ module.exports = {
     TR: "tr",
     FR: "fr"
 }
-},{}],106:[function(require,module,exports){
+},{}],177:[function(require,module,exports){
 var XMPPEvents = {
+    // Designates an event indicating that the connection to the XMPP server
+    // failed.
     CONNECTION_FAILED: "xmpp.connection.failed",
-    CONFERENCE_CREATED: "xmpp.conferenceCreated.jingle",
-    CALL_TERMINATED: "xmpp.callterminated.jingle",
+    // Designates an event indicating that the media (ICE) connection was
+    // interrupted. This should go to the RTC module.
+    CONNECTION_INTERRUPTED: "xmpp.connection.interrupted",
+    // Designates an event indicating that the media (ICE) connection was
+    // restored. This should go to the RTC module.
+    CONNECTION_RESTORED: "xmpp.connection.restored",
+    // Designates an event indicating that an offer (e.g. Jingle
+    // session-initiate) was received.
     CALL_INCOMING: "xmpp.callincoming.jingle",
-    DISPOSE_CONFERENCE: "xmpp.dispose_conference",
-    GRACEFUL_SHUTDOWN: "xmpp.graceful_shutdown",
+    // Designates an event indicating that we were kicked from the XMPP MUC.
     KICKED: "xmpp.kicked",
-    BRIDGE_DOWN: "xmpp.bridge_down",
+    // Designates an event indicating that the userID for a specific JID has
+    // changed.
     USER_ID_CHANGED: "xmpp.user_id_changed",
-    STREAMS_CHANGED: "xmpp.streams_changed",
-    // We joined the MUC
+    // Designates an event indicating that we have joined the XMPP MUC.
     MUC_JOINED: "xmpp.muc_joined",
-    // A member joined the MUC
+    // Designates an event indicating that a participant joined the XMPP MUC.
     MUC_MEMBER_JOINED: "xmpp.muc_member_joined",
-    // A member left the MUC
+    // Designates an event indicating that a participant left the XMPP MUC.
     MUC_MEMBER_LEFT: "xmpp.muc_member_left",
+    // Designates an event indicating that the MUC role of a participant has
+    // changed.
     MUC_ROLE_CHANGED: "xmpp.muc_role_changed",
+    // Designates an event indicating that the XMPP MUC was destroyed.
     MUC_DESTROYED: "xmpp.muc_destroyed",
+    // Designates an event indicating that the display name of a participant
+    // has changed.
     DISPLAY_NAME_CHANGED: "xmpp.display_name_changed",
+    // Designates an event indicating that we received statistics from a
+    // participant in the MUC.
     REMOTE_STATS: "xmpp.remote_stats",
+    // Designates an event indicating that our role in the XMPP MUC has changed.
     LOCAL_ROLE_CHANGED: "xmpp.localrole_changed",
-    PRESENCE_STATUS: "xmpp.presence_status",
-    RESERVATION_ERROR: "xmpp.room_reservation_error",
+    // Designates an event indicating that the subject of the XMPP MUC has
+    // changed.
     SUBJECT_CHANGED: "xmpp.subject_changed",
+    // Designates an event indicating that an XMPP message in the MUC was
+    // received.
     MESSAGE_RECEIVED: "xmpp.message_received",
+    // Designates an event indicating that we sent an XMPP message to the MUC.
     SENDING_CHAT_MESSAGE: "xmpp.sending_chat_message",
+    // Designates an event indicating that the video type (e.g. 'camera' or
+    // 'screen') for a participant has changed.
+    PARTICIPANT_VIDEO_TYPE_CHANGED: "xmpp.video_type",
+    // Designates an event indicating that a participant in the XMPP MUC has
+    // advertised that they have audio muted (or unmuted).
+    PARTICIPANT_AUDIO_MUTED: "xmpp.audio_muted",
+    // Designates an event indicating that a participant in the XMPP MUC has
+    // advertised that they have video muted (or unmuted).
+    PARTICIPANT_VIDEO_MUTED: "xmpp.video_muted",
+    // Designates an event indicating that the focus has asked us to mute our
+    // audio.
+    AUDIO_MUTED_BY_FOCUS: "xmpp.audio_muted_by_focus",
+    // Designates an event indicating that a moderator in the room changed the
+    // "start muted" settings for the conference.
+    START_MUTED_SETTING_CHANGED: "xmpp.start_muted_setting_changed",
+    // Designates an event indicating that we should join the conference with
+    // audio and/or video muted.
+    START_MUTED_FROM_FOCUS: "xmpp.start_muted_from_focus",
+
+
+    PEERCONNECTION_READY: "xmpp.peerconnection_ready",
+    CONFERENCE_SETUP_FAILED: "xmpp.conference_setup_failed",
     PASSWORD_REQUIRED: "xmpp.password_required",
     AUTHENTICATION_REQUIRED: "xmpp.authentication_required",
     CHAT_ERROR_RECEIVED: "xmpp.chat_error_received",
     ETHERPAD: "xmpp.etherpad",
     DEVICE_AVAILABLE: "xmpp.device_available",
-    START_MUTED: "xmpp.start_muted"
+    BRIDGE_DOWN: "xmpp.bridge_down",
+    PRESENCE_STATUS: "xmpp.presence_status",
+    RESERVATION_ERROR: "xmpp.room_reservation_error",
+    DISPOSE_CONFERENCE: "xmpp.dispose_conference",
+    GRACEFUL_SHUTDOWN: "xmpp.graceful_shutdown",
+    // TODO: only used in a hack, should probably be removed.
+    SET_LOCAL_DESCRIPTION_ERROR: 'xmpp.set_local_description_error',
+    // TODO: only used in a hack, should probably be removed.
+    SET_REMOTE_DESCRIPTION_ERROR: 'xmpp.set_remote_description_error',
+    // TODO: only used in a hack, should probably be removed.
+    CREATE_ANSWER_ERROR: 'xmpp.create_answer_error',
+    JINGLE_FATAL_ERROR: 'xmpp.jingle_fatal_error',
+    PROMPT_FOR_LOGIN: 'xmpp.prompt_for_login',
+    FOCUS_DISCONNECTED: 'xmpp.focus_disconnected',
+    ROOM_JOIN_ERROR: 'xmpp.room_join_error',
+    ROOM_CONNECT_ERROR: 'xmpp.room_connect_error',
+    // xmpp is connected and obtained user media
+    READY_TO_JOIN: 'xmpp.ready_to_join'
 };
 module.exports = XMPPEvents;
-},{}],107:[function(require,module,exports){
-// Copyright Joyent, Inc. and other Node contributors.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a
-// copy of this software and associated documentation files (the
-// "Software"), to deal in the Software without restriction, including
-// without limitation the rights to use, copy, modify, merge, publish,
-// distribute, sublicense, and/or sell copies of the Software, and to permit
-// persons to whom the Software is furnished to do so, subject to the
-// following conditions:
-//
-// The above copyright notice and this permission notice shall be included
-// in all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
-// OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-// NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-// DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
-// OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-// USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-function EventEmitter() {
-  this._events = this._events || {};
-  this._maxListeners = this._maxListeners || undefined;
-}
-module.exports = EventEmitter;
-
-// Backwards-compat with node 0.10.x
-EventEmitter.EventEmitter = EventEmitter;
-
-EventEmitter.prototype._events = undefined;
-EventEmitter.prototype._maxListeners = undefined;
-
-// By default EventEmitters will print a warning if more than 10 listeners are
-// added to it. This is a useful default which helps finding memory leaks.
-EventEmitter.defaultMaxListeners = 10;
-
-// Obviously not all Emitters should be limited to 10. This function allows
-// that to be increased. Set to zero for unlimited.
-EventEmitter.prototype.setMaxListeners = function(n) {
-  if (!isNumber(n) || n < 0 || isNaN(n))
-    throw TypeError('n must be a positive number');
-  this._maxListeners = n;
-  return this;
-};
-
-EventEmitter.prototype.emit = function(type) {
-  var er, handler, len, args, i, listeners;
-
-  if (!this._events)
-    this._events = {};
-
-  // If there is no 'error' event listener then throw.
-  if (type === 'error') {
-    if (!this._events.error ||
-        (isObject(this._events.error) && !this._events.error.length)) {
-      er = arguments[1];
-      if (er instanceof Error) {
-        throw er; // Unhandled 'error' event
-      }
-      throw TypeError('Uncaught, unspecified "error" event.');
-    }
-  }
-
-  handler = this._events[type];
-
-  if (isUndefined(handler))
-    return false;
-
-  if (isFunction(handler)) {
-    switch (arguments.length) {
-      // fast cases
-      case 1:
-        handler.call(this);
-        break;
-      case 2:
-        handler.call(this, arguments[1]);
-        break;
-      case 3:
-        handler.call(this, arguments[1], arguments[2]);
-        break;
-      // slower
-      default:
-        len = arguments.length;
-        args = new Array(len - 1);
-        for (i = 1; i < len; i++)
-          args[i - 1] = arguments[i];
-        handler.apply(this, args);
-    }
-  } else if (isObject(handler)) {
-    len = arguments.length;
-    args = new Array(len - 1);
-    for (i = 1; i < len; i++)
-      args[i - 1] = arguments[i];
-
-    listeners = handler.slice();
-    len = listeners.length;
-    for (i = 0; i < len; i++)
-      listeners[i].apply(this, args);
-  }
-
-  return true;
-};
-
-EventEmitter.prototype.addListener = function(type, listener) {
-  var m;
-
-  if (!isFunction(listener))
-    throw TypeError('listener must be a function');
-
-  if (!this._events)
-    this._events = {};
-
-  // To avoid recursion in the case that type === "newListener"! Before
-  // adding it to the listeners, first emit "newListener".
-  if (this._events.newListener)
-    this.emit('newListener', type,
-              isFunction(listener.listener) ?
-              listener.listener : listener);
-
-  if (!this._events[type])
-    // Optimize the case of one listener. Don't need the extra array object.
-    this._events[type] = listener;
-  else if (isObject(this._events[type]))
-    // If we've already got an array, just append.
-    this._events[type].push(listener);
-  else
-    // Adding the second element, need to change to array.
-    this._events[type] = [this._events[type], listener];
-
-  // Check for listener leak
-  if (isObject(this._events[type]) && !this._events[type].warned) {
-    var m;
-    if (!isUndefined(this._maxListeners)) {
-      m = this._maxListeners;
-    } else {
-      m = EventEmitter.defaultMaxListeners;
-    }
-
-    if (m && m > 0 && this._events[type].length > m) {
-      this._events[type].warned = true;
-      console.error('(node) warning: possible EventEmitter memory ' +
-                    'leak detected. %d listeners added. ' +
-                    'Use emitter.setMaxListeners() to increase limit.',
-                    this._events[type].length);
-      if (typeof console.trace === 'function') {
-        // not supported in IE 10
-        console.trace();
-      }
-    }
-  }
-
-  return this;
-};
-
-EventEmitter.prototype.on = EventEmitter.prototype.addListener;
-
-EventEmitter.prototype.once = function(type, listener) {
-  if (!isFunction(listener))
-    throw TypeError('listener must be a function');
-
-  var fired = false;
-
-  function g() {
-    this.removeListener(type, g);
-
-    if (!fired) {
-      fired = true;
-      listener.apply(this, arguments);
-    }
-  }
-
-  g.listener = listener;
-  this.on(type, g);
-
-  return this;
-};
-
-// emits a 'removeListener' event iff the listener was removed
-EventEmitter.prototype.removeListener = function(type, listener) {
-  var list, position, length, i;
-
-  if (!isFunction(listener))
-    throw TypeError('listener must be a function');
-
-  if (!this._events || !this._events[type])
-    return this;
-
-  list = this._events[type];
-  length = list.length;
-  position = -1;
-
-  if (list === listener ||
-      (isFunction(list.listener) && list.listener === listener)) {
-    delete this._events[type];
-    if (this._events.removeListener)
-      this.emit('removeListener', type, listener);
-
-  } else if (isObject(list)) {
-    for (i = length; i-- > 0;) {
-      if (list[i] === listener ||
-          (list[i].listener && list[i].listener === listener)) {
-        position = i;
-        break;
-      }
-    }
-
-    if (position < 0)
-      return this;
-
-    if (list.length === 1) {
-      list.length = 0;
-      delete this._events[type];
-    } else {
-      list.splice(position, 1);
-    }
-
-    if (this._events.removeListener)
-      this.emit('removeListener', type, listener);
-  }
-
-  return this;
-};
-
-EventEmitter.prototype.removeAllListeners = function(type) {
-  var key, listeners;
-
-  if (!this._events)
-    return this;
-
-  // not listening for removeListener, no need to emit
-  if (!this._events.removeListener) {
-    if (arguments.length === 0)
-      this._events = {};
-    else if (this._events[type])
-      delete this._events[type];
-    return this;
-  }
-
-  // emit removeListener for all listeners on all events
-  if (arguments.length === 0) {
-    for (key in this._events) {
-      if (key === 'removeListener') continue;
-      this.removeAllListeners(key);
-    }
-    this.removeAllListeners('removeListener');
-    this._events = {};
-    return this;
-  }
-
-  listeners = this._events[type];
-
-  if (isFunction(listeners)) {
-    this.removeListener(type, listeners);
-  } else {
-    // LIFO order
-    while (listeners.length)
-      this.removeListener(type, listeners[listeners.length - 1]);
-  }
-  delete this._events[type];
-
-  return this;
-};
-
-EventEmitter.prototype.listeners = function(type) {
-  var ret;
-  if (!this._events || !this._events[type])
-    ret = [];
-  else if (isFunction(this._events[type]))
-    ret = [this._events[type]];
-  else
-    ret = this._events[type].slice();
-  return ret;
-};
-
-EventEmitter.listenerCount = function(emitter, type) {
-  var ret;
-  if (!emitter._events || !emitter._events[type])
-    ret = 0;
-  else if (isFunction(emitter._events[type]))
-    ret = 1;
-  else
-    ret = emitter._events[type].length;
-  return ret;
-};
-
-function isFunction(arg) {
-  return typeof arg === 'function';
-}
-
-function isNumber(arg) {
-  return typeof arg === 'number';
-}
-
-function isObject(arg) {
-  return typeof arg === 'object' && arg !== null;
-}
-
-function isUndefined(arg) {
-  return arg === void 0;
-}
-
-},{}],108:[function(require,module,exports){
-// shim for using process in browser
-
-var process = module.exports = {};
-
-process.nextTick = (function () {
-    var canSetImmediate = typeof window !== 'undefined'
-    && window.setImmediate;
-    var canMutationObserver = typeof window !== 'undefined'
-    && window.MutationObserver;
-    var canPost = typeof window !== 'undefined'
-    && window.postMessage && window.addEventListener
-    ;
-
-    if (canSetImmediate) {
-        return function (f) { return window.setImmediate(f) };
-    }
-
-    var queue = [];
-
-    if (canMutationObserver) {
-        var hiddenDiv = document.createElement("div");
-        var observer = new MutationObserver(function () {
-            var queueList = queue.slice();
-            queue.length = 0;
-            queueList.forEach(function (fn) {
-                fn();
-            });
-        });
-
-        observer.observe(hiddenDiv, { attributes: true });
-
-        return function nextTick(fn) {
-            if (!queue.length) {
-                hiddenDiv.setAttribute('yes', 'no');
-            }
-            queue.push(fn);
-        };
-    }
-
-    if (canPost) {
-        window.addEventListener('message', function (ev) {
-            var source = ev.source;
-            if ((source === window || source === null) && ev.data === 'process-tick') {
-                ev.stopPropagation();
-                if (queue.length > 0) {
-                    var fn = queue.shift();
-                    fn();
-                }
-            }
-        }, true);
-
-        return function nextTick(fn) {
-            queue.push(fn);
-            window.postMessage('process-tick', '*');
-        };
-    }
-
-    return function nextTick(fn) {
-        setTimeout(fn, 0);
-    };
-})();
-
-process.title = 'browser';
-process.browser = true;
-process.env = {};
-process.argv = [];
-
-function noop() {}
-
-process.on = noop;
-process.addListener = noop;
-process.once = noop;
-process.off = noop;
-process.removeListener = noop;
-process.removeAllListeners = noop;
-process.emit = noop;
-
-process.binding = function (name) {
-    throw new Error('process.binding is not supported');
-};
-
-// TODO(shtylman)
-process.cwd = function () { return '/' };
-process.chdir = function (dir) {
-    throw new Error('process.chdir is not supported');
-};
-
-},{}]},{},[1])(1)
+},{}]},{},[3])(3)
 });

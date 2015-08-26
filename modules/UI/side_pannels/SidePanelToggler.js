@@ -1,3 +1,4 @@
+/* global require, $ */
 var Chat = require("./chat/Chat");
 var ContactList = require("./contactlist/ContactList");
 var Settings = require("./../../settings/Settings");
@@ -16,7 +17,7 @@ var PanelToggler = (function(my) {
     var buttons = {
         '#chatspace': '#chatBottomButton',
         '#contactlist': '#contactListButton',
-        '#settingsmenu': '#settingsButton'
+        '#settingsmenu': '#toolbar_button_settings'
     };
 
     /**

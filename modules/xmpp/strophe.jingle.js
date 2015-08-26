@@ -1,27 +1,11 @@
 /* jshint -W117 */
 
-var JingleSession = require("./JingleSession");
+var JingleSession = require("./JingleSessionPC");
 var XMPPEvents = require("../../service/xmpp/XMPPEvents");
+var RTCBrowserType = require("../RTC/RTCBrowserType");
 
 
-module.exports = function(XMPP, eventEmitter)
-{
-    function CallIncomingJingle(sid, connection) {
-        var sess = connection.jingle.sessions[sid];
-
-        // TODO: do we check activecall == null?
-        connection.jingle.activecall = sess;
-
-        eventEmitter.emit(XMPPEvents.CALL_INCOMING, sess);
-
-        // TODO: check affiliation and/or role
-        console.log('emuc data for', sess.peerjid, connection.emuc.members[sess.peerjid]);
-        sess.usedrip = true; // not-so-naive trickle ice
-        sess.sendAnswer();
-        sess.accept();
-
-    };
-
+module.exports = function(XMPP, eventEmitter) {
     Strophe.addConnectionPlugin('jingle', {
         connection: null,
         sessions: {},
@@ -49,16 +33,18 @@ module.exports = function(XMPP, eventEmitter)
                 this.connection.disco.addFeature('urn:xmpp:jingle:apps:rtp:audio');
                 this.connection.disco.addFeature('urn:xmpp:jingle:apps:rtp:video');
 
+                if (RTCBrowserType.isChrome() || RTCBrowserType.isOpera()
+                    || RTCBrowserType.isTemasysPluginUsed()) {
+                    this.connection.disco.addFeature('urn:ietf:rfc:4588');
+                }
 
-                // this is dealt with by SDP O/A so we don't need to annouce this
+                // this is dealt with by SDP O/A so we don't need to announce this
                 //this.connection.disco.addFeature('urn:xmpp:jingle:apps:rtp:rtcp-fb:0'); // XEP-0293
                 //this.connection.disco.addFeature('urn:xmpp:jingle:apps:rtp:rtp-hdrext:0'); // XEP-0294
-                if (config.useRtcpMux) {
-                    this.connection.disco.addFeature('urn:ietf:rfc:5761'); // rtcp-mux
-                }
-                if (config.useBundle) {
-                    this.connection.disco.addFeature('urn:ietf:rfc:5888'); // a=group, e.g. bundle
-                }
+
+                this.connection.disco.addFeature('urn:ietf:rfc:5761'); // rtcp-mux
+                this.connection.disco.addFeature('urn:ietf:rfc:5888'); // a=group, e.g. bundle
+
                 //this.connection.disco.addFeature('urn:ietf:rfc:5576'); // a=ssrc
             }
             this.connection.addHandler(this.onJingle.bind(this), 'urn:xmpp:jingle:1', 'iq', 'set', null, null);
@@ -83,9 +69,8 @@ module.exports = function(XMPP, eventEmitter)
                     this.connection.send(ack);
                     return true;
                 }
-                // compare from to sess.peerjid (bare jid comparison for later compat with message-mode)
                 // local jid is not checked
-                if (Strophe.getBareJidFromJid(fromJid) != Strophe.getBareJidFromJid(sess.peerjid)) {
+                if (fromJid != sess.peerjid) {
                     console.warn('jid mismatch for session id', sid, fromJid, sess.peerjid);
                     ack.type = 'error';
                     ack.c('error', {type: 'cancel'})
@@ -110,36 +95,45 @@ module.exports = function(XMPP, eventEmitter)
             switch (action) {
                 case 'session-initiate':
                     var startMuted = $(iq).find('jingle>startmuted');
-                    if(startMuted && startMuted.length > 0)
-                    {
+                    if (startMuted && startMuted.length > 0) {
                         var audioMuted = startMuted.attr("audio");
                         var videoMuted = startMuted.attr("video");
-                        APP.UI.setInitialMuteFromFocus((audioMuted === "true"),
-                            (videoMuted === "true"));
+                        eventEmitter.emit(XMPPEvents.START_MUTED_FROM_FOCUS,
+                                audioMuted === "true", videoMuted === "true");
                     }
                     sess = new JingleSession(
                         $(iq).attr('to'), $(iq).find('jingle').attr('sid'),
-                        this.connection, XMPP);
+                        this.connection, XMPP, eventEmitter);
                     // configure session
 
                     sess.media_constraints = this.media_constraints;
                     sess.pc_constraints = this.pc_constraints;
                     sess.ice_config = this.ice_config;
 
-                    sess.initiate(fromJid, false);
+                    sess.initialize(fromJid, false);
                     // FIXME: setRemoteDescription should only be done when this call is to be accepted
-                    sess.setRemoteDescription($(iq).find('>jingle'), 'offer');
+                    sess.setOffer($(iq).find('>jingle'));
 
                     this.sessions[sess.sid] = sess;
                     this.jid2session[sess.peerjid] = sess;
 
                     // the callback should either
                     // .sendAnswer and .accept
-                    // or .sendTerminate -- not necessarily synchronus
-                    CallIncomingJingle(sess.sid, this.connection);
+                    // or .sendTerminate -- not necessarily synchronous
+
+                    // TODO: do we check activecall == null?
+                    this.connection.jingle.activecall = sess;
+
+                    eventEmitter.emit(XMPPEvents.CALL_INCOMING, sess);
+
+                    // TODO: check affiliation and/or role
+                    console.log('emuc data for', sess.peerjid,
+                        this.connection.emuc.members[sess.peerjid]);
+                    sess.sendAnswer();
+                    sess.accept();
                     break;
                 case 'session-accept':
-                    sess.setRemoteDescription($(iq).find('>jingle'), 'answer');
+                    sess.setAnswer($(iq).find('>jingle'));
                     sess.accept();
                     $(document).trigger('callaccepted.jingle', [sess.sid]);
                     break;
@@ -199,14 +193,14 @@ module.exports = function(XMPP, eventEmitter)
         initiate: function (peerjid, myjid) { // initiate a new jinglesession to peerjid
             var sess = new JingleSession(myjid || this.connection.jid,
                 Math.random().toString(36).substr(2, 12), // random string
-                this.connection, XMPP);
+                this.connection, XMPP, eventEmitter);
             // configure session
 
             sess.media_constraints = this.media_constraints;
             sess.pc_constraints = this.pc_constraints;
             sess.ice_config = this.ice_config;
 
-            sess.initiate(peerjid, true);
+            sess.initialize(peerjid, true);
             this.sessions[sess.sid] = sess;
             this.jid2session[sess.peerjid] = sess;
             sess.sendOffer();
@@ -324,9 +318,9 @@ module.exports = function(XMPP, eventEmitter)
         },
 
         /**
-         * Populates the log data
+         * Returns the data saved in 'updateLog' in a format to be logged.
          */
-        populateData: function () {
+        getLog: function () {
             var data = {};
             var self = this;
             Object.keys(this.sessions).forEach(function (sid) {

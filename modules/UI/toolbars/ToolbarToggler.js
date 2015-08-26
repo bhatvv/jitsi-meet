@@ -1,13 +1,14 @@
-/* global $, interfaceConfig, Moderator, DesktopStreaming.showDesktopSharingButton */
+/* global APP, config, $, interfaceConfig, Moderator,
+ DesktopStreaming.showDesktopSharingButton */
 
 var toolbarTimeoutObject,
     toolbarTimeout = interfaceConfig.INITIAL_TOOLBAR_TIMEOUT;
 
 function showDesktopSharingButton() {
     if (APP.desktopsharing.isDesktopSharingEnabled()) {
-        $('#desktopsharing').css({display: "inline"});
+        $('#toolbar_button_desktopsharing').css({display: "inline-block"});
     } else {
-        $('#desktopsharing').css({display: "none"});
+        $('#toolbar_button_desktopsharing').css({display: "none"});
     }
 }
 
@@ -52,6 +53,8 @@ var ToolbarToggler = {
      * Shows the main toolbar.
      */
     showToolbar: function () {
+        if (interfaceConfig.filmStripOnly)
+            return;
         var header = $("#header"),
             bottomToolbar = $("#bottomToolbar");
         if (!header.is(':visible') || !bottomToolbar.is(":visible")) {
@@ -81,13 +84,15 @@ var ToolbarToggler = {
         showDesktopSharingButton();
     },
 
-
     /**
      * Docks/undocks the toolbar.
      *
      * @param isDock indicates what operation to perform
      */
     dockToolbar: function (isDock) {
+        if (interfaceConfig.filmStripOnly)
+            return;
+
         if (isDock) {
             // First make sure the toolbar is shown.
             if (!$('#header').is(':visible')) {
@@ -111,7 +116,6 @@ var ToolbarToggler = {
     },
 
     showDesktopSharingButton: showDesktopSharingButton
-
 };
 
 module.exports = ToolbarToggler;

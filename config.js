@@ -1,4 +1,5 @@
 var config = {
+//    configLocation: './config.json', // see ./modules/HttpConfigFetch.js
     hosts: {
         domain: 'jitsi-meet.example.com',
         //anonymousdomain: 'guest.example.com',
@@ -26,15 +27,17 @@ var config = {
     channelLastN: -1, // The default value of the channel attribute last-n.
     adaptiveLastN: false,
     adaptiveSimulcast: false,
-    useRtcpMux: true, // required for FF support
-    useBundle: true, // required for FF support
     enableRecording: false,
     enableWelcomePage: true,
     enableSimulcast: false, // blocks FF support
     logStats: false, // Enable logging of PeerConnection stats via the focus
+//    requireDisplayName: true,//Forces the participants that doesn't have display name to enter it when they enter the room.
 //    startAudioMuted: 10, //every participant after the Nth will start audio muted
 //    startVideoMuted: 10, //every participant after the Nth will start video muted
 //    defaultLanguage: "en",
+// To enable sending statistics to callstats.io you should provide Applicaiton ID and Secret.
+//    callStatsID: "",//Application ID for callstats.io API
+//    callStatsSecret: ""//Secret for callstats.io API
     /*noticeMessage: 'Service update is scheduled for 16th March 2015. ' +
     'During that time service will not be available. ' +
     'Apologise for inconvenience.'*/

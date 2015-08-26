@@ -1,4 +1,6 @@
+/* global APP */
 var EventEmitter = require("events");
+var RTCBrowserType = require("./RTCBrowserType");
 var RTCUtils = require("./RTCUtils.js");
 var LocalStream = require("./LocalStream.js");
 var DataChannels = require("./DataChannels");
@@ -71,14 +73,11 @@ var RTC = {
             this.localStreams[0].getOriginalStream() != stream)
             this.localStreams.push(localStream);
         if(isMuted === true)
-            localStream.setMute(false);
+            localStream.setMute(true);
 
-        if(type == "audio")
-        {
+        if(type == "audio") {
             this.localAudio = localStream;
-        }
-        else
-        {
+        } else {
             this.localVideo = localStream;
         }
         var eventType = StreamEventTypes.EVENT_TYPE_LOCAL_CREATED;
@@ -89,8 +88,7 @@ var RTC = {
         return localStream;
     },
     removeLocalStream: function (stream) {
-        for(var i = 0; i < this.localStreams.length; i++)
-        {
+        for(var i = 0; i < this.localStreams.length; i++) {
             if(this.localStreams[i].getOriginalStream() === stream) {
                 delete this.localStreams[i];
                 return;
@@ -99,7 +97,7 @@ var RTC = {
     },
     createRemoteStream: function (data, sid, thessrc) {
         var remoteStream = new MediaStream(data, sid, thessrc,
-            this.getBrowserType(), eventEmitter);
+            RTCBrowserType.getBrowserType(), eventEmitter);
         var jid = data.peerjid || APP.xmpp.myJid();
         if(!this.remoteStreams[jid]) {
             this.remoteStreams[jid] = {};
@@ -107,9 +105,6 @@ var RTC = {
         this.remoteStreams[jid][remoteStream.type]= remoteStream;
         eventEmitter.emit(StreamEventTypes.EVENT_TYPE_REMOTE_CREATED, remoteStream);
         return remoteStream;
-    },
-    getBrowserType: function () {
-        return this.rtcUtils.browser;
     },
     getPCConstraints: function () {
         return this.rtcUtils.pc_constraints;
@@ -121,8 +116,8 @@ var RTC = {
         return this.rtcUtils.getUserMediaWithConstraints(um, success_callback,
             failure_callback, resolution, bandwidth, fps, desktopStream);
     },
-    attachMediaStream:  function (element, stream) {
-        this.rtcUtils.attachMediaStream(element, stream);
+    attachMediaStream:  function (elSelector, stream) {
+        this.rtcUtils.attachMediaStream(elSelector, stream);
     },
     getStreamID:  function (stream) {
         return this.rtcUtils.getStreamID(stream);
@@ -132,6 +127,9 @@ var RTC = {
     },
     setVideoSrc: function (element, src) {
         this.rtcUtils.setVideoSrc(element, src);
+    },
+    getVideoElementName: function () {
+        return RTCBrowserType.isTemasysPluginUsed() ? 'object' : 'video';
     },
     dispose: function() {
         if (this.rtcUtils) {
@@ -147,20 +145,6 @@ var RTC = {
             function (stream, isUsingScreenStream, callback) {
                 self.changeLocalVideo(stream, isUsingScreenStream, callback);
             }, DesktopSharingEventTypes.NEW_STREAM_CREATED);
-        APP.xmpp.addListener(XMPPEvents.STREAMS_CHANGED, function (jid, changedStreams) {
-            for(var i = 0; i < changedStreams.length; i++) {
-                var type = changedStreams[i].type;
-                if (type != "audio") {
-                    var peerStreams = self.remoteStreams[jid];
-                    if(!peerStreams)
-                        continue;
-                    var videoStream = peerStreams[MediaStreamType.VIDEO_TYPE];
-                    if(!videoStream)
-                        continue;
-                    videoStream.setVideoType(changedStreams[i].type);
-                }
-            }
-        });
         APP.xmpp.addListener(XMPPEvents.CALL_INCOMING, function(event) {
             DataChannels.init(event.peerconnection, eventEmitter);
         });
@@ -168,16 +152,28 @@ var RTC = {
             DataChannels.handleSelectedEndpointEvent);
         APP.UI.addListener(UIEvents.PINNED_ENDPOINT,
             DataChannels.handlePinnedEndpointEvent);
-        this.rtcUtils = new RTCUtils(this);
-        this.rtcUtils.obtainAudioAndVideoPermissions(
-            null, null, getMediaStreamUsage());
+
+        // In case of IE we continue from 'onReady' callback
+        // passed to RTCUtils constructor. It will be invoked by Temasys plugin
+        // once it is initialized.
+        var onReady = function () {
+            eventEmitter.emit(RTCEvents.RTC_READY, true);
+            self.rtcUtils.obtainAudioAndVideoPermissions(
+                null, null, getMediaStreamUsage());
+        };
+
+        this.rtcUtils = new RTCUtils(this, onReady);
+
+        // Call onReady() if Temasys plugin is not used
+        if (!RTCBrowserType.isTemasysPluginUsed()) {
+            onReady();
+        }
     },
     muteRemoteVideoStream: function (jid, value) {
         var stream;
 
         if(this.remoteStreams[jid] &&
-            this.remoteStreams[jid][MediaStreamType.VIDEO_TYPE])
-        {
+            this.remoteStreams[jid][MediaStreamType.VIDEO_TYPE]) {
             stream = this.remoteStreams[jid][MediaStreamType.VIDEO_TYPE];
         }
 
@@ -202,19 +198,28 @@ var RTC = {
     },
     changeLocalVideo: function (stream, isUsingScreenStream, callback) {
         var oldStream = this.localVideo.getOriginalStream();
-        var type = (isUsingScreenStream? "screen" : "video");
+        var type = (isUsingScreenStream ? "screen" : "camera");
         var localCallback = callback;
-        if(this.localVideo.isMuted() && this.localVideo.videoType !== type)
-        {
+        if(this.localVideo.isMuted() && this.localVideo.videoType !== type) {
             localCallback = function() {
-                APP.xmpp.setVideoMute(false, APP.UI.setVideoMuteButtonsState);
+                APP.xmpp.setVideoMute(false, function(mute) {
+                    eventEmitter.emit(RTCEvents.VIDEO_MUTE, mute);
+                });
+                
                 callback();
             };
+        }
+        // FIXME: Workaround for FF/IE/Safari
+        if (stream && stream.videoStream) {
+            stream = stream.videoStream;
         }
         var videoStream = this.rtcUtils.createStream(stream, true);
         this.localVideo = this.createLocalStream(videoStream, "video", true, type);
         // Stop the stream to trigger onended event for old stream
         oldStream.stop();
+
+        this.switchVideoStreams(videoStream, oldStream);
+
         APP.xmpp.switchStreams(videoStream, oldStream,localCallback);
     },
     changeLocalAudio: function (stream, callback) {
@@ -225,45 +230,31 @@ var RTC = {
         oldStream.stop();
         APP.xmpp.switchStreams(newStream, oldStream, callback, true);
     },
-    /**
-     * Checks if video identified by given src is desktop stream.
-     * @param videoSrc eg.
-     * blob:https%3A//pawel.jitsi.net/9a46e0bd-131e-4d18-9c14-a9264e8db395
-     * @returns {boolean}
-     */
-    isVideoSrcDesktop: function (jid) {
-        if(!jid)
-            return false;
-        var isDesktop = false;
-        var stream = null;
-        if (APP.xmpp.myJid() === jid) {
-            // local video
-            stream = this.localVideo;
+    isVideoMuted: function (jid) {
+        if (jid === APP.xmpp.myJid()) {
+            var localVideo = APP.RTC.localVideo;
+            return (!localVideo || localVideo.isMuted());
         } else {
-            var peerStreams = this.remoteStreams[jid];
-            if(!peerStreams)
-                return false;
-            stream = peerStreams[MediaStreamType.VIDEO_TYPE];
+            if (!APP.RTC.remoteStreams[jid] ||
+                !APP.RTC.remoteStreams[jid][MediaStreamType.VIDEO_TYPE]) {
+                return null;
+            }
+            return APP.RTC.remoteStreams[jid][MediaStreamType.VIDEO_TYPE].muted;
         }
-
-        if(stream)
-            isDesktop = (stream.videoType === "screen");
-
-        return isDesktop;
     },
-    setVideoMute: function(mute, callback, options) {
-        if(!this.localVideo)
+    setVideoMute: function (mute, callback, options) {
+        if (!this.localVideo)
             return;
 
         if (mute == APP.RTC.localVideo.isMuted())
         {
             APP.xmpp.sendVideoInfoPresence(mute);
-            if(callback)
+            if (callback)
                 callback(mute);
         }
         else
         {
-            APP.RTC.localVideo.setMute(!mute);
+            APP.RTC.localVideo.setMute(mute);
             APP.xmpp.setVideoMute(
                 mute,
                 callback,

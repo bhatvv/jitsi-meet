@@ -1,8 +1,10 @@
-/* global ssrc2jid */
+/* global require, ssrc2jid */
 /* jshint -W117 */
-var RTCBrowserType = require("../../service/RTC/RTCBrowserType");
+var RTCBrowserType = require("../RTC/RTCBrowserType");
 
-
+/* Whether we support the browser we are running into for logging statistics */
+var browserSupported = RTCBrowserType.isChrome() ||
+    RTCBrowserType.isOpera() || RTCBrowserType.isFirefox();
 /**
  * Calculates packet lost percent using the number of lost packets and the
  * number of all packet.
@@ -17,10 +19,12 @@ function calculatePacketLoss(lostPackets, totalPackets) {
 }
 
 function getStatValue(item, name) {
-    if(!keyMap[APP.RTC.getBrowserType()][name])
+    var browserType = RTCBrowserType.getBrowserType();
+    if (!keyMap[browserType][name])
         throw "The property isn't supported!";
-    var key = keyMap[APP.RTC.getBrowserType()][name];
-    return APP.RTC.getBrowserType() == RTCBrowserType.RTC_BROWSER_CHROME? item.stat(key) : item[key];
+    var key = keyMap[browserType][name];
+    return (RTCBrowserType.isChrome() || RTCBrowserType.isOpera()) ?
+        item.stat(key) : item[key];
 }
 
 /**
@@ -46,8 +50,6 @@ PeerStats.bandwidth = {};
  * @type {{}}
  */
 PeerStats.bitrate = {};
-
-
 
 /**
  * The packet loss rate
@@ -233,7 +235,7 @@ StatsCollector.prototype.errorCallback = function (error)
 StatsCollector.prototype.start = function ()
 {
     var self = this;
-    if(!config.disableAudioLevels) {
+    if (!config.disableAudioLevels) {
         this.audioLevelsIntervalId = setInterval(
             function () {
                 // Interval updates
@@ -260,7 +262,7 @@ StatsCollector.prototype.start = function ()
         );
     }
 
-    if(!config.disableStats && !navigator.mozGetUserMedia) {
+    if (!config.disableStats && browserSupported) {
         this.statsIntervalId = setInterval(
             function () {
                 // Interval updates
@@ -294,7 +296,8 @@ StatsCollector.prototype.start = function ()
         );
     }
 
-    if (config.logStats && !navigator.mozGetUserMedia) {
+    // Logging statistics does not support firefox
+    if (config.logStats && (browserSupported && !RTCBrowserType.isFirefox())) {
         this.gatherStatsIntervalId = setInterval(
             function () {
                 self.peerconnection.getStats(
@@ -415,6 +418,8 @@ keyMap[RTCBrowserType.RTC_BROWSER_CHROME] = {
     "audioInputLevel": "audioInputLevel",
     "audioOutputLevel": "audioOutputLevel"
 };
+keyMap[RTCBrowserType.RTC_BROWSER_OPERA] =
+    keyMap[RTCBrowserType.RTC_BROWSER_CHROME];
 
 
 /**
@@ -671,41 +676,34 @@ StatsCollector.prototype.processStatsReport = function () {
 /**
  * Stats processing logic.
  */
-StatsCollector.prototype.processAudioLevelReport = function ()
-{
-    if (!this.baselineAudioLevelsReport)
-    {
+StatsCollector.prototype.processAudioLevelReport = function () {
+    if (!this.baselineAudioLevelsReport) {
         return;
     }
 
-    for (var idx in this.currentAudioLevelsReport)
-    {
+    for (var idx in this.currentAudioLevelsReport) {
         var now = this.currentAudioLevelsReport[idx];
 
-        if (now.type != 'ssrc')
-        {
+        if (now.type != 'ssrc') {
             continue;
         }
 
         var before = this.baselineAudioLevelsReport[idx];
-        if (!before)
-        {
+        if (!before) {
             console.warn(getStatValue(now, 'ssrc') + ' not enough data');
             continue;
         }
 
         var ssrc = getStatValue(now, 'ssrc');
         var jid = APP.xmpp.getJidFromSSRC(ssrc);
-        if (!jid)
-        {
+        if (!jid) {
             if((Date.now() - now.timestamp) < 3000)
                 console.warn("No jid for ssrc: " + ssrc);
             continue;
         }
 
         var jidStats = this.jid2stats[jid];
-        if (!jidStats)
-        {
+        if (!jidStats) {
             jidStats = new PeerStats();
             this.jid2stats[jid] = jidStats;
         }
@@ -724,8 +722,7 @@ StatsCollector.prototype.processAudioLevelReport = function ()
             return;
         }
 
-        if (audioLevel)
-        {
+        if (audioLevel) {
             // TODO: can't find specs about what this value really is,
             // but it seems to vary between 0 and around 32k.
             audioLevel = audioLevel / 32767;
@@ -733,8 +730,5 @@ StatsCollector.prototype.processAudioLevelReport = function ()
             if(jid != APP.xmpp.myJid())
                 this.eventEmitter.emit("statistics.audioLevel", jid, audioLevel);
         }
-
     }
-
-
 };

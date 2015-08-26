@@ -6,6 +6,20 @@ var PreziPlayer = require("./PreziPlayer");
 
 var preziPlayer = null;
 
+
+/**
+ * Shows/hides a presentation.
+ */
+function setPresentationVisible(visible) {
+
+    if (visible) {
+        VideoLayout.setLargeVideoState("prezi");
+    }
+    else {
+        VideoLayout.setLargeVideoState("video");
+    }
+}
+
 var Prezi = {
 
 
@@ -58,13 +72,13 @@ var Prezi = {
             );
         }
         else {
-            var html = APP.translation.generateTranslatonHTML(
+            var html = APP.translation.generateTranslationHTML(
                 "dialog.sharePreziTitle");
-            var cancelButton = APP.translation.generateTranslatonHTML(
+            var cancelButton = APP.translation.generateTranslationHTML(
                 "dialog.Cancel");
-            var shareButton = APP.translation.generateTranslatonHTML(
+            var shareButton = APP.translation.generateTranslationHTML(
                 "dialog.Share");
-            var backButton = APP.translation.generateTranslatonHTML(
+            var backButton = APP.translation.generateTranslationHTML(
                 "dialog.Back");
             var buttons = [];
             var buttons1 = [];
@@ -75,7 +89,7 @@ var Prezi = {
             buttons.push({title: shareButton, value: true});
             // Back button
             buttons1.push({title: backButton, value: true});
-            var linkError = APP.translation.generateTranslatonHTML(
+            var linkError = APP.translation.generateTranslationHTML(
                 "dialog.preziLinkError");
             var defaultUrl = APP.translation.translateString("defaultPreziLink",
                 {url: "http://prezi.com/wz7vhjycl7e6/my-prezi"});
@@ -165,18 +179,14 @@ function presentationAdded(event, jid, presUrl, currentSlide) {
         + Strophe.getResourceFromJid(jid)
         + '_' + presId;
 
-
-
-
     VideoLayout.addPreziContainer(elementId);
-    VideoLayout.resizeThumbnails();
 
     var controlsEnabled = false;
     if (jid === APP.xmpp.myJid())
         controlsEnabled = true;
 
     setPresentationVisible(true);
-    $('#largeVideoContainer').hover(
+    VideoLayout.setLargeVideoHover(
         function (event) {
             if (Prezi.isPresentationVisible()) {
                 var reloadButtonRight = window.innerWidth
@@ -303,38 +313,6 @@ function resize() {
 }
 
 /**
- * Shows/hides a presentation.
- */
-function setPresentationVisible(visible) {
-    var prezi = $('#presentation>iframe');
-    if (visible) {
-        // Trigger the video.selected event to indicate a change in the
-        // large video.
-        $(document).trigger("video.selected", [true]);
-
-        $('#largeVideo').fadeOut(300);
-        prezi.fadeIn(300, function() {
-            prezi.css({opacity:'1'});
-            ToolbarToggler.dockToolbar(true);
-            VideoLayout.setLargeVideoVisible(false);
-        });
-        $('#activeSpeaker').css('visibility', 'hidden');
-    }
-    else {
-        if (prezi.css('opacity') == '1') {
-            prezi.fadeOut(300, function () {
-                prezi.css({opacity:'0'});
-                $('#reloadPresentation').css({display:'none'});
-                $('#largeVideo').fadeIn(300, function() {
-                    VideoLayout.setLargeVideoVisible(true);
-                    ToolbarToggler.dockToolbar(false);
-                });
-            });
-        }
-    }
-}
-
-/**
  * Presentation has been removed.
  */
 $(document).bind('presentationremoved.muc', presentationRemoved);
@@ -355,15 +333,6 @@ $(document).bind('gotoslide.muc', function (event, jid, presUrl, current) {
         for (var i = 0; i < parseInt(animationStepsArray[current]); i++) {
             preziPlayer.flyToStep(current, i);
         }
-    }
-});
-
-/**
- * On video selected event.
- */
-$(document).bind('video.selected', function (event, isPresentation) {
-    if (!isPresentation && $('#presentation>iframe')) {
-        setPresentationVisible(false);
     }
 });
 

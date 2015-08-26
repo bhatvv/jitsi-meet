@@ -1,3 +1,4 @@
+/* global require, APP */
 /**
  * Created by hristo on 8/4/14.
  */
@@ -6,6 +7,8 @@ var RTPStats = require("./RTPStatsCollector.js");
 var EventEmitter = require("events");
 var StreamEventTypes = require("../../service/RTC/StreamEventTypes.js");
 var XMPPEvents = require("../../service/xmpp/XMPPEvents");
+var CallStats = require("./CallStats");
+var RTCEvents = require("../../service/RTC/RTCEvents");
 
 var eventEmitter = new EventEmitter();
 
@@ -13,19 +16,15 @@ var localStats = null;
 
 var rtpStats = null;
 
-function stopLocal()
-{
-    if(localStats)
-    {
+function stopLocal() {
+    if (localStats) {
         localStats.stop();
         localStats = null;
     }
 }
 
-function stopRemote()
-{
-    if(rtpStats)
-    {
+function stopRemote() {
+    if (rtpStats) {
         rtpStats.stop();
         eventEmitter.emit("statistics.stop");
         rtpStats = null;
@@ -33,20 +32,18 @@ function stopRemote()
 }
 
 function startRemoteStats (peerconnection) {
-    if(rtpStats)
-    {
+    if (rtpStats) {
         rtpStats.stop();
-        rtpStats = null;
     }
 
     rtpStats = new RTPStats(peerconnection, 200, 2000, eventEmitter);
     rtpStats.start();
 }
 
-function onStreamCreated(stream)
-{
-    if(stream.getOriginalStream().getAudioTracks().length === 0)
+function onStreamCreated(stream) {
+    if(stream.getOriginalStream().getAudioTracks().length === 0) {
         return;
+    }
 
     localStats = new LocalStats(stream.getOriginalStream(), 200, statistics,
         eventEmitter);
@@ -54,6 +51,7 @@ function onStreamCreated(stream)
 }
 
 function onDisposeConference(onUnload) {
+    CallStats.sendTerminateEvent();
     stopRemote();
     if(onUnload) {
         stopLocal();
@@ -61,9 +59,7 @@ function onDisposeConference(onUnload) {
     }
 }
 
-
-var statistics =
-{
+var statistics = {
     /**
      * Indicates that this audio level is for local jid.
      * @type {string}
@@ -119,11 +115,24 @@ var statistics =
         APP.RTC.addStreamListener(onStreamCreated,
             StreamEventTypes.EVENT_TYPE_LOCAL_CREATED);
         APP.xmpp.addListener(XMPPEvents.DISPOSE_CONFERENCE, onDisposeConference);
+        //FIXME: we may want to change CALL INCOMING event to onnegotiationneeded
         APP.xmpp.addListener(XMPPEvents.CALL_INCOMING, function (event) {
             startRemoteStats(event.peerconnection);
+//            CallStats.init(event);
+        });
+        APP.xmpp.addListener(XMPPEvents.PEERCONNECTION_READY, function (session) {
+            CallStats.init(session);
+        });
+        APP.RTC.addListener(RTCEvents.AUDIO_MUTE, function (mute) {
+            CallStats.sendMuteEvent(mute, "audio");
+        });
+        APP.xmpp.addListener(XMPPEvents.CONFERENCE_SETUP_FAILED, function () {
+            CallStats.sendSetupFailedEvent();
+        });
+        APP.RTC.addListener(RTCEvents.VIDEO_MUTE, function (mute) {
+            CallStats.sendMuteEvent(mute, "video");
         });
     }
-
 };
 
 

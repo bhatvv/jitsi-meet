@@ -1,5 +1,5 @@
-/* global APP,$, buttonClick, config, lockRoom,
-   setSharedKey, Util */
+/* global APP, $, buttonClick, config, lockRoom, interfaceConfig, setSharedKey,
+ Util */
 var messageHandler = require("../util/MessageHandler");
 var BottomToolbar = require("./BottomToolbar");
 var Prezi = require("../prezi/Prezi");
@@ -13,9 +13,9 @@ var AuthenticationEvents
 var roomUrl = null;
 var sharedKey = '';
 var UI = null;
+var recordingToaster = null;
 
-var buttonHandlers =
-{
+var buttonHandlers = {
     "toolbar_button_mute": function () {
         return APP.UI.toggleAudio();
     },
@@ -46,9 +46,8 @@ var buttonHandlers =
     "toolbar_button_desktopsharing": function () {
         return APP.desktopsharing.toggleScreenSharing();
     },
-    "toolbar_button_fullScreen": function()
-    {
-        UIUtil.buttonClick("#fullScreen", "icon-full-screen icon-exit-full-screen");
+    "toolbar_button_fullScreen": function() {
+        UIUtil.buttonClick("#toolbar_button_fullScreen", "icon-full-screen icon-exit-full-screen");
         return Toolbar.toggleFullScreen();
     },
     "toolbar_button_sip": function () {
@@ -91,21 +90,19 @@ var buttonHandlers =
 
 function hangup() {
     APP.xmpp.disposeConference();
-    if(config.enableWelcomePage)
-    {
-        setTimeout(function()
-        {
+    if(config.enableWelcomePage) {
+        setTimeout(function() {
             window.localStorage.welcomePageDisabled = false;
             window.location.pathname = "/";
         }, 10000);
 
     }
 
-    var title = APP.translation.generateTranslatonHTML(
+    var title = APP.translation.generateTranslationHTML(
         "dialog.sessTerminated");
-    var msg = APP.translation.generateTranslatonHTML(
+    var msg = APP.translation.generateTranslationHTML(
         "dialog.hungUp");
-    var button = APP.translation.generateTranslatonHTML(
+    var button = APP.translation.generateTranslationHTML(
         "dialog.joinAgain");
     var buttons = [];
     buttons.push({title: button, value: true});
@@ -115,8 +112,7 @@ function hangup() {
         msg,
         true,
         buttons,
-        function(event, value, message, formVals)
-        {
+        function(event, value, message, formVals) {
             window.location.reload();
             return false;
         }
@@ -127,9 +123,14 @@ function hangup() {
  * Starts or stops the recording for the conference.
  */
 
-function toggleRecording() {
+function toggleRecording(predefinedToken) {
     APP.xmpp.toggleRecording(function (callback) {
-        var msg = APP.translation.generateTranslatonHTML(
+        if (predefinedToken) {
+            callback(UIUtil.escapeHtml(predefinedToken));
+            return;
+        }
+
+        var msg = APP.translation.generateTranslationHTML(
             "dialog.recordingToken");
         var token = APP.translation.translateString("dialog.token");
         APP.UI.messageHandler.openTwoButtonDialog(null, null, null,
@@ -152,7 +153,7 @@ function toggleRecording() {
             function () { },
             ':input:first'
         );
-    }, Toolbar.setRecordingButtonState, Toolbar.setRecordingButtonState);
+    }, Toolbar.setRecordingButtonState);
 }
 
 /**
@@ -165,13 +166,11 @@ function lockRoom(lock) {
 
     APP.xmpp.lockRoom(currentSharedKey, function (res) {
         // password is required
-        if (sharedKey)
-        {
+        if (sharedKey) {
             console.log('set room password');
             Toolbar.lockLockButton();
         }
-        else
-        {
+        else {
             console.log('removed room password');
             Toolbar.unlockLockButton();
         }
@@ -186,7 +185,7 @@ function lockRoom(lock) {
             "dialog.passwordNotSupported");
         Toolbar.setSharedKey('');
     });
-};
+}
 
 /**
  * Invite participants to conference.
@@ -224,17 +223,15 @@ function inviteParticipants() {
     window.open("mailto:?subject=" + subject + "&body=" + body, '_blank');
 }
 
-function dialpadButtonClicked()
-{
-    //TODO show the dialpad window
+function dialpadButtonClicked() {
+    //TODO show the dialpad box
 }
 
-function callSipButtonClicked()
-{
+function callSipButtonClicked() {
     var defaultNumber
         = config.defaultSipNumber ? config.defaultSipNumber : '';
 
-    var sipMsg = APP.translation.generateTranslatonHTML(
+    var sipMsg = APP.translation.generateTranslationHTML(
         "dialog.sipMsg");
     messageHandler.openTwoButtonDialog(null, null, null,
         '<h2>' + sipMsg + '</h2>' +
@@ -281,7 +278,7 @@ var Toolbar = (function (my) {
                 }
             }
         );
-    },
+    };
 
     /**
      * Sets shared key
@@ -298,7 +295,7 @@ var Toolbar = (function (my) {
             return;
         }
         // Get authentication URL
-        if (!APP.xmpp.getMUCJoined()) {
+        if (!APP.xmpp.isMUCJoined()) {
             APP.xmpp.getLoginUrl(UI.getRoomName(), function (url) {
                 // If conference has not been started yet - redirect to login page
                 window.location.href = url;
@@ -342,9 +339,8 @@ var Toolbar = (function (my) {
      * Disables and enables some of the buttons.
      */
     my.setupButtonsFromConfig = function () {
-        if (config.disablePrezi)
-        {
-            $("#prezi_button").css({display: "none"});
+        if (config.disablePrezi) {
+            $("#toolbar_button_prezi").css({display: "none"});
         }
     };
 
@@ -374,7 +370,7 @@ var Toolbar = (function (my) {
                         }
                     });
             } else {
-                var msg = APP.translation.generateTranslatonHTML(
+                var msg = APP.translation.generateTranslationHTML(
                     "dialog.passwordMsg");
                 var yourPassword = APP.translation.translateString(
                     "dialog.yourPassword");
@@ -444,11 +440,11 @@ var Toolbar = (function (my) {
      * FIXME: not used ?
      */
     my.openSettingsDialog = function () {
-        var settings1 = APP.translation.generateTranslatonHTML(
+        var settings1 = APP.translation.generateTranslationHTML(
             "dialog.settings1");
-        var settings2 = APP.translation.generateTranslatonHTML(
+        var settings2 = APP.translation.generateTranslationHTML(
             "dialog.settings2");
-        var settings3 = APP.translation.generateTranslatonHTML(
+        var settings3 = APP.translation.generateTranslationHTML(
             "dialog.settings3");
 
         var yourPassword = APP.translation.translateString(
@@ -519,15 +515,15 @@ var Toolbar = (function (my) {
      * Unlocks the lock button state.
      */
     my.unlockLockButton = function () {
-        if ($("#lockIcon").hasClass("icon-security-locked"))
-            UIUtil.buttonClick("#lockIcon", "icon-security icon-security-locked");
+        if ($("#toolbar_button_security").hasClass("icon-security-locked"))
+            UIUtil.buttonClick("#toolbar_button_security", "icon-security icon-security-locked");
     };
     /**
      * Updates the lock button state to locked.
      */
     my.lockLockButton = function () {
-        if ($("#lockIcon").hasClass("icon-security"))
-            UIUtil.buttonClick("#lockIcon", "icon-security icon-security-locked");
+        if ($("#toolbar_button_security").hasClass("icon-security"))
+            UIUtil.buttonClick("#toolbar_button_security", "icon-security icon-security-locked");
     };
 
     /**
@@ -550,40 +546,77 @@ var Toolbar = (function (my) {
         }
 
         if (show) {
-            $('#recording').css({display: "inline"});
+            $('#toolbar_button_record').css({display: "inline-block"});
         }
         else {
-            $('#recording').css({display: "none"});
+            $('#toolbar_button_record').css({display: "none"});
         }
     };
 
     // Sets the state of the recording button
-    my.setRecordingButtonState = function (isRecording) {
-        var selector = $('#recordButton');
-        if (isRecording) {
+    my.setRecordingButtonState = function (recordingState) {
+        var selector = $('#toolbar_button_record');
+
+        if (recordingState === 'on') {
             selector.removeClass("icon-recEnable");
             selector.addClass("icon-recEnable active");
-        } else {
+
+            $("#largeVideo").toggleClass("videoMessageFilter", true);
+            var recordOnKey = "recording.on";
+            $('#videoConnectionMessage').attr("data-i18n", recordOnKey);
+            $('#videoConnectionMessage').text(APP.translation.translateString(recordOnKey));
+
+            setTimeout(function(){
+                $("#largeVideo").toggleClass("videoMessageFilter", false);
+                $('#videoConnectionMessage').css({display: "none"});
+            }, 1500);
+
+            recordingToaster = messageHandler.notify(null, "recording.toaster", null,
+                null, null, {timeOut: 0, closeButton: null, tapToDismiss: false});
+        } else if (recordingState === 'off') {
             selector.removeClass("icon-recEnable active");
             selector.addClass("icon-recEnable");
+
+            $("#largeVideo").toggleClass("videoMessageFilter", false);
+            $('#videoConnectionMessage').css({display: "none"});
+
+            if (recordingToaster)
+                messageHandler.remove(recordingToaster);
+
+        } else if (recordingState === 'pending') {
+            selector.removeClass("icon-recEnable active");
+            selector.addClass("icon-recEnable");
+
+            $("#largeVideo").toggleClass("videoMessageFilter", true);
+            var recordPendingKey = "recording.pending";
+            $('#videoConnectionMessage').attr("data-i18n", recordPendingKey);
+            $('#videoConnectionMessage').text(APP.translation.translateString(recordPendingKey));
+            $('#videoConnectionMessage').css({display: "block"});
         }
     };
+
+    // checks whether recording is enabled and whether we have params to start automatically recording
+    my.checkAutoRecord = function () {
+        if (config.enableRecording && config.autoRecord) {
+            toggleRecording(config.autoRecordToken);
+        }
+    }
 
     // Shows or hides SIP calls button
     my.showSipCallButton = function (show) {
         if (APP.xmpp.isSipGatewayEnabled() && show) {
-            $('#sipCallButton').css({display: "inline-block"});
+            $('#toolbar_button_sip').css({display: "inline-block"});
         } else {
-            $('#sipCallButton').css({display: "none"});
+            $('#toolbar_button_sip').css({display: "none"});
         }
     };
 
     // Shows or hides the dialpad button
     my.showDialPadButton = function (show) {
         if (show) {
-            $('#dialPadButton').css({display: "inline-block"});
+            $('#toolbar_button_dialpad').css({display: "inline-block"});
         } else {
-            $('#dialPadButton').css({display: "none"});
+            $('#toolbar_button_dialpad').css({display: "none"});
         }
     };
 
@@ -631,13 +664,10 @@ var Toolbar = (function (my) {
      * @param active the state of the desktop streaming.
      */
     my.changeDesktopSharingButtonState = function (active) {
-        var button = $("#desktopsharing > a");
-        if (active)
-        {
+        var button = $("#toolbar_button_desktopsharing");
+        if (active) {
             button.addClass("glow");
-        }
-        else
-        {
+        } else {
             button.removeClass("glow");
         }
     };

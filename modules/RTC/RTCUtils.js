@@ -1,5 +1,8 @@
-var RTCBrowserType = require("../../service/RTC/RTCBrowserType.js");
+/* global config, require, attachMediaStream, getUserMedia */
+var RTCBrowserType = require("./RTCBrowserType");
 var Resolutions = require("../../service/RTC/Resolutions");
+var AdapterJS = require("./adapter.screenshare");
+var SDPUtil = require("../xmpp/SDPUtil");
 
 var currentResolution = null;
 
@@ -9,11 +12,9 @@ function getPreviousResolution(resolution) {
     var order = Resolutions[resolution].order;
     var res = null;
     var resName = null;
-    for(var i in Resolutions)
-    {
+    for(var i in Resolutions) {
         var tmp = Resolutions[i];
-        if(res == null || (res.order < tmp.order && tmp.order < order))
-        {
+        if(res == null || (res.order < tmp.order && tmp.order < order)) {
             resName = i;
             res = tmp;
         }
@@ -21,53 +22,83 @@ function getPreviousResolution(resolution) {
     return resName;
 }
 
-function setResolutionConstraints(constraints, resolution, isAndroid)
-{
-    if (resolution && !constraints.video || isAndroid) {
-        constraints.video = { mandatory: {}, optional: [] };// same behaviour as true
-    }
+function setResolutionConstraints(constraints, resolution) {
+    var isAndroid = RTCBrowserType.isAndroid();
 
-    if(Resolutions[resolution])
-    {
+    if (Resolutions[resolution]) {
         constraints.video.mandatory.minWidth = Resolutions[resolution].width;
         constraints.video.mandatory.minHeight = Resolutions[resolution].height;
     }
-    else
-    {
-        if (isAndroid) {
-            constraints.video.mandatory.minWidth = 320;
-            constraints.video.mandatory.minHeight = 240;
-            constraints.video.mandatory.maxFrameRate = 15;
-        }
+    else if (isAndroid) {
+        // FIXME can't remember if the purpose of this was to always request
+        //       low resolution on Android ? if yes it should be moved up front
+        constraints.video.mandatory.minWidth = 320;
+        constraints.video.mandatory.minHeight = 240;
+        constraints.video.mandatory.maxFrameRate = 15;
     }
 
     if (constraints.video.mandatory.minWidth)
-        constraints.video.mandatory.maxWidth = constraints.video.mandatory.minWidth;
+        constraints.video.mandatory.maxWidth =
+            constraints.video.mandatory.minWidth;
     if (constraints.video.mandatory.minHeight)
-        constraints.video.mandatory.maxHeight = constraints.video.mandatory.minHeight;
+        constraints.video.mandatory.maxHeight =
+            constraints.video.mandatory.minHeight;
 }
 
-function getConstraints(um, resolution, bandwidth, fps, desktopStream, isAndroid)
-{
+function getConstraints(um, resolution, bandwidth, fps, desktopStream) {
     var constraints = {audio: false, video: false};
 
     if (um.indexOf('video') >= 0) {
-        constraints.video = { mandatory: {}, optional: [] };// same behaviour as true
+        // same behaviour as true
+        constraints.video = { mandatory: {}, optional: [] };
+
+        constraints.video.optional.push({ googLeakyBucket: true });
+
+        setResolutionConstraints(constraints, resolution);
     }
     if (um.indexOf('audio') >= 0) {
-        constraints.audio = { mandatory: {}, optional: []};// same behaviour as true
+        if (!RTCBrowserType.isFirefox()) {
+            // same behaviour as true
+            constraints.audio = { mandatory: {}, optional: []};
+            // if it is good enough for hangouts...
+            constraints.audio.optional.push(
+                {googEchoCancellation: true},
+                {googAutoGainControl: true},
+                {googNoiseSupression: true},
+                {googHighpassFilter: true},
+                {googNoisesuppression2: true},
+                {googEchoCancellation2: true},
+                {googAutoGainControl2: true}
+            );
+        } else {
+            constraints.audio = true;
+        }
     }
     if (um.indexOf('screen') >= 0) {
-        constraints.video = {
-            mandatory: {
-                chromeMediaSource: "screen",
-                googLeakyBucket: true,
-                maxWidth: window.screen.width,
-                maxHeight: window.screen.height,
-                maxFrameRate: 3
-            },
-            optional: []
-        };
+        if (RTCBrowserType.isChrome()) {
+            constraints.video = {
+                mandatory: {
+                    chromeMediaSource: "screen",
+                    googLeakyBucket: true,
+                    maxWidth: window.screen.width,
+                    maxHeight: window.screen.height,
+                    maxFrameRate: 3
+                },
+                optional: []
+            };
+        } else if (RTCBrowserType.isTemasysPluginUsed()) {
+            constraints.video = {
+                optional: [
+                    {
+                        sourceId: AdapterJS.WebRTCPlugin.plugin.screensharingKey
+                    }
+                ]
+            };
+        } else {
+            console.error(
+                "'screen' WebRTC media source is supported only in Chrome" +
+                " and with Temasys plugin");
+        }
     }
     if (um.indexOf('desktop') >= 0) {
         constraints.video = {
@@ -83,57 +114,44 @@ function getConstraints(um, resolution, bandwidth, fps, desktopStream, isAndroid
         };
     }
 
-    if (constraints.audio) {
-        // if it is good enough for hangouts...
-        constraints.audio.optional.push(
-            {googEchoCancellation: true},
-            {googAutoGainControl: true},
-            {googNoiseSupression: true},
-            {googHighpassFilter: true},
-            {googNoisesuppression2: true},
-            {googEchoCancellation2: true},
-            {googAutoGainControl2: true}
-        );
-    }
-    if (constraints.video) {
-        constraints.video.optional.push(
-            {googNoiseReduction: false} // chrome 37 workaround for issue 3807, reenable in M38
-        );
-        if (um.indexOf('video') >= 0) {
-            constraints.video.optional.push(
-                {googLeakyBucket: true}
-            );
+    if (bandwidth) {
+        if (!constraints.video) {
+            //same behaviour as true
+            constraints.video = {mandatory: {}, optional: []};
         }
-    }
-
-    if (um.indexOf('video') >= 0) {
-        setResolutionConstraints(constraints, resolution, isAndroid);
-    }
-
-    if (bandwidth) { // doesn't work currently, see webrtc issue 1846
-        if (!constraints.video) constraints.video = {mandatory: {}, optional: []};//same behaviour as true
         constraints.video.optional.push({bandwidth: bandwidth});
     }
-    if (fps) { // for some cameras it might be necessary to request 30fps
+    if (fps) {
+        // for some cameras it might be necessary to request 30fps
         // so they choose 30fps mjpg over 10fps yuy2
-        if (!constraints.video) constraints.video = {mandatory: {}, optional: []};// same behaviour as true;
+        if (!constraints.video) {
+            // same behaviour as true;
+            constraints.video = {mandatory: {}, optional: []};
+        }
         constraints.video.mandatory.minFrameRate = fps;
+    }
+
+    // we turn audio for both audio and video tracks, the fake audio & video seems to work
+    // only when enabled in one getUserMedia call, we cannot get fake audio separate by fake video
+    // this later can be a problem with some of the tests
+    if(RTCBrowserType.isFirefox() && config.firefox_fake_device)
+    {
+        constraints.audio = true;
+        constraints.fake = true;
     }
 
     return constraints;
 }
 
 
-function RTCUtils(RTCService)
+function RTCUtils(RTCService, onTemasysPluginReady)
 {
+    var self = this;
     this.service = RTCService;
-    if (navigator.mozGetUserMedia) {
-        console.log('This appears to be Firefox');
-        var version = parseInt(navigator.userAgent.match(/Firefox\/([0-9]+)\./)[1], 10);
-        if (version >= 40
-            && config.useBundle && config.useRtcpMux) {
+    if (RTCBrowserType.isFirefox()) {
+        var FFversion = RTCBrowserType.getFirefoxVersion();
+        if (FFversion >= 40) {
             this.peerconnection = mozRTCPeerConnection;
-            this.browser = RTCBrowserType.RTC_BROWSER_FIREFOX;
             this.getUserMedia = navigator.mozGetUserMedia.bind(navigator);
             this.pc_constraints = {};
             this.attachMediaStream =  function (element, stream) {
@@ -150,12 +168,15 @@ function RTCUtils(RTCService)
                 element[0].play();
             };
             this.getStreamID =  function (stream) {
-                var tracks = stream.getVideoTracks();
-                if(!tracks || tracks.length == 0)
-                {
-                    tracks = stream.getAudioTracks();
+                var id = stream.id;
+                if (!id) {
+                    var tracks = stream.getVideoTracks();
+                    if (!tracks || tracks.length === 0) {
+                        tracks = stream.getAudioTracks();
+                    }
+                    id = tracks[0].id;
                 }
-                return tracks[0].id.replace(/[\{,\}]/g,"");
+                return SDPUtil.filter_special_chars(id);
             };
             this.getVideoSrc = function (element) {
                 if(!element)
@@ -169,14 +190,14 @@ function RTCUtils(RTCService)
             RTCSessionDescription = mozRTCSessionDescription;
             RTCIceCandidate = mozRTCIceCandidate;
         } else {
+            console.error(
+                "Firefox version too old: " + FFversion + ". Required >= 40.");
             window.location.href = 'unsupported_browser.html';
             return;
         }
 
-    } else if (navigator.webkitGetUserMedia) {
-        console.log('This appears to be Chrome');
+    } else if (RTCBrowserType.isChrome() || RTCBrowserType.isOpera()) {
         this.peerconnection = webkitRTCPeerConnection;
-        this.browser = RTCBrowserType.RTC_BROWSER_CHROME;
         this.getUserMedia = navigator.webkitGetUserMedia.bind(navigator);
         this.attachMediaStream = function (element, stream) {
             element.attr('src', webkitURL.createObjectURL(stream));
@@ -184,7 +205,7 @@ function RTCUtils(RTCService)
         this.getStreamID = function (stream) {
             // streams from FF endpoints have the characters '{' and '}'
             // that make jQuery choke.
-            return stream.id.replace(/[\{,\}]/g,"");
+            return SDPUtil.filter_special_chars(stream.id);
         };
         this.getVideoSrc = function (element) {
             if(!element)
@@ -197,7 +218,7 @@ function RTCUtils(RTCService)
         };
         // DTLS should now be enabled by default but..
         this.pc_constraints = {'optional': [{'DtlsSrtpKeyAgreement': 'true'}]};
-        if (navigator.userAgent.indexOf('Android') != -1) {
+        if (RTCBrowserType.isAndroid()) {
             this.pc_constraints = {}; // disable DTLS on Android
         }
         if (!webkitMediaStream.prototype.getVideoTracks) {
@@ -211,28 +232,74 @@ function RTCUtils(RTCService)
             };
         }
     }
-    else
-    {
-        try { console.log('Browser does not appear to be WebRTC-capable'); } catch (e) { }
+    // Detect IE/Safari
+    else if (RTCBrowserType.isTemasysPluginUsed()) {
 
+        //AdapterJS.WebRTCPlugin.setLogLevel(
+        //    AdapterJS.WebRTCPlugin.PLUGIN_LOG_LEVELS.VERBOSE);
+
+        AdapterJS.webRTCReady(function (isPlugin) {
+
+            self.peerconnection = RTCPeerConnection;
+            self.getUserMedia = getUserMedia;
+            self.attachMediaStream = function (elSel, stream) {
+
+                if (stream.id === "dummyAudio" || stream.id === "dummyVideo") {
+                    return;
+                }
+
+                attachMediaStream(elSel[0], stream);
+            };
+            self.getStreamID = function (stream) {
+                var id = SDPUtil.filter_special_chars(stream.label);
+                return id;
+            };
+            self.getVideoSrc = function (element) {
+                if (!element) {
+                    console.warn("Attempt to get video SRC of null element");
+                    return null;
+                }
+                var children = element.children;
+                for (var i = 0; i !== children.length; ++i) {
+                    if (children[i].name === 'streamId') {
+                        return children[i].value;
+                    }
+                }
+                //console.info(element.id + " SRC: " + src);
+                return null;
+            };
+            self.setVideoSrc = function (element, src) {
+                //console.info("Set video src: ", element, src);
+                if (!src) {
+                    console.warn("Not attaching video stream, 'src' is null");
+                    return;
+                }
+                AdapterJS.WebRTCPlugin.WaitForPluginReady();
+                var stream = AdapterJS.WebRTCPlugin.plugin
+                    .getStreamWithId(AdapterJS.WebRTCPlugin.pageId, src);
+                attachMediaStream(element, stream);
+            };
+
+            onTemasysPluginReady(isPlugin);
+        });
+    } else {
+        try {
+            console.log('Browser does not appear to be WebRTC-capable');
+        } catch (e) { }
         window.location.href = 'unsupported_browser.html';
-        return;
     }
 }
 
 
 RTCUtils.prototype.getUserMediaWithConstraints = function(
     um, success_callback, failure_callback, resolution,bandwidth, fps,
-    desktopStream)
-{
+    desktopStream) {
     currentResolution = resolution;
-    // Check if we are running on Android device
-    var isAndroid = navigator.userAgent.indexOf('Android') != -1;
 
     var constraints = getConstraints(
-        um, resolution, bandwidth, fps, desktopStream, isAndroid);
+        um, resolution, bandwidth, fps, desktopStream);
 
-    var isFF = navigator.userAgent.toLowerCase().indexOf('firefox') > -1;
+    console.info("Get media constraints", constraints);
 
     var self = this;
 
@@ -261,16 +328,14 @@ RTCUtils.prototype.getUserMediaWithConstraints = function(
 
 RTCUtils.prototype.setAvailableDevices = function (um, available) {
     var devices = {};
-    if(um.indexOf("video") != -1)
-    {
+    if(um.indexOf("video") != -1) {
         devices.video = available;
     }
-    if(um.indexOf("audio") != -1)
-    {
+    if(um.indexOf("audio") != -1) {
         devices.audio = available;
     }
     this.service.setDeviceAvailability(devices);
-}
+};
 
 /**
  * We ask for audio and video combined stream in order to get permissions and
@@ -296,8 +361,7 @@ RTCUtils.prototype.obtainAudioAndVideoPermissions =
 
 
     if(usageOptions)
-        for(var i = 0; i < devices.length; i++)
-        {
+        for(var i = 0; i < devices.length; i++) {
             var device = devices[i];
             if(usageOptions[device] === true)
                 newDevices.push(device);
@@ -305,15 +369,14 @@ RTCUtils.prototype.obtainAudioAndVideoPermissions =
     else
         newDevices = devices;
 
-    if(newDevices.length === 0)
-    {
+    if(newDevices.length === 0) {
         successCallback();
         return;
     }
 
-    if (navigator.mozGetUserMedia) {
+    if (RTCBrowserType.isFirefox() || RTCBrowserType.isTemasysPluginUsed()) {
 
-        // With FF we can't split the stream into audio and video because FF
+        // With FF/IE we can't split the stream into audio and video because FF
         // doesn't support media stream constructors. So, we need to get the
         // audio stream separately from the video stream using two distinct GUM
         // calls. Not very user friendly :-( but we don't have many other
@@ -321,31 +384,41 @@ RTCUtils.prototype.obtainAudioAndVideoPermissions =
         //
         // Note that we pack those 2 streams in a single object and pass it to
         // the successCallback method.
-
-        self.getUserMediaWithConstraints(
-            ['audio'],
-            function (audioStream) {
-                self.getUserMediaWithConstraints(
-                    ['video'],
-                    function (videoStream) {
-                        return self.successCallback({
-                            audioStream: audioStream,
-                            videoStream: videoStream
-                        });
-                    },
-                    function (error) {
-                        console.error('failed to obtain video stream - stop',
-                            error);
-                        return self.successCallback(null);
-                    },
-                    config.resolution || '360');
-            },
-            function (error) {
-                console.error('failed to obtain audio stream - stop',
-                        error);
-                return self.successCallback(null);
-            }
-        );
+        var obtainVideo = function (audioStream) {
+            self.getUserMediaWithConstraints(
+                ['video'],
+                function (videoStream) {
+                    return successCallback({
+                        audioStream: audioStream,
+                        videoStream: videoStream
+                    });
+                },
+                function (error) {
+                    console.error(
+                        'failed to obtain video stream - stop', error);
+                    self.errorCallback(error);
+                },
+                config.resolution || '360');
+        };
+        var obtainAudio = function () {
+            self.getUserMediaWithConstraints(
+                ['audio'],
+                function (audioStream) {
+                    if (newDevices.indexOf('video') !== -1)
+                        obtainVideo(audioStream);
+                },
+                function (error) {
+                    console.error(
+                        'failed to obtain audio stream - stop', error);
+                    self.errorCallback(error);
+                }
+            );
+        };
+        if (newDevices.indexOf('audio') !== -1) {
+            obtainAudio();
+        } else {
+            obtainVideo(null);
+        }
     } else {
         this.getUserMediaWithConstraints(
         newDevices,
@@ -357,13 +430,12 @@ RTCUtils.prototype.obtainAudioAndVideoPermissions =
         },
         config.resolution || '360');
     }
-
-}
+};
 
 RTCUtils.prototype.successCallback = function (stream, usageOptions) {
-    // If this is FF, the stream parameter is *not* a MediaStream object, it's
-    // an object with two properties: audioStream, videoStream.
-    if(stream && !navigator.mozGetUserMedia)
+    // If this is FF or IE, the stream parameter is *not* a MediaStream object,
+    // it's an object with two properties: audioStream, videoStream.
+    if (stream && stream.getAudioTracks && stream.getVideoTracks)
         console.log('got', stream, stream.getAudioTracks().length,
             stream.getVideoTracks().length);
     this.handleLocalStream(stream, usageOptions);
@@ -387,8 +459,7 @@ RTCUtils.prototype.errorCallback = function (error) {
                 return self.errorCallback(error);
             }, resolution);
     }
-    else
-    {
+    else {
         self.getUserMediaWithConstraints(
             ['audio'],
             function (stream) {
@@ -401,11 +472,9 @@ RTCUtils.prototype.errorCallback = function (error) {
             }
         );
     }
+};
 
-}
-
-RTCUtils.prototype.handleLocalStream = function(stream, usageOptions)
-{
+RTCUtils.prototype.handleLocalStream = function(stream, usageOptions) {
     // If this is FF, the stream parameter is *not* a MediaStream object, it's
     // an object with two properties: audioStream, videoStream.
     var audioStream, videoStream;
@@ -427,10 +496,17 @@ RTCUtils.prototype.handleLocalStream = function(stream, usageOptions)
             }
         }
     }
-    else
-    {//firefox
-        audioStream = stream.audioStream;
-        videoStream = stream.videoStream;
+    else if (RTCBrowserType.isFirefox() || RTCBrowserType.isTemasysPluginUsed())
+    {   // Firefox and Temasys plugin
+        if (stream && stream.audioStream)
+            audioStream = stream.audioStream;
+        else
+            audioStream = new DummyMediaStream("dummyAudio");
+
+        if (stream && stream.videoStream)
+            videoStream = stream.videoStream;
+        else
+            videoStream = new DummyMediaStream("dummyVideo");
     }
 
     var audioMuted = (usageOptions && usageOptions.audio === false),
@@ -443,28 +519,40 @@ RTCUtils.prototype.handleLocalStream = function(stream, usageOptions)
     this.service.createLocalStream(audioStream, "audio", null, null,
         audioMuted, audioGUM);
 
-    this.service.createLocalStream(videoStream, "video", null, null,
+    this.service.createLocalStream(videoStream, "video", null, 'camera',
         videoMuted, videoGUM);
 };
 
-RTCUtils.prototype.createStream = function(stream, isVideo)
-{
-    var newStream = null;
-    if(window.webkitMediaStream)
-    {
-        newStream = new webkitMediaStream();
-        if(newStream)
-        {
-            var tracks = (isVideo? stream.getVideoTracks() : stream.getAudioTracks());
+function DummyMediaStream(id) {
+    this.id = id;
+    this.label = id;
+    this.stop = function() { };
+    this.getAudioTracks = function() { return []; };
+    this.getVideoTracks = function() { return []; };
+}
 
-            for (i = 0; i < tracks.length; i++) {
+RTCUtils.prototype.createStream = function(stream, isVideo) {
+    var newStream = null;
+    if (window.webkitMediaStream) {
+        newStream = new webkitMediaStream();
+        if (newStream) {
+            var tracks = (isVideo ? stream.getVideoTracks() : stream.getAudioTracks());
+
+            for (var i = 0; i < tracks.length; i++) {
                 newStream.addTrack(tracks[i]);
             }
         }
 
     }
-    else
-        newStream = stream;
+    else {
+        // FIXME: this is duplicated with 'handleLocalStream' !!!
+        if (stream) {
+            newStream = stream;
+        } else {
+            newStream =
+                new DummyMediaStream(isVideo ? "dummyVideo" : "dummyAudio");
+        }
+    }
 
     return newStream;
 };

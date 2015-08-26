@@ -29,6 +29,13 @@ constructor.
 ``` 
 If you don't specify room the user will enter in new conference with random room name.
 
+You can overwrite options set in config.js and interface_config.js. For example, to enable the film-strip-only interface mode and disable simulcast, you can use:
+```javascript
+    var configOverwrite = {enableSimulcast: false};
+    var interfaceConfigOverwrite = {filmStripOnly: true};
+    var api = new JitsiMeetExternalAPI(domain, room, width, height, htmlElement, true, configOverwrite, interfaceConfigOverwrite);
+``` 
+
 Controlling embedded Jitsi Meet Conference
 =========
 
@@ -49,13 +56,13 @@ the new display name to be set
 ```
 api.executeCommand('displayName', ['New Nickname']);
 ```
-* **muteAudio** - mutes / unmutes the audio for the local participant. No arguments are required.
+* **toggleAudio** - mutes / unmutes the audio for the local participant. No arguments are required.
 ```
-api.executeCommand('muteAudio', [])
+api.executeCommand('toggleAudio', [])
 ```
-* **muteVideo** - mutes / unmutes the video for the local participant. No arguments are required.
+* **toggleVideo** - mutes / unmutes the video for the local participant. No arguments are required.
 ```
-api.executeCommand('muteVideo', [])
+api.executeCommand('toggleVideo', [])
 ```
 * **toggleFilmStrip** - hides / shows the film strip. No arguments are required.
 ```
@@ -78,7 +85,7 @@ The ```commands``` parameter is object with keys the names of the commands and v
 commands.
 
 ```
-api.executeCommands({displayName: ['nickname'], muteAudio: []});
+api.executeCommands({displayName: ['nickname'], toggleAudio: []});
 ```
 
 You can add event listeners to the embedded Jitsi Meet using ```addEventListener``` method.
