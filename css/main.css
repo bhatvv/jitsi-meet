@@ -375,3 +375,35 @@ form {
 .toast-message .nickname {
     font-weight: bold;
 }
+
+/****************************SHARE MEDIA****************************/
+
+#closeButton {
+    position: absolute;
+    top: 0;
+    right: 0;
+}
+
+#previewdiv, #sharedimagediv {
+    position: absolute;
+    top: 10%;
+    height: 400px;
+    width: 400px;
+}
+
+/*#extraMenu{
+bottom:0%
+}
+
+#sendPhotoInput{
+overflow:hidden;
+width: 0px;
+height: 0px;
+cursor: pointer;
+position: absolute;
+top: 0px;
+right: 0px;
+font-size: 100px;
+z-index: 2;
+display:none;
+}*/

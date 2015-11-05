@@ -56,6 +56,7 @@
         "chat": "Open / close chat",
         "prezi": "Share Prezi",
         "etherpad": "Shared document",
+        "sharemedia": "Share Media",
         "sharescreen": "Share screen",
         "fullscreen": "Enter / Exit Full Screen",
         "sip": "Call SIP number",
@@ -194,7 +195,9 @@
         "password": "password",
         "userPassword": "user password",
         "token": "token",
-        "displayNameRequired": "Please enter your display name:"
+        "displayNameRequired": "Please enter your display name:",
+        "extensionRequired": "Extension required:",
+        "firefoxExtensionPrompt": "You need to install a Firefox extension in order to use screen sharing. Please try again after you <a href='__url__'>get it from here</a>!"
     },
     "email":
     {

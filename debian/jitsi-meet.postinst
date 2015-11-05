@@ -21,7 +21,6 @@ case "$1" in
     configure)
 
         JVB_ETC_CONFIG="/etc/jitsi/videobridge/config"
-        JVB_CONFIG="/usr/share/jitsi-videobridge/.sip-communicator/sip-communicator.properties"
 
         . $JVB_ETC_CONFIG
 
@@ -65,9 +64,17 @@ case "$1" in
 
         # this is new install let's configure jvb to serve meet
         if [[ -z $FORCE_NGINX && ( -z $JVB_HOSTNAME_OLD || "$JVB_SERVE" = "true" ) ]] ; then
+
+            JVB_CONFIG="/etc/jitsi/videobridge/sip-communicator.properties"
+
             # this is a reconfigure, lets just delete old links
             if [ "$RECONFIGURING" = "true" ] ; then
                 rm -f $JVB_CONFIG
+            fi
+
+            # we will write to the file if missing create it
+            if [ ! -f $JVB_CONFIG ] ; then
+                touch $JVB_CONFIG
             fi
 
             # configure jvb
@@ -92,15 +99,15 @@ case "$1" in
             OWNER=$(stat -c '%U' /usr/share/jitsi-videobridge)
             GROUP=$(stat -c '%G' /usr/share/jitsi-videobridge)
             JVB_UID="`id -u $OWNER`"
-            if [ ! -f "/etc/authbind/byuid/$JVB_UID" ] ; then
-                if [ ! -d "/etc/authbind/byuid" ] ; then
-                        mkdir -p /etc/authbind/byuid
+            if [ ! -f "/etc/authbind/byport/443" ] ; then
+                if [ ! -d "/etc/authbind/byport" ] ; then
+                        mkdir -p /etc/authbind/byport
                         chmod 755 /etc/authbind
-                        chmod 755 /etc/authbind/byuid
+                        chmod 755 /etc/authbind/byport
                 fi
-                echo '::,443' >/etc/authbind/byuid/$JVB_UID
-                chown $OWNER:$GROUP /etc/authbind/byuid/$JVB_UID
-                chmod 700 /etc/authbind/byuid/$JVB_UID
+                touch /etc/authbind/byport/443
+                chown $OWNER /etc/authbind/byport/443
+                chmod 755 /etc/authbind/byport/443
             fi
 
             if [ "$CERT_CHOICE" = "$UPLOADED_CERT_CHOICE" ] ; then

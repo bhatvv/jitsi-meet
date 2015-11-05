@@ -11,9 +11,10 @@
     <meta itemprop="image" content="/images/jitsilogo.png"/>
     <script src="https://api.callstats.io/static/callstats.min.js"></script>
     <script src="libs/jquery-2.1.1.min.js"></script>
-    <script src="config.js?v=12"></script><!-- adapt to your needs, i.e. set hosts and bosh path -->
+    <script src="config.js?v=13"></script><!-- adapt to your needs, i.e. set hosts and bosh path -->
     <script src="libs/strophe/strophe.min.js?v=2"></script>
     <script src="libs/strophe/strophe.disco.min.js?v=1"></script>
+    <script src="libs/strophe/strophe.ibb.js"></script>
     <script src="libs/strophe/strophe.caps.jsonly.min.js?v=1"></script>
     <script src="libs/jquery-ui.js"></script>
     <script src="libs/tooltip.js?v=1"></script><!-- bootstrap tooltip lib -->
@@ -25,7 +26,7 @@
     <link rel="stylesheet" href="css/font.css?v=7"/>
     <link rel="stylesheet" href="css/toastr.css?v=1">
     <link rel="stylesheet" type="text/css" media="screen" href="css/main.css?v=31"/>
-    <link rel="stylesheet" type="text/css" media="screen" href="css/videolayout_default.css?v=21" id="videolayout_default"/>
+    <link rel="stylesheet" type="text/css" media="screen" href="css/videolayout_default.css?v=20" id="videolayout_default"/>
     <link href="//netdna.bootstrapcdn.com/font-awesome/4.0.3/css/font-awesome.css" rel="stylesheet">
     <link rel="stylesheet" href="css/jquery-impromptu.css?v=4">
     <link rel="stylesheet" href="css/modaldialog.css?v=3">
@@ -157,12 +158,47 @@
                     <a class="button icon-full-screen" id="toolbar_button_fullScreen" data-container="body" data-toggle="popover" data-placement="bottom" content="Enter / Exit Full Screen" data-i18n="[content]toolbar.fullscreen"></a>
                     <a class="button icon-telephone" id="toolbar_button_sip" data-container="body" data-toggle="popover" data-placement="bottom" content="Call SIP number" data-i18n="[content]toolbar.sip" style="display: none"></a>
                     <a class="button icon-dialpad" id="toolbar_button_dialpad" data-container="body" data-toggle="popover" data-placement="bottom" content="Open dialpad" data-i18n="[content]toolbar.dialpad" style="display: none"></a>
+                    <a class="button icon-share-doc" id="toolbar_button_sharemedia" data-container="body" data-toggle="popover" data-placement="bottom" content="Share Media" data-i18n="[content]toolbar.sharemedia" style="display: inline-block;"></a>
                     <a class="button icon-settings" id="toolbar_button_settings" data-container="body" data-toggle="popover" data-placement="bottom" content="Settings" data-i18n="[content]toolbar.Settings"></a>
                     <a class="button icon-hangup" id="toolbar_button_hangup" data-container="body" data-toggle="popover" data-placement="bottom" content="Hang Up" data-i18n="[content]toolbar.hangup"></a>
                 </span>
             </div>
             <div id="subject"></div>
         </div>
+        
+<!------------------------------------------SHARE MEDIA---------------------------------->        
+<div id="extraMenu" hidden style="z-index:1000;position:absolute;">
+    <div class="panel">
+        <!--div class="panel-heading color4a">
+            <h3 class="panel-title">
+              <div id="extraMenuDescription">Select Photo</div>
+            </h3>
+        </div-->
+        <div class="panel-body">
+            <div id="photoPreview"></div>
+            <div id="extraMenuControls">
+                <div class="input-group">
+                    <input id="sendPhotoInput" type="file" accept="image/jpeg" name="sendphotofromfile" value="File?" class="form-control" hidden/><!--span class="input-group-btn">
+                  <button type="button" class="sendPhoto btn btn-default color4a">Send</button></span-->
+                </div>
+            </div>
+        </div>
+        <div class="panel-footer"></div>
+    </div>
+</div>
+<div id="previewdiv">
+<img id="preview" style="position:absolute; z-index:100;">
+<span class="input-group-btn">
+                  <button type="button" class="sendPhoto btn btn-default color4a" style="position:absolute; z-index:100;" hidden>Send</button></span>
+</div>
+<div id="sharedimagediv" style="position:absolute; z-index:100;right:0px;">
+<button id="closeButton" style="z-index:100;" hidden>Close</button>
+<img id="sharedimage" style="position:absolute; right:0px;"/>
+</div>
+
+<!--canvas id="myCanvas" /-->
+<!------------------------------------------SHARE MEDIA---------------------------------->        
+        
         <div id="reloadPresentation"><a id="reloadPresentationLink"><i title="Reload Prezi" class="fa fa-repeat fa-lg"></i></a></div>
         <div id="videospace">
             <div id="remoteVideos">
@@ -243,6 +279,32 @@
             </div>
             <button id="updateSettings" data-i18n="settings.update"></button>
         </div>
+		<!--div id="dialPad">
+		    <div>
+        		<button>1</button>
+		        <button>2</button>
+        		<button>3</button>
+		        <button>4</button>
+    		</div>
+		    <div>
+        		<button>5</button>
+		        <button>6</button>
+        		<button>7</button>
+		        <button>8</button>
+		    </div>
+		    <div>
+        		<button>9</button>
+		        <button>0</button>
+        		<button>*</button>
+        		<button>#</button>
+		    </div>
+		    <div>
+        		<button>A</button>
+		        <button>B</button>
+        		<button>C</button>
+        		<button>D</button>
+		    </div>
+		</div-->
         <a id="downloadlog" data-container="body" data-toggle="popover" data-placement="right" data-i18n="[data-content]downloadlogs" ><i class="fa fa-cloud-download"></i></a>
     </div>
   </body>

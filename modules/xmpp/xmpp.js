@@ -3,6 +3,7 @@ var Moderator = require("./moderator");
 var EventEmitter = require("events");
 var Recording = require("./recording");
 var SDP = require("./SDP");
+var SDPUtil = require("./SDPUtil");
 var Settings = require("../settings/Settings");
 var Pako = require("pako");
 var StreamEventTypes = require("../../service/RTC/StreamEventTypes");
@@ -13,6 +14,37 @@ var retry = require('retry');
 var eventEmitter = new EventEmitter();
 var connection = null;
 var authenticatedUser = false;
+
+audioSelect = document.querySelector('select#audioSource');
+videoSelect = document.querySelector('select#videoSource');
+
+function gotSources(sourceInfos) {
+	console.log("gotSources::::",sourceInfos);
+  for (var i = 0; i !== sourceInfos.length; ++i) {
+    var sourceInfo = sourceInfos[i];
+    var option = document.createElement('option');
+    option.value = sourceInfo.id;
+    if (sourceInfo.kind === 'audio') {
+      option.text = sourceInfo.label || 'microphone ' +
+        (audioSelect.length + 1);
+      audioSelect.appendChild(option);
+    } else if (sourceInfo.kind === 'video') {
+      option.text = sourceInfo.label || 'camera ' + (videoSelect.length + 1);
+      videoSelect.appendChild(option);
+    } else {
+      console.log('Some other kind of source: ', sourceInfo);
+    }
+  }
+}
+
+
+if (typeof MediaStreamTrack === 'undefined' ||
+    typeof MediaStreamTrack.getSources === 'undefined') {
+  alert('This browser does not support MediaStreamTrack.\n\nTry Chrome.');
+} else {
+  MediaStreamTrack.getSources(gotSources);
+}
+
 
 function connect(jid, password) {
 
@@ -85,9 +117,26 @@ function connect(jid, password) {
                     connection.jingle.getStunAndTurnCredentials();
                 }
 
+	            /*$(function() {
+  					$(".select").on("change",function() {
+  						//this.peerconnection.onremovestream();
+	    				APP.RTC.rtcUtils.obtainAudioAndVideoPermissions(null, null);
+	    			});
+	    		});*/
+
                 console.info("My Jabber ID: " + connection.jid);
 
-                connection.ping.startInterval(config.hosts.domain);
+                // Schedule ping ?
+                var pingJid = connection.domain;
+                connection.ping.hasPingSupport(
+                    pingJid,
+                    function (hasPing) {
+                        if (hasPing)
+                            connection.ping.startInterval(pingJid);
+                        else
+                            console.warn("Ping NOT supported by " + pingJid);
+                    }
+                );
 
                 if (password)
                     authenticatedUser = true;
@@ -294,7 +343,8 @@ var XMPP = {
         return Strophe.getStatusString(status);
     },
     promptLogin: function () {
-        eventEmitter.emit(XMPPEvents.PROMPT_FOR_LOGIN);
+    	APP.UI.showLoginPopup(connect);
+        //eventEmitter.emit(XMPPEvents.PROMPT_FOR_LOGIN);
     },
     joinRoom: function(roomName, useNicks, nick) {
         var roomjid = roomName;
@@ -324,6 +374,11 @@ var XMPP = {
         if(!connection || ! connection.emuc.myroomjid)
             return null;
         return Strophe.getResourceFromJid(connection.emuc.myroomjid);
+    },
+    getLastPresence: function (from) {
+        if(!connection)
+            return null;
+        return connection.emuc.lastPresenceMap[from];
     },
     disposeConference: function (onUnload) {
         var handler = connection.jingle.activecall;
@@ -568,6 +623,24 @@ var XMPP = {
         if (!this.isConferenceInProgress())
             return;
         connection.jingle.activecall.peerconnection.removeStream(stream);
+    },
+    createStream: function (stream) {
+        //if (!this.isConferenceInProgress())
+        //    return;
+        connection.jingle.activecall.peerconnection.createStream(stream);
+    },
+    addStream: function (stream) {
+        //if (!this.isConferenceInProgress())
+        //    return;
+        connection.jingle.activecall.peerconnection.addStream(stream);
+    },
+    onaddStream: function (stream) {
+        //if (!this.isConferenceInProgress())
+        //    return;
+        connection.jingle.activecall.peerconnection.onaddStream(stream);
+    },
+    filter_special_chars: function (text) {
+        return SDPUtil.filter_special_chars(text);
     }
 };
 

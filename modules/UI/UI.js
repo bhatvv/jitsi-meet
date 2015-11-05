@@ -31,6 +31,8 @@ var StreamEventTypes = require("../../service/RTC/StreamEventTypes");
 var XMPPEvents = require("../../service/xmpp/XMPPEvents");
 var UIEvents = require("../../service/UI/UIEvents");
 var MemberEvents = require("../../service/members/Events");
+//var Req = require("request");
+//console.log("req!!",Req);
 
 var eventEmitter = new EventEmitter();
 var roomNode = null;
@@ -193,12 +195,22 @@ function registerListeners() {
         AudioLevels.updateAudioLevel(resourceJid, audioLevel,
             UI.getLargeVideoResource());
     });
-    APP.desktopsharing.addListener(function () {
-        ToolbarToggler.showDesktopSharingButton();
-    }, DesktopSharingEventTypes.INIT);
     APP.desktopsharing.addListener(
-        Toolbar.changeDesktopSharingButtonState,
-        DesktopSharingEventTypes.SWITCHING_DONE);
+        DesktopSharingEventTypes.INIT,
+        ToolbarToggler.showToolbar);
+    APP.desktopsharing.addListener(
+        DesktopSharingEventTypes.SWITCHING_DONE,
+        Toolbar.changeDesktopSharingButtonState);
+    APP.desktopsharing.addListener(
+        DesktopSharingEventTypes.FIREFOX_EXTENSION_NEEDED,
+        function (url) {
+            APP.UI.messageHandler.openMessageDialog(
+                "dialog.extensionRequired",
+                null,
+                null,
+                APP.translation.generateTranslationHTML(
+                    "dialog.firefoxExtensionPrompt", {url: url}));
+        });
     APP.connectionquality.addListener(CQEvents.LOCALSTATS_UPDATED,
         VideoLayout.updateLocalConnectionStats);
     APP.connectionquality.addListener(CQEvents.REMOTESTATS_UPDATED,

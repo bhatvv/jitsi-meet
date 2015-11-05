@@ -1,12 +1,15 @@
-/* global config, require, attachMediaStream, getUserMedia */
+
+/* global APP, config, require, attachMediaStream, getUserMedia */
 var RTCBrowserType = require("./RTCBrowserType");
 var Resolutions = require("../../service/RTC/Resolutions");
 var AdapterJS = require("./adapter.screenshare");
-var SDPUtil = require("../xmpp/SDPUtil");
+var MediaStreamType = require("../../service/RTC/MediaStreamTypes");
 
 var currentResolution = null;
+cameraSwitched = false;
 
 function getPreviousResolution(resolution) {
+console.log("getPreviousResolution");
     if(!Resolutions[resolution])
         return null;
     var order = Resolutions[resolution].order;
@@ -23,6 +26,7 @@ function getPreviousResolution(resolution) {
 }
 
 function setResolutionConstraints(constraints, resolution) {
+console.log("setResolutionConstraints");
     var isAndroid = RTCBrowserType.isAndroid();
 
     if (Resolutions[resolution]) {
@@ -46,11 +50,46 @@ function setResolutionConstraints(constraints, resolution) {
 }
 
 function getConstraints(um, resolution, bandwidth, fps, desktopStream) {
+console.log("getConstraints");
     var constraints = {audio: false, video: false};
-
+    
+    /*if(APP.RTC.localAudio && APP.RTC.localAudio.stream) {
+     //resourceJid = test1;
+     //jid = APP.xmpp.findJidFromResource(resourceJid);
+     //var mediaStream = APP.RTC.remoteStreams[jid][MediaStreamType.VIDEO_TYPE];
+     //APP.xmpp.removeStream(mediaStream.stream);
+     //console.log("mediastream.stream::",mediaStream);
+     //mediaStream.stream.onremovestream();
+     //videoElement =$("#largeVideo");
+     //videoElement.src = null;
+     //this.stream.stop();
+     APP.RTC.localAudio.stream.stop();
+     APP.xmpp.removeStream(APP.RTC.localAudio.stream);
+     
+     //cameraSwitched = true;
+   	//APP.RTC.changeLocalVideo(APP.RTC.localVideo.stream);
+    }*/
+    
+	if(APP.RTC.localVideo && APP.RTC.localVideo.stream) {
+     //videoElement =$("#largeVideo");
+     //videoElement.src = null;
+     //this.stream.stop();
+     //APP.RTC.localVideo.stream.stop();
+     APP.xmpp.removeStream(APP.RTC.localVideo.stream);
+     
+     cameraSwitched = true;
+   	//APP.RTC.changeLocalVideo(APP.RTC.localVideo.stream);
+     videoTrack = APP.RTC.localVideo.getTracks()[0];
+     videoTrack.stop();
+     APP.xmpp.removeStream(videoTrack);
+    }
+    audioSource = audioSelect.value;
+	videoSource = videoSelect.value;
+  	console.log("audioSource::getConstraints",audioSource);
+	console.log("videoSource::getConstraints",videoSource);
     if (um.indexOf('video') >= 0) {
         // same behaviour as true
-        constraints.video = { mandatory: {}, optional: [] };
+        constraints.video = { mandatory: {}, optional: [{sourceId: videoSource}] };
 
         constraints.video.optional.push({ googLeakyBucket: true });
 
@@ -59,7 +98,7 @@ function getConstraints(um, resolution, bandwidth, fps, desktopStream) {
     if (um.indexOf('audio') >= 0) {
         if (!RTCBrowserType.isFirefox()) {
             // same behaviour as true
-            constraints.audio = { mandatory: {}, optional: []};
+            constraints.audio = { mandatory: {}, optional: [{sourceId: audioSource}]};
             // if it is good enough for hangouts...
             constraints.audio.optional.push(
                 {googEchoCancellation: true},
@@ -94,6 +133,12 @@ function getConstraints(um, resolution, bandwidth, fps, desktopStream) {
                     }
                 ]
             };
+        } else if (RTCBrowserType.isFirefox()) {
+            constraints.video = {
+                mozMediaSource: "window",
+                mediaSource: "window"
+            };
+
         } else {
             console.error(
                 "'screen' WebRTC media source is supported only in Chrome" +
@@ -139,13 +184,13 @@ function getConstraints(um, resolution, bandwidth, fps, desktopStream) {
         constraints.audio = true;
         constraints.fake = true;
     }
-
     return constraints;
 }
 
 
 function RTCUtils(RTCService, onTemasysPluginReady)
 {
+console.log("RTCUtils");
     var self = this;
     this.service = RTCService;
     if (RTCBrowserType.isFirefox()) {
@@ -176,7 +221,7 @@ function RTCUtils(RTCService, onTemasysPluginReady)
                     }
                     id = tracks[0].id;
                 }
-                return SDPUtil.filter_special_chars(id);
+                return APP.xmpp.filter_special_chars(id);
             };
             this.getVideoSrc = function (element) {
                 if(!element)
@@ -205,7 +250,7 @@ function RTCUtils(RTCService, onTemasysPluginReady)
         this.getStreamID = function (stream) {
             // streams from FF endpoints have the characters '{' and '}'
             // that make jQuery choke.
-            return SDPUtil.filter_special_chars(stream.id);
+            return APP.xmpp.filter_special_chars(stream.id);
         };
         this.getVideoSrc = function (element) {
             if(!element)
@@ -251,7 +296,7 @@ function RTCUtils(RTCService, onTemasysPluginReady)
                 attachMediaStream(elSel[0], stream);
             };
             self.getStreamID = function (stream) {
-                var id = SDPUtil.filter_special_chars(stream.label);
+                var id = APP.xmpp.filter_special_chars(stream.label);
                 return id;
             };
             self.getVideoSrc = function (element) {
@@ -294,6 +339,7 @@ function RTCUtils(RTCService, onTemasysPluginReady)
 RTCUtils.prototype.getUserMediaWithConstraints = function(
     um, success_callback, failure_callback, resolution,bandwidth, fps,
     desktopStream) {
+    console.log("RTCUtils.prototype.getUserMediaWithConstraints");
     currentResolution = resolution;
 
     var constraints = getConstraints(
@@ -309,6 +355,7 @@ RTCUtils.prototype.getUserMediaWithConstraints = function(
                 console.log('onUserMediaSuccess');
                 self.setAvailableDevices(um, true);
                 success_callback(stream);
+                console.log("APP.RTC.localVideo.stream id in getconstraints::",APP.RTC.localVideo.stream.id);
             },
             function (error) {
                 self.setAvailableDevices(um, false);
@@ -344,6 +391,7 @@ RTCUtils.prototype.setAvailableDevices = function (um, available) {
 RTCUtils.prototype.obtainAudioAndVideoPermissions =
     function(devices, callback, usageOptions)
 {
+console.log("RTCUtils.prototype.obtainAudioAndVideoPermissions");
     var self = this;
     // Get AV
 
@@ -435,10 +483,38 @@ RTCUtils.prototype.obtainAudioAndVideoPermissions =
 RTCUtils.prototype.successCallback = function (stream, usageOptions) {
     // If this is FF or IE, the stream parameter is *not* a MediaStream object,
     // it's an object with two properties: audioStream, videoStream.
+    console.log("stream::",stream);
     if (stream && stream.getAudioTracks && stream.getVideoTracks)
         console.log('got', stream, stream.getAudioTracks().length,
             stream.getVideoTracks().length);
     this.handleLocalStream(stream, usageOptions);
+    if(cameraSwitched){
+    	cameraSwitched = false;
+    	//this.peerConnection.addStream(stream);
+		//sess.doSwitch();
+		
+		//APP.RTC.doSwitch(stream);
+		//var newstream = this.createStream(stream, true);
+		//APP.xmpp.createStream(stream);
+		//Aruna
+		//stream, oldStream, callback, isAudio
+		videoTrack = APP.RTC.localVideo.getTracks()[0];
+    	APP.xmpp.addStream(videoTrack);
+		APP.xmpp.addStream(APP.RTC.localVideo.stream);
+     
+		console.log("APP.RTC.localVideo.stream.id::",stream,APP.RTC);
+		//APP.xmpp.switchStreams();
+		//APP.xmpp.addStream(stream);
+		//APP.RTC.attachMediaStream(element,stream);
+        //localVideo = $('#' + localVideo.id)[0];
+        //localVideoContainer.removeChild(localVideo);
+        //self.VideoLayout.updateRemovedVideo(APP.xmpp.myResource());
+		
+		//APP.RTC.localVideo.stream.start();
+		//APP.RTC.localVideo.stream.stop();
+		//APP.xmpp.onaddStream(stream);
+		//eventEmitter.emit(StreamEventTypes.EVENT_TYPE_REMOTE_CHANGED,doSwitch);
+    }
 };
 
 RTCUtils.prototype.errorCallback = function (error) {

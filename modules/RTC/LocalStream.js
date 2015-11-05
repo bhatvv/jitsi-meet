@@ -82,6 +82,7 @@ LocalStream.prototype.setMute = function (mute)
             this.eventEmitter.emit(eventType, true);
         } else {
             var self = this;
+            console.log("obtainAudioAndVideoPermissions in LocalStream");
             APP.RTC.rtcUtils.obtainAudioAndVideoPermissions(
                 (this.isAudioStream() ? ["audio"] : ["video"]),
                 function (stream) {

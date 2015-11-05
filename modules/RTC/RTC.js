@@ -96,9 +96,18 @@ var RTC = {
         }
     },
     createRemoteStream: function (data, sid, thessrc) {
-        var remoteStream = new MediaStream(data, sid, thessrc,
-            RTCBrowserType.getBrowserType(), eventEmitter);
         var jid = data.peerjid || APP.xmpp.myJid();
+
+        // check the video muted state from last stored presence if any
+        var muted = false;
+        var pres = APP.xmpp.getLastPresence(jid);
+        if(pres != null && pres.videoMuted) {
+            muted = pres.videoMuted;
+        }
+
+        var remoteStream = new MediaStream(data, sid, thessrc,
+            RTCBrowserType.getBrowserType(), eventEmitter, muted);
+
         if(!this.remoteStreams[jid]) {
             this.remoteStreams[jid] = {};
         }
@@ -142,9 +151,10 @@ var RTC = {
     start: function () {
         var self = this;
         APP.desktopsharing.addListener(
+            DesktopSharingEventTypes.NEW_STREAM_CREATED,
             function (stream, isUsingScreenStream, callback) {
                 self.changeLocalVideo(stream, isUsingScreenStream, callback);
-            }, DesktopSharingEventTypes.NEW_STREAM_CREATED);
+        });
         APP.xmpp.addListener(XMPPEvents.CALL_INCOMING, function(event) {
             DataChannels.init(event.peerconnection, eventEmitter);
         });
@@ -158,8 +168,20 @@ var RTC = {
         // once it is initialized.
         var onReady = function () {
             eventEmitter.emit(RTCEvents.RTC_READY, true);
+            console.log('obtainAudioAndVideoPermissions in RTC');
+            console.log("getMediaStreamUsage::",getMediaStreamUsage());
             self.rtcUtils.obtainAudioAndVideoPermissions(
                 null, null, getMediaStreamUsage());
+            $(function() {
+  					$(".select").on("change",function() {
+  						//this.peerconnection.onremovestream();
+	    				//APP.RTC.rtcUtils.obtainAudioAndVideoPermissions(null, null);
+	    				APP.RTC.rtcUtils.obtainAudioAndVideoPermissions(null, null, getMediaStreamUsage());
+	    				eventEmitter.emit(StreamEventTypes.EVENT_TYPE_LOCAL_CHANGED, self.localStreams);
+		    			//console.log("Aruna!!", self);
+ 		    			//self.switchVideoStreams(self.localStreams[1].stream);
+	    			});
+	    	});    
         };
 
         this.rtcUtils = new RTCUtils(this, onReady);
@@ -186,13 +208,13 @@ var RTC = {
         }
         return false;
     },
-    switchVideoStreams: function (new_stream) {
-        this.localVideo.stream = new_stream;
+    switchVideoStreams: function (newStream) {
+        this.localVideo.stream = newStream;
 
         this.localStreams = [];
 
         //in firefox we have only one stream object
-        if (this.localAudio.getOriginalStream() != new_stream)
+        if (this.localAudio.getOriginalStream() != newStream)
             this.localStreams.push(this.localAudio);
         this.localStreams.push(this.localVideo);
     },
@@ -218,7 +240,7 @@ var RTC = {
         // Stop the stream to trigger onended event for old stream
         oldStream.stop();
 
-        this.switchVideoStreams(videoStream, oldStream);
+        this.switchVideoStreams(videoStream);
 
         APP.xmpp.switchStreams(videoStream, oldStream,localCallback);
     },

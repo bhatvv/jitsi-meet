@@ -342,6 +342,11 @@ var VideoLayout = (function (my) {
                 // Skip server side focus
                 return;
             }
+            
+            if (Strophe.getResourceFromJid(jid) === 'xrtc_sp00f_f0cus') {
+                // Skip server side focus
+                return;
+            }
 
             var resourceJid = Strophe.getResourceFromJid(jid);
             var member = members[jid];
@@ -720,7 +725,7 @@ var VideoLayout = (function (my) {
                 remoteVideo.showPeerContainer('show');
                 if (!isVisible) {
                     console.log("Add to last N", resourceJid);
-
+					console.log("resourceJid:::",resourceJid);
                     var jid = APP.xmpp.findJidFromResource(resourceJid);
                     var mediaStream =
                         APP.RTC.remoteStreams[jid][MediaStreamType.VIDEO_TYPE];

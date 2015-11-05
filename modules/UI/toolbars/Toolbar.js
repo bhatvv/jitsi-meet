@@ -56,6 +56,11 @@ var buttonHandlers = {
     "toolbar_button_dialpad": function () {
         return dialpadButtonClicked();
     },
+    "toolbar_button_sharemedia": function () {
+        //return dialpadButtonClicked();
+        console.log("Showing file upload menu");
+        return sharemediaButtonClicked();
+    },
     "toolbar_button_settings": function () {
         PanelToggler.toggleSettingsMenu();
     },
@@ -225,6 +230,41 @@ function inviteParticipants() {
 
 function dialpadButtonClicked() {
     //TODO show the dialpad box
+}
+
+function sharemediaButtonClicked() {
+	console.log("sharemediaButtonClicked!!");
+	//$("#sendPhotoInput").val("");
+	$('#extraMenu').removeAttr("hidden");
+    $('#sendPhotoInput').trigger('click');
+  function handleFileSelect(evt) {
+    i = 1
+    console.log("got the callback >>>>>>>");
+    //document.getElementById("sendPhotoInput").removeEventListener('change', handleFileSelect, 'false');
+    console.log("handling file select");
+    var file = evt.target.files[0];
+    var asset = new FileAsset();
+    asset.on('readComplete', function() {
+        asset.upload();
+        $("#sendPhotoInput").unbind("change", handleFileSelect);
+    });
+    asset.on('errorpage', function() {
+        alert("Not able to Send the Media file");
+        self.backToVideoMode("clicked");
+    });
+    asset.on('uploadComplete', function() {
+        /*alert("hi")
+				      		$("#talkarea").addClass('wraptocenter');
+				        	$("div.wraptocenter").css("width",$(window).width());
+    						$("div.wraptocenter").css("height",$(window).height());*/
+        $("#sendPhotoInput").unbind("change", handleFileSelect);
+        self.renderPhoto(asset.dataURL, state);
+        self.sendPhoto(asset.url);
+    });
+    asset.read(file);
+    $("#sendPhotoInput").unbind("change", handleFileSelect);
+  }
+ $("#sendPhotoInput").bind("change", handleFileSelect);
 }
 
 function callSipButtonClicked() {
