@@ -6687,48 +6687,19 @@ function closingimage() {
 });
 }
 
-function sendingimage() {
-
-    var preview = document.getElementById('preview'); //selects the query named img
-    var file = document.querySelector('input[type=file]').files[0]; //sames as here
-    var reader = new FileReader();
-
-
-    if (file) {
-        reader.readAsDataURL(file); //reads the data as a URL
-        console.log("img src in filereader:::", preview);
-    } else {
-        preview.src = "";
-    }
-
-
-    reader.onloadend = function() {
-        preview.src = reader.result;
-        var img = document.getElementById('preview');
-        var div = document.getElementById('previewdiv');
-        if (img.height > div.clientHeight) {
-            img.height = div.clientHeight;
-            //img.width = 'auto';
-        }
-        if (img.width > div.clientWidth) {
-            img.width = div.clientWidth;
-            //img.height = 'auto';
-        }
-        //$("previewdiv").removeAttr("hidden");
-        $(".sendPhoto").removeAttr("hidden");
-
-        function sendDataIq() {
+        function sendDataIq(sendto) {
             console.log("img src:::", preview.src);
 
             var encodedString = preview.src;
             console.log("Hello World!", encodedString); // Outputs: "SGVsbG8gV29ybGQh"
 
             mem = APP.xmpp.getMembers();
-            Object.keys(mem).forEach(function(key) {
+            //Object.keys(mem).forEach(function(key) {
                 var req = $iq({
                     type: 'set',
                     from: APP.xmpp.getConnection().jid,
-                    to: mem[key].jid
+                    //to: mem[key].jid
+                    to: sendto
                 });
                 req.c('data', {
                     xmlns: 'http://jabber.org/protocol/ibb',
@@ -6747,14 +6718,12 @@ function sendingimage() {
                         console.info('Image sending failed:: ', error);
                     }
                 );
-            });
+            //});
 
         }
 
-        $(".sendPhoto").click(sendDataIq);
+        //$(".sendPhoto").click(sendDataIq);
 
-    }
-}
 
 function sharemediaButtonClicked() {
     console.log("sharemediaButtonClicked!!");
@@ -6763,16 +6732,13 @@ function sharemediaButtonClicked() {
     $('#sendPhotoInput').trigger('click');
 
     function handleFileSelect() {
-        //imgSendBtn();
-        console.log("got the callback >>>>>>>");
-        //iq
         var self = this;
         mem = APP.xmpp.getMembers();
         //console.log("mem",Object.keys(mem)[1].jid);
         console.log("moderator jid", APP.xmpp.getConnection().jid);
         Object.keys(mem).forEach(function(key) {
             console.log("mem(key) ", mem[key]);
-            //if(mem[key]) {
+            if(!(mem[key].isFocus)) {
             var req = $iq({
                 type: 'set',
                 //from: APP.xmpp.myJid(),
@@ -6789,7 +6755,7 @@ function sharemediaButtonClicked() {
                 xmlns: 'http://jabber.org/protocol/ibb',
                 //sid:'i781hf64',
                 sid: APP.xmpp.getConnection()._proto.sid,
-                'block-size': '2048',
+                'block-size': '65536',
                 //sid: APP.xmpp.getConnection().jingle.activecall.sid,
                 stanza: 'iq'
             }).up();
@@ -6799,13 +6765,15 @@ function sharemediaButtonClicked() {
                 req,
                 function(result) {
                     console.info('Dial result ', result);
-                    sendingimage();
+                    console.log("sending data iq to participant::",mem[key].jid);
+                    var sendto = mem[key].jid;
+                    sendDataIq(sendto);
                 },
                 function(error) {
                     console.info('Dial error ', error);
                 }
             );
-            //}
+            }
         });
         console.log("handling file select");
         //$("#sendPhotoInput").unbind("change", handleFileSelect);
@@ -6815,7 +6783,48 @@ function sharemediaButtonClicked() {
         console.log("showing imgSendBtn");
         //$(".sendPhoto").removeAttr("hidden");
         //$(".sendPhoto").click(handleFileSelect);
-        handleFileSelect();
+        var preview = document.getElementById('preview'); //selects the query named img
+    var file = document.querySelector('input[type=file]').files[0]; //sames as here
+    var reader = new FileReader();
+
+
+    if (file) {
+        reader.readAsDataURL(file); //reads the data as a URL
+        console.log("img src in filereader:::", preview);
+    } else {
+        preview.src = "";
+    }
+
+
+    reader.onloadend = function() {
+        preview.src = reader.result;
+        var img = document.getElementById('preview');
+        var div = document.getElementById('previewdiv');
+        if (img.height > div.clientHeight) {
+            img.style.height = div.clientHeight;
+            //img.width = 'auto';
+        }
+        if (img.width > div.clientWidth) {
+            img.style.width = div.clientWidth;
+            //img.height = 'auto';
+        }
+        //$("previewdiv").removeAttr("hidden");
+        
+        $("#sendButton").removeAttr("hidden");
+        $("#closeSend").removeAttr("hidden");
+        document.getElementById('sendButton').style.display = 'inline-block';
+        document.getElementById('closeSend').style.display = 'inline-block';
+        document.getElementById('preview').style.display = 'block';
+        
+        document.getElementById('closeSend').addEventListener('click', function(e) {
+                    e.preventDefault();
+                    //this.parentNode.style.display = 'none';
+                    document.getElementById('sendButton').style.display = 'none';
+                    document.getElementById('closeSend').style.display = 'none';
+                    document.getElementById('preview').style.display = 'none';
+        }, false);
+        $("#sendButton").bind("click", handleFileSelect);
+      }
     }
 
     $("#sendPhotoInput").bind("change", imgSendBtn);
@@ -18439,15 +18448,21 @@ module.exports = function(XMPP, eventEmitter) {
 
                 console.log("encodeString::", encodeString);
                 src1 = encodeString;
+                //var decodeString = decodeURIComponent(escape(window.atob(src1)));
+                /*var decodeString = src1.replace(/^data:image\/(png|jpg|svg+xml|jpeg);base64,/, "");
+                console.log("decodeString::",decodeString);
+                decodeString = URL.createObjectURL(new Blob([decodeString]));
+                console.log("decodeString:::",decodeString);
+                console.log("<img src='"+decodeString + "'/>");*/
                 $("#sharedimage").attr("src", src1);
                 var img = document.getElementById('sharedimage');
                 var div = document.getElementById('sharedimagediv');
                 if (img.height > div.clientHeight) {
-                    img.height = div.clientHeight;
+                    img.style.height = div.clientHeight;
                     //img.width = 'auto';
                 }
                 if (img.width > div.clientWidth) {
-                    img.width = div.clientWidth;
+                    img.style.width = div.clientWidth;
                     //img.height = 'auto';
                 }
                 //document.getElementById("sharedimage").appendChild(image);
